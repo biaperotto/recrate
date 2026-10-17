@@ -335,7 +335,9 @@ def build(trusted: bool) -> None:
                  repo=ro.get("repo"), validate="all" if trusted else "safe", on_progress=_cb)
     except Exception as e:
         status.update(label="Build failed", state="error")
-        say(f"Couldn't build the crate: {e}")
+        msg = f"Couldn't build the crate: {e or type(e).__name__}"
+        say(msg)
+        ss.build_error = msg  # shown once on Welcome (the rerun wipes the status widget)
         ss.stage = "welcome"
         ss.agent_dir = None
         ss.ro = {}
@@ -1266,6 +1268,8 @@ def welcome_screen() -> None:
     _, mid, _ = st.columns([1, 2.4, 1])
     with mid:
         flowbar(1)
+        if ss.get("build_error"):
+            st.error(ss.pop("build_error"))
         st.html("<div class='onramp'><h1>Welcome to ReCRATE</h1><div class='sub'>Paste a preprint link and we rebuild "
                 "it into a research object you can check.</div></div>")
         with st.form("welcome-link", border=False):
