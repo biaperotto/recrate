@@ -1268,13 +1268,42 @@ def welcome_screen() -> None:
                     st.rerun()
 
 
-def review_screen() -> None:  # stub; Task 3 writes the full screen
+def review_screen() -> None:
+    agent = PaperAgent.load(ss.agent_dir)
     _, mid, _ = st.columns([1, 2.4, 1])
     with mid:
         flowbar(2)
-        st.markdown("### Crate ready")
-        if st.button("Looks good \u2014 validate output \u2192", type="primary", width="stretch"):
+        st.html("<div class='onramp'><h1>Review the crate</h1><div class='sub'>Here is what we built. "
+                "Check it looks right before validating.</div></div>")
+        ups = st.file_uploader("or upload a crate you already have", type=["zip", "json", "pdf"],
+                               accept_multiple_files=True, key="review-upload")
+        sig = [(u.name, u.size) for u in ups or []]
+        if ups and sig != ss.get("_review_upload_sig"):
+            ss._review_upload_sig = sig  # handle each new upload once, not on every rerun
+            add_and_build("", list(ups))
+            st.rerun()
+        st.markdown("#### What's in the crate")
+        st.html(tree_html(agent.path, agent.path))
+        diag = agent.diagnosis() if hasattr(agent, "diagnosis") else None
+        flags = []
+        if diag:
+            flags = [f for f in (diag.get("crate_findings", [])
+                                 + [x for m in diag.get("methods", []) for x in m.get("findings", [])])
+                     if f.get("severity") in ("blocking", "warning")]
+        if flags:
+            for f in flags:
+                st.markdown(f"\u26a0 {f['message']}")
+        else:
+            st.markdown("<span class='muted'>No problems spotted</span>", unsafe_allow_html=True)
+        ok, off = st.columns([2, 1])
+        if ok.button("Looks good \u2014 validate output \u2192", type="primary", width="stretch"):
             ss.stage = "workstation"
+            st.rerun()
+        # Settled decision: "Something's off" returns to Welcome (simplest useful action), clearing the build.
+        if off.button("Something's off", width="stretch"):
+            ss.stage = "welcome"
+            ss.agent_dir = None
+            ss.ro = {}
             st.rerun()
 
 
