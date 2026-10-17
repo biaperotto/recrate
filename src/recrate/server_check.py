@@ -54,7 +54,7 @@ async def _check(agent_dir: Path, reproduce: bool, timeout: float) -> dict[str, 
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             info = await asyncio.wait_for(session.initialize(), timeout)
-            check("launch", True, f"{_get(info, "server_info", "serverInfo").name} over stdio")
+            check("launch", True, f"{_get(info, 'server_info', 'serverInfo').name} over stdio")
             tools = {t.name: t for t in (await session.list_tools()).tools}
             missing = [t for t in CORE if t not in tools]
             check("core tools", not missing, f"{len(tools)} tools" + (f"; missing {', '.join(missing)}" if missing else ""))
