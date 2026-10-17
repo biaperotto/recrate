@@ -99,6 +99,23 @@ def test_nothing_found_lists_every_candidate(paper, tmp_path, monkeypatch):
     assert all(c.reason for c in res.candidates)  # every try explained
 
 
+def test_locate_resolves_a_zenodo_doi(paper, crate_zip, tmp_path, monkeypatch):
+    """A doi.org/10.5281/zenodo.N link (e.g. from the paper text) is routed to the
+    Zenodo record API, not content-negotiated as DataCite metadata."""
+    doi_url = "https://doi.org/10.5281/zenodo.7785861"
+    rec = "https://zenodo.org/api/records/7785861"
+    dl = "https://zenodo.org/api/records/7785861/files/x.crate.zip/content"
+    fake = FakeHTTP()
+    fake.add(rec, text=_zenodo_record_json().replace(ZENODO_FILE, dl))
+    fake.add(dl, content=crate_zip)
+    monkeypatch.setattr("recrate.http.get", fake.get)
+
+    paper.repos = [doi_url]
+    res = locate.locate_crate(paper, signposting=[], out_dir=tmp_path / "crate", cache_dir=None)
+    assert res.found and res.source_url == doi_url
+    assert rec in fake.calls  # it hit the record API, not the DOI's DataCite JSON-LD
+
+
 def test_zip_slip_is_refused(tmp_path):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:

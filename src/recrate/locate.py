@@ -150,7 +150,10 @@ def _resolve(url: str, dest: Path, cache_dir) -> str:
 
     Raises :class:`http.HttpError` or :class:`ValueError` if nothing usable.
     """
-    m = ZENODO_URL.search(url)
+    # A Zenodo record URL (zenodo.org/records/N) or a Zenodo DOI
+    # (doi.org/10.5281/zenodo.N): resolve to the record's files, not the DOI's
+    # DataCite metadata.
+    m = ZENODO_URL.search(url) or ZENODO_DOI.search(url)
     if m:
         return _from_zenodo(m.group(1), dest, cache_dir)
     m = FIGSHARE_URL.search(url)

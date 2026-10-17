@@ -207,6 +207,21 @@ def fetch_doi(doi: str, dest: Path) -> Found:
                     return Found("paper", title, p, f"https://doi.org/{doi}", ["Full text (open access PDF)."])
             except Exception:  # noqa: BLE001 - fall back to the abstract
                 pass
+    # Crossref often omits the open PDF; the landing page advertises it as a
+    # `citation_pdf_url` meta tag (PLOS and most publishers). Follow that.
+    try:
+        html_bytes, _ = _get(f"https://doi.org/{urllib.parse.quote(doi)}", "text/html")
+        m = (re.search(rb'<meta[^>]+name=["\']citation_pdf_url["\'][^>]+content=["\']([^"\']+)', html_bytes, re.I)
+             or re.search(rb'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']citation_pdf_url["\']',
+                          html_bytes, re.I))
+        if m:
+            data, _ = _get(m.group(1).decode("utf-8", "replace"))
+            if data[:4] == b"%PDF":
+                p = dest / "paper.pdf"
+                p.write_bytes(data)
+                return Found("paper", title, p, f"https://doi.org/{doi}", ["Full text (open access PDF)."])
+    except Exception:  # noqa: BLE001 - fall back to the abstract
+        pass
     authors = ", ".join(f"{a.get('given', '')} {a.get('family', '')}".strip() for a in meta.get("author", []))
     abstract = re.sub(r"<[^>]+>", "", meta.get("abstract") or "").strip()
     year = ((meta.get("issued") or {}).get("date-parts") or [[None]])[0][0]
