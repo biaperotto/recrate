@@ -2,11 +2,10 @@
 
     recrate serve paper_agents/my_paper          # stdio
 
-Connect from Claude Code:
-    claude mcp add my-paper -- recrate serve /abs/path/paper_agents/my_paper
-or Claude Desktop (claude_desktop_config.json):
-    {"mcpServers": {"my-paper": {"command": "recrate",
-                                 "args": ["serve", "/abs/path/paper_agents/my_paper"]}}}
+Register it with a client (absolute paths, checked after installing; see install.py):
+    recrate install-mcp paper_agents/my_paper --client desktop    # Claude Desktop
+    recrate install-mcp paper_agents/my_paper --client project    # .mcp.json: Claude Code, VS Code extension
+    recrate install-mcp paper_agents/my_paper                     # print the JSON for any other client
 
 What the agent gets, mirroring Paper2Agent's tools / resources / prompts:
 
@@ -74,6 +73,62 @@ def _run_artifacts(run_dir: Path) -> list[dict[str, str]]:
 
 def _tool_name(method: str) -> str:
     return "run_" + (re.sub(r"[^a-z0-9]+", "_", method.lower()).strip("_") or "method")
+
+
+_PY_TYPES = {"float": float, "number": float, "integer": int, "int": int, "boolean": bool, "bool": bool}
+
+
+def typed_method_tool(spec, method_id: str, run):
+    """A function whose signature is the method's own parameters, typed, documented and defaulting to the published
+    values, so an MCP client sees ``count_nuclei(data_path: str, min_size_px: float = 50, ...)``. Values the caller
+    changes are passed on as recorded overrides, with the reason."""
+    import inspect
+    from typing import Annotated
+
+    from pydantic import Field
+
+    from .crate import _coerce
+
+    kw = inspect.Parameter.KEYWORD_ONLY
+    params, names = [], {}
+    if spec.needs_data:
+        d = spec.data_input
+        params.append(inspect.Parameter("data_path", kw, annotation=Annotated[str, Field(
+            description=f"File or folder with the user's data. Expected: {d.description or d.format or 'see describe_method'}")]))
+    for p in spec.value_inputs:
+        arg = re.sub(r"\W+", "_", p.name).strip("_") or "value"
+        if arg in names or arg in {"data_path", "who", "reason", "pixel_ratio", "auto_adjust", "channel"}:
+            arg += "_param"
+        names[arg] = p.name
+        typ = _PY_TYPES.get((p.type or "").lower(), str)
+        default = _coerce(p.default, p.type)
+        bits = [p.description or "", f"unit: {p.prop('unit')}" if p.prop("unit") else "",
+                f"the paper: \"{p.prop('quote')}\"" if p.prop("quote") else "", f"published value: {p.default}"]
+        params.append(inspect.Parameter(arg, kw, default=default, annotation=Annotated[
+            typ | None, Field(description="; ".join(b for b in bits if b))]))
+    params += [inspect.Parameter("reason", kw, default="", annotation=Annotated[str, Field(
+                   description="Why any value differs from the published one (required then; recorded)")]),
+               inspect.Parameter("who", kw, default="anonymous", annotation=Annotated[str, Field(
+                   description="The person running it, recorded in the run crate")])]
+    if spec.needs_data:
+        params += [inspect.Parameter("pixel_ratio", kw, default=None, annotation=Annotated[float | None, Field(
+                       description="Your pixel size / the research's, only when the research states none")]),
+                   inspect.Parameter("auto_adjust", kw, default=True, annotation=bool)]
+    published = spec.default_params()
+
+    def tool(**kwargs):
+        data = kwargs.pop("data_path", None)
+        reason, who = kwargs.pop("reason", ""), kwargs.pop("who", "anonymous")
+        ratio, adjust = kwargs.pop("pixel_ratio", None), kwargs.pop("auto_adjust", True)
+        types = {q.name: q.type for q in spec.value_inputs}
+        changes = {names[k]: v for k, v in kwargs.items() if v is not None and k in names
+                   and _coerce(v, types[names[k]]) != published.get(names[k])}
+        return run(method_id, data, who, adjust, 0, changes, reason, ratio)
+
+    tool.__signature__ = inspect.Signature(params, return_annotation=dict[str, Any])
+    tool.__annotations__ = {p.name: p.annotation for p in params} | {"return": dict[str, Any]}
+    tool.__name__ = _tool_name(spec.method_name or method_id)
+    return tool
 
 
 def build_server(agent_dir: str | Path) -> FastMCP:
@@ -162,12 +217,16 @@ def build_server(agent_dir: str | Path) -> FastMCP:
                 "same_numbers": c.count if c and c.measures else None, "ladder": out.ladder,
                 "headline": headline, "run_crate": str(out.run_dir.resolve())}
 
-    def _run(method: str, data_path: str, who: str, auto_adjust: bool, channel: int,
-             parameters: dict[str, Any] | None, pixel_ratio: float | None = None) -> dict[str, Any]:
+    def _run(method: str, data_path: str | None, who: str, auto_adjust: bool, channel: int,
+             changes: dict[str, Any] | None, reason: str, pixel_ratio: float | None = None) -> dict[str, Any]:
         from .runcrate import summarise_run
 
-        out = run_on_data(agent.spec(method), data_path, _runs(), runner=RUNNER, agent=who,
-                          auto_adjust=auto_adjust, channel=channel, params=parameters, pixel_ratio=pixel_ratio)
+        if changes and not reason.strip():
+            return {"message": "Changing a parameter needs a reason (pass reason=...); it is recorded in the run crate.",
+                    "artifacts": []}
+        out = run_on_data(agent.spec(method), data_path, _runs(), runner=RUNNER, agent=who, auto_adjust=auto_adjust,
+                          channel=channel, pixel_ratio=pixel_ratio,
+                          overrides={k: (v, reason) for k, v in (changes or {}).items()} or None)
         return {"message": summarise_run(out.run_dir)["headline"], "artifacts": _run_artifacts(out.run_dir),
                 "checks": out.check.as_rows() if out.check else [], "parameters_used": out.params,
                 "results_csv": (out.run_dir / "outputs" / "results.csv").read_text(encoding="utf-8"),
@@ -175,25 +234,29 @@ def build_server(agent_dir: str | Path) -> FastMCP:
 
     @mcp.tool(description="Run a method of the paper on the user's data after checking it. Applies and records "
                           "adjustments (e.g. rescaling size parameters for a different pixel size); stops if a "
-                          "check fails. 'parameters' overrides defaults.")
-    def run_on_my_data(method: str, data_path: str, who: str = "anonymous", auto_adjust: bool = True,
-                       channel: int = 0, parameters: dict[str, Any] | None = None,
+                          "check fails. 'parameters' changes values (with a 'reason', recorded). data_path is not "
+                          "needed for methods that take only values.")
+    def run_on_my_data(method: str, data_path: str | None = None, who: str = "anonymous", auto_adjust: bool = True,
+                       channel: int = 0, parameters: dict[str, Any] | None = None, reason: str = "",
                        pixel_ratio: float | None = None) -> dict[str, Any]:
-        return _run(method, data_path, who, auto_adjust, channel, parameters, pixel_ratio)
+        return _run(method, data_path, who, auto_adjust, channel, parameters, reason, pixel_ratio)
 
-    # One tool per method, named after it, like Paper2Agent's paper tools
+    # One typed tool per method, like Paper2Agent's tools: each parameter is an argument with its type, unit, the
+    # paper's sentence and its published value as the default.
     for m in agent.methods:
-        def make(method_id: str):
-            def method_tool(data_path: str, who: str = "anonymous", auto_adjust: bool = True,
-                            channel: int = 0, parameters: dict[str, Any] | None = None,
-                            pixel_ratio: float | None = None) -> dict[str, Any]:
-                return _run(method_id, data_path, who, auto_adjust, channel, parameters, pixel_ratio)
-            return method_tool
-
-        status = "validated against the paper" if m.status == "validated" else f"status: {m.status}"
+        try:
+            spec_m = agent.spec(m.id)
+        except Exception:  # noqa: BLE001 - a method the crate can't describe gets no tool
+            continue
+        status = {"validated": "reproduces the paper's published results", "differs": "differs from the paper's "
+                  "published results: see about_paper", "failed": "failed to run on the paper's data"}.get(
+                      m.status, "not checked against the paper yet")
         mcp.tool(name=_tool_name(m.name),
                  description=f"{m.name} from the paper ({status}). {m.description} "
-                             "Runs on the user's data with input checks and a recorded run crate.")(make(m.id))
+                             + ("Runs on the user's data (data_path) with input checks; " if spec_m.needs_data else
+                                "Takes parameter values only; ")
+                             + "changed values need a reason. Every run is recorded as a run crate.")(
+            typed_method_tool(spec_m, m.id, _run))
 
     # ---- the paper's tables and figures (reading package) ---------------------------------
     @mcp.tool(description="The paper's tables: label, caption and file. Read one with get_table.")

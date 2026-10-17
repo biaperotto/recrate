@@ -8,7 +8,7 @@ recrate demo-data examples/demo
 rm -rf examples/demo/paper_agent
 recrate agentify --paper examples/demo/paper.md --crate examples/demo/paper_crate --out examples/demo/paper_agent
 streamlit run app/app.py                                   # keep it open in a browser tab
-claude mcp add demo-paper -- recrate serve "$PWD/examples/demo/paper_agent"
+recrate install-mcp examples/demo/paper_agent --client project   # or --client desktop
 ```
 
 Record a backup video of the full run in case Fiji or the network fails live.

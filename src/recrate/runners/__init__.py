@@ -59,7 +59,7 @@ def get_runner(name: str = "auto", language: str | None = None, workflow: Path |
                        "(supported: ImageJ macros, Python, R and shell scripts, Galaxy imaging workflows).")
 
 
-def readiness(language: str | None, workflow: Path | None) -> str | None:
+def readiness(language: str | None, workflow: Path | None, python: Path | None = None) -> str | None:
     """None when this computer can run the workflow; otherwise why not, naming what is missing.
 
     Built from the runners actually available: a Galaxy workflow is ready only when every tool its results need
@@ -81,7 +81,7 @@ def readiness(language: str | None, workflow: Path | None) -> str | None:
         from .script import interpreter
 
         try:
-            interpreter(Path(workflow))
+            interpreter(Path(workflow), python)
         except RuntimeError as e:
             return str(e)
     return None

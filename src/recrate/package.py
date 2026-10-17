@@ -35,8 +35,9 @@ def usage(agent) -> str:
               f"recrate validate {name}         # re-run each method on the published data",
               f"recrate run {name} <your data> --who \"Your name\"",
               f"recrate serve {name}            # the agent over MCP (stdio)", "```", "",
-              "In Claude Code (absolute path):", "", "```bash",
-              f"claude mcp add {name[:40]} -- recrate serve /path/to/{name}", "```", "",
+              "In Claude Desktop, Claude Code or any MCP client (absolute paths, checked after installing):", "",
+              "```bash", f"recrate install-mcp /path/to/{name} --client desktop   # or project, claude-code, print",
+              "```", "",
               "Or open it in the ReCRATE app (`streamlit run app/app.py`) by attaching this zip.", "",
               "## Tools", "",
               "`about_paper`, `search_paper`, `list_tables`, `get_table`, `list_figures`, `get_figure`, "

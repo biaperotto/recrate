@@ -48,10 +48,25 @@ def _new_run_dir(runs_dir: Path, mode: str) -> Path:
     return d
 
 
-def check_inputs(crate: MethodSpec | str | Path, data: str | Path,
+def no_data_dir(runs_dir: Path) -> Path:
+    """An empty input folder for methods that take only values (the script contract still passes --input_dir)."""
+    d = Path(runs_dir) / ".no-input"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def check_inputs(crate: MethodSpec | str | Path, data: str | Path | None,
                  params: dict[str, Any] | None = None, method: str | None = None,
                  pixel_ratio: float | None = None) -> CheckReport:
+    from .profiles import OK, CheckItem
+
     spec = _spec(crate, method)
+    if not spec.needs_data:
+        report = CheckReport(profile=spec.profile, data_path=Path(data or "."))
+        report.items.append(CheckItem("Input data", "none: this method takes parameter values only", "-", OK))
+        return report
+    if data is None:
+        raise CrateError("This method needs input data: give a file or folder.")
     return get_profile(spec.profile).check(spec, Path(data), params, pixel_ratio=pixel_ratio)
 
 
@@ -76,6 +91,10 @@ def execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: str
     if spec.workflow_path is None or not spec.workflow_path.exists():
         raise CrateError("The crate's workflow file is missing.")
     run = get_runner(runner, spec.workflow_language, spec.workflow_path)
+    if run.name == "script":
+        from .env import env_python
+
+        run.python = env_python(spec.path.parent)  # the research object's own environment, when built
     with tempfile.TemporaryDirectory(prefix="recrate-") as tmp:
         work = Path(tmp)
         result = run.run(spec.workflow_path, data, work / "out", params, channel=channel, progress=progress)
@@ -106,14 +125,15 @@ def reproduce(crate: MethodSpec | str | Path, runs_dir: str | Path = "runs", run
               agent: str = "anonymous", method: str | None = None, progress=None) -> RunOutcome:
     """Run on the paper's own data and compare with its reported results."""
     spec = _spec(crate, method)
-    if spec.example_data is None or not spec.example_data.exists():
+    data = spec.example_data if spec.needs_data else no_data_dir(Path(runs_dir))
+    if data is None or not data.exists():
         raise CrateError("The crate has no example data to reproduce on.")
-    check = check_inputs(spec, spec.example_data)
-    return execute(spec, spec.example_data, "reproduce", Path(runs_dir), runner, agent,
+    check = check_inputs(spec, data)
+    return execute(spec, data, "reproduce", Path(runs_dir), runner, agent,
                    spec.default_params(), check, compare=True, channel=0, progress=progress)
 
 
-def run_on_data(crate: MethodSpec | str | Path, data: str | Path, runs_dir: str | Path = "runs",
+def run_on_data(crate: MethodSpec | str | Path, data: str | Path | None, runs_dir: str | Path = "runs",
                 runner: str = "auto", agent: str = "anonymous", auto_adjust: bool = True,
                 channel: int = 0, params: dict[str, Any] | None = None,
                 allow_warnings: bool = True, method: str | None = None,
@@ -126,6 +146,8 @@ def run_on_data(crate: MethodSpec | str | Path, data: str | Path, runs_dir: str 
     divided by the research's, when the research states none.
     """
     spec = _spec(crate, method)
+    if not spec.needs_data:
+        data = no_data_dir(Path(runs_dir))
     base = {**spec.default_params(), **(params or {})}
     check = check_inputs(spec, data, base, pixel_ratio=pixel_ratio)
     if not check.can_run:

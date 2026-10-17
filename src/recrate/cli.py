@@ -7,6 +7,7 @@ Make a paper agent:
 
 Use it:
     recrate serve   agents/my_paper                      # MCP server for Claude
+    recrate install-mcp agents/my_paper --client desktop # register it with Claude Desktop (or project, claude-code)
     recrate inspect agents/my_paper                      # paper, methods, validation
     recrate ask     agents/my_paper "what pixel size?"   # search the paper
     recrate check   agents/my_paper my_images/ --method count_nuclei
@@ -186,6 +187,30 @@ def cmd_review(a) -> int:
     m = review_conclusion(agent.path, method, a.who, a.agrees, a.note or "")
     print(f"Same conclusion: {m.ladder['conclusion']['status']} ({m.ladder['conclusion']['reason']})")
     return 0
+
+
+def cmd_env(a) -> int:
+    from .env import build_env
+
+    rec = build_env(a.agent, python=a.python, extra=a.extra or None)
+    return 0 if rec["ok"] else 1
+
+
+def cmd_build(a) -> int:
+    from .build import build, describe_build
+
+    if a.status:
+        print(describe_build(a.agent))
+        return 0
+    return build(a.agent, wait=True)
+
+
+def cmd_install_mcp(a) -> int:
+    from .install import describe, install
+
+    result = install(a.agent, client=a.client, name=a.name, check=not a.no_check)
+    print(describe(result))
+    return 0 if result.get("check", {"ok": True})["ok"] else 1
 
 
 def cmd_report(a) -> int:
@@ -419,6 +444,28 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--run", metavar="CHECK", help="The id of the check to run")
     runner_opts(s)
     s.set_defaults(func=cmd_followup)
+
+    from .install import CLIENTS
+
+    s = sub.add_parser("env", help="Build the research object's own Python environment from its code (uv)")
+    s.add_argument("agent")
+    s.add_argument("--python", help="Python version (default 3.11)")
+    s.add_argument("--extra", nargs="*", help="Extra packages to install")
+    s.set_defaults(func=cmd_env)
+
+    s = sub.add_parser("build", help="Make a paper's methods runnable: the /recrate agent, run by Claude Code")
+    s.add_argument("agent", help="A research object folder (recrate agentify --paper ... first)")
+    s.add_argument("--status", action="store_true", help="Show the progress of a running or finished build")
+    s.set_defaults(func=cmd_build)
+
+    s = sub.add_parser("install-mcp", help="Register an agent with Claude Desktop, Claude Code or any MCP client")
+    s.add_argument("agent")
+    s.add_argument("--client", default="print", choices=CLIENTS,
+                   help="desktop: Claude Desktop; project: .mcp.json in this folder (Claude Code, VS Code); "
+                        "claude-code: all projects (needs the claude CLI); print: show the JSON")
+    s.add_argument("--name", help="Server name (default: recrate-<paper>)")
+    s.add_argument("--no-check", action="store_true", help="Don't start the server to check it")
+    s.set_defaults(func=cmd_install_mcp)
 
     s = sub.add_parser("report", help="Write one static HTML page for the research object (no install needed)")
     s.add_argument("target")

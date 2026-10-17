@@ -33,6 +33,7 @@ TOLERANCE_SOURCES = {
     "paper-stated": "stated in the paper or its published test (quoted)",
     "method-noise": "measured by rerunning a stochastic method",
     "person": "set by a named person, with a reason",
+    "code-stated": "stated by the authors' code or tutorial output (file named)",
 }
 
 
@@ -58,7 +59,7 @@ def build_ladder(spec, comparison=None, error: str | None = None, blocked: str |
     """The ladder for one method, from what is known: the crate (``spec``), a run's ``comparison`` or ``error``,
     a ``blocked`` reason (no runner here), and a person's ``review`` of the conclusion."""
     has_wf = bool(spec.workflow_path and spec.workflow_path.exists())
-    has_data = bool(spec.example_data and spec.example_data.exists())
+    has_data = bool(spec.example_data and spec.example_data.exists()) or not getattr(spec, "needs_data", True)
     has_results = bool(spec.expected_results and spec.expected_results.exists())
     missing = [w for w, ok in (("workflow", has_wf), ("published data", has_data),
                                ("published results", has_results)) if not ok]

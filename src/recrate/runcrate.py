@@ -81,7 +81,8 @@ def reuse_summary(spec: MethodSpec, files: list[Path], results_csv: Path, adjust
                 main = f"{col} {min(vals):g} to {max(vals):g} (mean {sum(vals) / len(vals):.4g}) over {len(rows)} rows"
     changes = [f"{a.parameter} {a.old} → {a.new} ({a.reason})" for a in adjust.values()] + \
               [f"{k}: {v}" for k, v in (param_notes or {}).items()]
-    return (f"Reuse of {spec.method_name or 'the method'} ({spec.name}) on {len(files)} input file(s)."
+    what = (f"on {len(files)} input file(s)" if spec.needs_data else "with the parameter values below")
+    return (f"Reuse of {spec.method_name or 'the method'} ({spec.name}) {what}."
             + (f" Results: {main}." if main else "")
             + (" Parameter changes: " + "; ".join(changes) + "." if changes else " Parameters as published."))
 
@@ -213,6 +214,12 @@ def write_run_crate(
         output_refs.append(add({"@id": f"outputs/overlays/{ov.name}", "@type": "File",
                                 "name": f"Overlay {ov.stem}", "encodingFormat": "image/png"}, part=True))
 
+    for f in result.extra_outputs or []:  # e.g. packages.txt: every package installed in the environment
+        if Path(f).exists():
+            shutil.copy2(f, out_dir / "outputs" / Path(f).name)
+            output_refs.append(add({"@id": f"outputs/{Path(f).name}", "@type": "File", "name": Path(f).name,
+                                    "encodingFormat": "text/plain" if Path(f).suffix == ".txt" else
+                                    _MEDIA.get(Path(f).suffix.lower(), "application/octet-stream")}, part=True))
     for i, fig in enumerate(figures or []):  # made by the paper's own plotting code, as part of the run
         (out_dir / "outputs" / "figures").mkdir(exist_ok=True)
         shutil.copy2(fig, out_dir / "outputs" / "figures" / fig.name)

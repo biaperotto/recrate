@@ -12,6 +12,8 @@ agents/my_paper/
   source-crate/     a Galaxy Workflow RO-Crate as published, unchanged (when the crate was derived from one)
   environment.json  software and versions as of publication, each with how the version was determined
   code/             the paper's repository, if cloned
+  env/              the paper's own Python environment (recrate env), with recrate-env.json: how it was built
+  work/             the /recrate agent's stages (state.json) and, when run from the app, build.json and build.jsonl
   runs/             every run: reproductions, follow-up checks and reuses, as Workflow Run Crates
 ```
 
@@ -100,6 +102,20 @@ Tools that produce files return `{"message", "artifacts": [{"description", "path
 Paper2Agent's tools do. `tests/test_mcp_server.py` starts the server over stdio and calls every tool on the nuclei
 example, checking the count (20 nuclei), not only that the tool answers.
 
+## The paper's own environment
+
+`recrate env <agent>` (env.py) builds `<agent>/env` with `uv` (or venv and pip): from the code's requirements or
+package files, else the Python packages and versions ReCRATE found as of publication. Python methods then run with
+that interpreter, never ReCRATE's, and every run writes `outputs/packages.txt` and lists each installed package as
+software in the run crate (FAIR4RS R2).
+
+## Tools as Paper2Agent makes them
+
+Each method is one MCP tool with a typed signature built from the crate (`typed_method_tool`): every parameter is an
+argument with its type, unit, the paper's sentence and the published value as its default. A method may declare no
+data input at all (a question-style tool, e.g. "score this sequence"). A value that differs from the published one
+is passed on as a recorded override and needs a reason.
+
 ## The `/recrate` agent (Claude Code)
 
 A paper alone rarely says how to run its methods. The `/recrate` skill (`src/recrate/skill/`) is built the way
@@ -115,6 +131,12 @@ every claim is checked by someone who didn't make it.
 3. `recrate check-description` checks quotes, published values and tolerance sources without a model; ReCRATE
    builds the crate and reproduces each method.
 4. A fresh **verifier** re-derives everything from the paper and code, reviews each run, and runs follow-up checks.
+It runs from Claude Code (`/recrate`), from the command line (`recrate build <agent>`, build.py), or from the app's
+**Make runnable** button, which starts the same build in the background on the person's Claude subscription and
+shows its progress (`work/build.jsonl`). The environment specialist builds the paper's environment and lists the
+code's tutorials; tutorials a user would want become tools too, tested against their recorded outputs
+(tolerance source `code-stated`).
+
 5. Before delivery: `recrate workflow-check` (stages in order, files unchanged since checked, verifier independent),
    `recrate verify-server` (the MCP server, as a client uses it) and `recrate package` (a zip with `USAGE.md`).
 

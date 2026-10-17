@@ -90,7 +90,8 @@ def tolerance_entry(tol: Any) -> dict[str, Any]:
         return {"value": float(tol), "source": None, "evidence": ""}
     bits = [f'"{tol["quote"]}"' if tol.get("quote") else "",
             f"set by {tol['by']}" if tol.get("by") else "", tol.get("reason", ""),
-            f"spread over {tol['runs']} runs" if tol.get("runs") else "", tol.get("note", "")]
+            f"spread over {tol['runs']} runs" if tol.get("runs") else "", f"in {tol['file']}" if tol.get("file") else "",
+            tol.get("note", "")]
     return {"value": float(tol["value"]), "source": tol.get("source"), "evidence": "; ".join(b for b in bits if b)}
 
 

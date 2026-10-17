@@ -14,3 +14,4 @@ examples/workflowhub-nuclei-segmentation/paper_agent/
 .mcp.json
 examples/penguins-dimorphism/paper_agent/
 examples/workflowhub-nuclei-segmentation/my-data-half-resolution/
+*.bak-*

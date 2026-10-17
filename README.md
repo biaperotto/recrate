@@ -41,17 +41,21 @@ An agent is only as trustworthy as the rules its tools follow. ReCRATE enforces 
 * **The record is append-only.** Differing runs, failed runs and follow-up checks stay. Nothing replaces the first result.
 * **The core is field-independent.** Field-specific knowledge lives in profiles that read properties from your files. Three exist today: `generic` (files, formats, table columns), `bioimaging` (calibration, channels, bit depth, object size) and `timeseries` (sampling rate, channels). Outputs declare a kind; scalars and tables are compared today, and other kinds are reported as not checked rather than compared the wrong way. See [docs/domain-profiles.md](docs/domain-profiles.md).
 
-## Building on Paper2Agent
+## Building on Paper2Agent: everything it does, and more
 
-ReCRATE keeps Paper2Agent's way of building agents (a coordinator with specialist subagents, and a test of every tool before delivery) and its interface (MCP tools that return a message and file paths). It changes what a tool is built from and what it guarantees:
+ReCRATE does what Paper2Agent does: the same way of building agents (a coordinator with specialist subagents, each tool tested before delivery) and the same interface (MCP tools that return a message and file paths). On top of that, it changes what a tool is built from and what it guarantees.
 
 | | Paper2Agent | ReCRATE |
 | --- | --- | --- |
-| Built from | A paper and its code repository | An RO-Crate, or one drafted from the paper and its code |
-| A tool is | A function from the paper's tutorials | A method declared in the crate: workflow, inputs, parameters, published results |
-| Checked by | Tests against the tutorials' outputs | Value-by-value comparison with the published results, with sourced tolerances |
-| Your data | Left to the model | Checked against declared input properties by a domain profile |
+| Starts from | A paper and its code repository | The same, or an RO-Crate (found for the paper, supplied, or drafted) |
+| The paper's own environment | Built per paper | Built per paper with `uv` (`recrate env`), and every run records each installed package |
+| Tools come from | The code's tutorials | The paper's reported methods **and** the code's tutorials and examples |
+| A tool is | A typed function, which may take data or just values | The same: typed parameters with their units and the paper's sentence; data optional |
+| Tested against | The tutorials' outputs | The paper's **published results** (or the tutorials' outputs), with sourced tolerances and an independent verifier |
+| Your data | Left to the model | Checked against the method's declared inputs; parameters rescaled only by declared rules |
 | Provenance | Not recorded | A Workflow Run RO-Crate per run, linked to the paper |
+| Where you use it | Claude Code | Claude Desktop, Claude Code or any MCP client (`recrate install-mcp`), and the app's chat on your Claude subscription |
+| How it is built | A pipeline run in Claude Code | The same pipeline (`/recrate`), from Claude Code, `recrate build`, or one button in the app |
 
 ## FAIR4RS, principle by principle
 
@@ -92,17 +96,28 @@ pip install -e ".[app,mcp]"
 recrate agentify --crate examples/workflowhub-nuclei-segmentation/crate --out agents/nuclei
 ```
 
-**In Claude or any MCP client.** No API key needed: ReCRATE runs the methods, and the model is your client's.
+**In Claude or any MCP client.** No API key needed: ReCRATE runs the methods, and the model is your client's. As in Paper2Agent, one command registers the agent and checks that it starts:
 
 ```bash
-claude mcp add nuclei -- "$PWD/.venv/bin/recrate" serve "$PWD/agents/nuclei"
+recrate install-mcp agents/nuclei --client desktop   # Claude Desktop, then quit and reopen it
+recrate install-mcp agents/nuclei --client project   # .mcp.json here: Claude Code and its VS Code extension
+recrate install-mcp agents/nuclei                    # print the JSON for any other client
 ```
+
+It launches the server with this environment's Python and absolute paths, so it does not depend on your PATH or working directory. It keeps the client's other settings, backs up its config, then starts the server over stdio as the client will, and calls its tools.
 
 Then ask, for example, *"Reproduce this paper"* or *"Check my images in ./data, then run the method on them."*
 
-**From a paper alone**, in Claude Code inside this repository: `/recrate <paper PDF, DOI, arXiv link or crate>` (elsewhere, `recrate install-skill` first). Specialist subagents read the paper and its code and describe each method. ReCRATE reproduces each one, an independent verifier checks every claim, and the result is an agent you serve as above. See [docs/architecture.md](docs/architecture.md).
+**From a paper alone.** In the app, add the paper and press **Make runnable**, or run `recrate build agents/<paper>` after `recrate agentify --paper <pdf> --out agents/<paper>`, or use `/recrate <paper>` in Claude Code. In each case Claude, on your subscription, runs the pipeline:
 
-**In the app.** `streamlit run app/app.py`, then open an example. The chat works with a free local model ([Ollama](https://ollama.com)), with Claude and an API key, or with simple commands.
+1. It clones the code and builds the paper's own environment.
+2. It turns the reported methods and the code's tutorials into tools.
+3. It runs each tool on the published data and compares it with the published results.
+4. An independent verifier checks every claim.
+
+The result is an agent you can use in the app or serve as above. It runs the paper's code on your computer, as Paper2Agent does, so start it only for code you are willing to run. See [docs/architecture.md](docs/architecture.md).
+
+**In the app.** `streamlit run app/app.py`, then open an example. If Claude Code (or its VS Code extension) is installed and signed in, the chat is Claude on your own subscription, with no API key, using only the research object's MCP tools. Otherwise it uses a free local model ([Ollama](https://ollama.com)), Claude with an API key, or simple commands; choose under **Connect**.
 
 **From the command line**, every step runs without a model:
 
@@ -121,11 +136,11 @@ ReCRATE is a proof of concept, built at the *Reinvent the Wheel* hackathon (Lond
 
 | Today | Next |
 | --- | --- |
-| Scripts run with the interpreter on your computer, after you confirm you trust their source; only its version is recorded | A container or conda environment built from `environment.json`, with every package version recorded |
+| Python code runs in the paper's own virtual environment (`uv`), with every package recorded; R and shell code use the interpreters on your computer, and nothing is sandboxed | Containers or conda environments, for R, system libraries and isolation |
 | Galaxy runs through ported tools only; other workflows are reported *blocked*, naming the tool | planemo, cwltool, Nextflow and Snakemake |
 | Scalars and tables are compared; `timeseries` is tested on synthetic data only | IoU for label images, tests for distributions, reruns to measure method noise; genomics and single-cell profiles; OME-Zarr, IDR and OMERO sources |
 | Follow-ups for software and data versions are proposed, not run | Running them in pinned environments |
-| A paper alone becomes runnable only through the `/recrate` agent, as far as the paper and its code allow | An evaluation on 20 to 50 WorkflowHub entries with linked papers |
+| A paper alone becomes runnable as far as its code and text allow. Methods that need a GPU or cluster, very large data, restricted data or a paid API are described, not run | An evaluation on 20 to 50 papers with code (WorkflowHub entries, and Paper2Agent's own examples) |
 | Deposit is manual (a ready-to-deposit zip) | Automated deposit to Zenodo and WorkflowHub |
 
 ## Citing, licence, acknowledgements

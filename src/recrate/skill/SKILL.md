@@ -16,7 +16,8 @@ The rules every agent follows, and that you enforce:
 * **The published result is the test.** A method is done when `recrate validate` reproduces the published
   numbers, or names exactly what differs. Never loosen a tolerance to make a method pass; a tolerance follows
   how the paper reports (e.g. ±half a unit of its rounding).
-* **The authors' code, untouched.** Wrap it, don't rewrite it. Re-implement only when no code exists, and say so.
+* **The authors' code, untouched, in its own environment.** Wrap it, don't rewrite it; it runs in
+  `<agent>/env` (`recrate env`), never in ReCRATE's. Re-implement only when no code exists, and say so.
 * **Within reach.** If a method needs a GPU, a cluster, data larger than ~2 GB, or access that must be requested,
   describe what it needs and mark it not runnable here, rather than pretending.
 * **Drafts stay drafts** (`"draft": true`) until a person confirms them.
@@ -56,7 +57,10 @@ named below (in this skill's `agents/` folder), with `{AGENT}` replaced by the a
   linked), its entry points and dependencies, the data (where, size, licence, access), and compute needs.
 
 When both are done, `recrate mark <agent> read --role paper-reader --id <id>` and
-`recrate mark <agent> survey --role environment --id <id>`, then read their outputs. Decide, per method,
+`recrate mark <agent> survey --role environment --id <id>`, then read their outputs. Plan the tools: every
+method the paper reports results for (validated against those results), **plus** the code's tutorials and examples
+that a user would want as a tool (as Paper2Agent extracts its tools; validated against the tutorial's recorded
+outputs). Skip tutorials that only repeat a paper method. Decide, per method,
 **runnable here** or **not runnable here**: the environment specialist checked each method's needs against
 `recrate hardware`; a method whose needs don't fit is not runnable here, with exactly what is missing. Tell the
 user the plan in a few lines, then `recrate mark <agent> plan --role coordinator --note "<runnable methods>"`.
@@ -109,4 +113,5 @@ Then tell the user, briefly:
 * the verdicts;
 * the package (`<agent>.zip`), to share or deposit;
 * to open the research object in the ReCRATE app (or press *Reload*), or to talk to it here:
-  `claude mcp add <name> -- recrate serve <agent>` (absolute paths).
+  `recrate install-mcp <agent> --client project` (or `--client desktop`), which registers it with absolute
+  paths and checks that it starts.

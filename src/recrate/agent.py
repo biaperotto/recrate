@@ -169,11 +169,13 @@ def diagnose(spec: MethodSpec) -> tuple[str, list[str]]:
     from .profiles import get_profile
     from .runners import readiness
 
-    blocked = readiness(spec.workflow_language, spec.workflow_path)
+    from .env import env_python
+
+    blocked = readiness(spec.workflow_language, spec.workflow_path, env_python(spec.path.parent))
     if blocked:
         return "blocked", [blocked]
     gaps = []
-    if not (spec.example_data and spec.example_data.exists()):
+    if spec.needs_data and not (spec.example_data and spec.example_data.exists()):
         gaps.append("No published data in the crate: the method can be reused but not reproduced.")
     if not (spec.expected_results and spec.expected_results.exists()):
         gaps.append("No published results in the crate to compare with.")
@@ -202,7 +204,7 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
         comparison, error, blocked = None, None, None
         if st.readiness == "blocked":
             blocked = st.detail = st.gaps[0]
-        elif not (spec.example_data and spec.example_data.exists()):
+        elif spec.needs_data and not (spec.example_data and spec.example_data.exists()):
             st.detail = "No example data in the crate."
         elif not (spec.expected_results and spec.expected_results.exists()):
             st.detail = "No reported results in the crate to compare with."

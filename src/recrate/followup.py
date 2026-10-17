@@ -82,8 +82,11 @@ def run_followup(spec: MethodSpec, check_id: str, runs_dir: str | Path, who: str
     why = f.why + (f' The paper: "{f.quote}"' if f.quote else "")
     notes = {k: f"Follow-up check '{f.title}': set to {v!r} (as published: {defaults.get(k)!r}). {why}"
              for k, v in f.changes.items()}
-    return execute(spec, spec.example_data, "follow-up", runs_dir, runner, who, {**defaults, **f.changes},
-                   check_inputs(spec, spec.example_data), compare=True, param_notes=notes,
+    from .pipeline import no_data_dir
+
+    data = spec.example_data if spec.needs_data else no_data_dir(runs_dir)
+    return execute(spec, data, "follow-up", runs_dir, runner, who, {**defaults, **f.changes},
+                   check_inputs(spec, data), compare=True, param_notes=notes,
                    rounded=f.id == "rounding", followup={"of": original.name, "title": f.title, "why": why})
 
 

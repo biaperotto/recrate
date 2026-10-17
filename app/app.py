@@ -28,8 +28,8 @@ import pandas as pd
 import streamlit as st
 
 from recrate.agent import PaperAgent, agentify, revalidate, review_conclusion, runs_own_code
-from recrate.chat import (LOCAL_URL, ChatTools, ClaudeChat, LocalChat, OpenAICompatChat, claude_available,
-                          local_models)
+from recrate.chat import (LOCAL_URL, ChatTools, ClaudeChat, ClaudeCodeChat, LocalChat, OpenAICompatChat,
+                          claude_available, claude_code_binary, local_models)
 from recrate.crate import CrateError
 from recrate.figures import Panel, comparison_chart, panel_figure, pixel_size_um
 from recrate.paper import passages
@@ -164,6 +164,13 @@ mark.cite {background: rgba(232,163,61,.3); color: inherit; padding: 0 .1em; bor
 .tree .n {color: #8a8985; font-size: .78rem;}
 .st-key-sourcebox p, .st-key-sourcebox li {font-size: .86rem; line-height: 1.5;}
 .st-key-sourcebox h1, .st-key-sourcebox h2, .st-key-sourcebox h3 {font-size: 1rem !important;}
+.st-key-landing {padding-top: 7vh;}
+.st-key-landing [data-testid="stImage"] {margin-bottom: 1.4rem;}
+h1.hero {font-size: 2.3rem; line-height: 1.15; margin: 0 0 .7rem; font-weight: 700; letter-spacing: -.02em;}
+.lede {font-size: 1.08rem; color: var(--muted); max-width: 38rem; margin: 0 0 1.6rem;}
+.st-key-landing [class*="st-key-get-"] {background: var(--card); border-radius: 14px; min-height: 8.5rem;}
+.st-key-landing .foot {margin-top: 2rem;}
+.st-key-landing a {color: var(--accent);}
 </style>""")
 
 # The divider between the chat and the workstation: drag to resize, double-click to reset.
@@ -277,8 +284,11 @@ def pick_model(models: list[str]) -> str | None:
 
 
 def engine_plan() -> tuple[str, str]:
-    """(kind, label): claude | local | commands, chosen by the person or automatically (free first)."""
+    """(kind, label): subscription | claude | local | commands, chosen by the person or automatically: Claude on your
+    own subscription first (no key, no cost per message), then a free local model, then an API key."""
     choice = ss.engine_choice
+    if choice in ("auto", "subscription") and claude_code_binary():
+        return "subscription", "Claude · your subscription"
     has_claude, _ = claude_available(ss.get("api_key"))
     models = available_models(ss.local_url) if choice in ("auto", "local") else []
     model = ss.get("local_model") if ss.get("local_model") in models else pick_model(models)
@@ -293,6 +303,8 @@ def engine_plan() -> tuple[str, str]:
 
 def make_engine(agent: PaperAgent, tools: ChatTools):
     kind, _ = engine_plan()
+    if kind == "subscription":
+        return ClaudeCodeChat(agent, tools)
     if kind == "claude":
         return ClaudeChat(agent, tools, api_key=ss.get("api_key"))
     if kind == "local":
@@ -508,7 +520,7 @@ def context_card(agent: PaperAgent) -> None:
 
 def chat_card() -> None:
     kind, label = engine_plan()
-    color = {"claude": "#d97757", "local": "#2A78D6", "commands": "#b8b3a7"}[kind]
+    color = {"subscription": "#d97757", "claude": "#d97757", "local": "#2A78D6", "commands": "#b8b3a7"}[kind]
     h1, h2 = st.columns([1, 1.4], vertical_alignment="center")
     h1.markdown("**Chat**")
     h2.markdown(f"<div style='text-align:right'><span class='chip'><span class='dot' style='background:{color}'></span>"
@@ -1032,25 +1044,63 @@ def empty_validate(agent: PaperAgent) -> None:
                     "- Code: no repository linked in the paper")
         env = agent.environment
         st.markdown(f"- Software and models named: {len(env.software) if env else 0} (see *Software environment* below)")
+    build_panel(agent, has_code=bool(code))
+
+
+def build_panel(agent: PaperAgent, has_code: bool = True) -> None:
+    """Make the methods runnable from here: the /recrate agent (Paper2Agent's pipeline plus ReCRATE's checks), run by
+    Claude Code on your subscription, in the background. Its progress is read from the research object's folder."""
+    from recrate import build as builder
+
+    s = builder.state(agent.path)
     with st.container(border=True):
-        st.markdown("**Make its methods runnable with your Claude subscription** (free with it, no API key)")
-        rel = agent.path.relative_to(ROOT) if agent.path.is_relative_to(ROOT) else agent.path
-        st.markdown("1. Open a terminal in the ReCRATE folder and start Claude Code:")
-        st.code(f'cd "{ROOT}"\nclaude', language="bash")
-        st.markdown("2. In Claude Code, run the command below. Claude reads the paper and its code, describes each "
-                    "method, runs it on the published data and repairs it until it validates.")
-        st.code(f"/agentify {rel}", language=None)
-        st.markdown("3. Come back here and reload.")
-        if st.button("Reload this research object", icon=":material/refresh:"):
-            load_agent(agent.path, ss.tools.data_dir)
+        st.markdown("**Make its methods runnable** · Claude, on your subscription")
+        if s["state"] == "running":
+            build_progress(str(agent.path))
+            return
+        if s["state"] in {"done", "failed", "stopped"}:
+            (st.success if s["state"] == "done" else st.warning)(f"Last build: {s['state']}.")
+            if s.get("result"):
+                with st.expander("What the agent reported"):
+                    st.markdown(s["result"])
+        st.caption("Like Paper2Agent: Claude sets up the paper's own environment, turns its methods and its code's "
+                   "tutorials into tools, runs each on the published data and tests it. ReCRATE adds the checks: "
+                   "every parameter quoted from the paper, every result compared with the published one, an "
+                   "independent verifier. It takes 10 to 60 minutes."
+                   + ("" if has_code else " This paper links no code, so Claude can only implement what the text "
+                      "describes, and will say so."))
+        if not claude_code_binary():
+            st.info("Needs Claude Code (or its VS Code extension), signed in to your Claude account.")
+            return
+        trust = st.checkbox("I understand this downloads and runs the paper's code on this computer.",
+                            key=f"trust-build-{agent.name}")
+        if st.button("Make runnable", type="primary", disabled=not trust, icon=":material/build:",
+                     key=f"build-{agent.name}"):
+            builder.build(agent.path, wait=False)
+            note_for_chat("Started making the methods runnable (the /recrate agent, in the background).")
             st.rerun()
-        if not code:
-            st.caption("This paper links no code, so Claude can only describe methods it can implement from the text "
-                       "and the data; it will say what it couldn't find.")
+        with st.expander("Or run it yourself in a terminal"):
+            st.code(f'cd "{ROOT}"\n.venv/bin/recrate build "{agent.path}"', language="bash")
+
+
+@st.fragment(run_every=4)
+def build_progress(agent_dir: str) -> None:
+    from recrate import build as builder
+
+    s = builder.state(agent_dir)
+    if s["state"] != "running":  # finished: reload so the new methods appear
+        load_agent(Path(agent_dir), ss.tools.data_dir if "tools" in ss else None)
+        st.rerun(scope="app")
+    steps = builder.events(agent_dir, last=12)
+    st.markdown(f"**Running** since {str(s.get('started', ''))[11:16]} UTC · {len(steps)} recent step(s)")
+    for e in steps:
+        st.caption(e)
+    st.caption("You can keep using the app; this updates by itself.")
 
 
 def validate_actions(agent: PaperAgent) -> None:
-    runnable = [m for m in agent.methods if agent.spec(m.id).example_data and agent.spec(m.id).example_data.exists()]
+    runnable = [m for m in agent.methods if not agent.spec(m.id).needs_data
+                or (agent.spec(m.id).example_data and agent.spec(m.id).example_data.exists())]
     needs_trust = [m for m in runnable if runs_own_code(m.language) and m.status == "not validated"]
     c1, c2 = st.columns([3, 1], vertical_alignment="center")
     c2.caption(f"{len(runnable)} with published data")
@@ -1113,7 +1163,8 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
     missing_px = False
     for m in agent.methods:
         spec = agent.spec(m.id)
-        fit = cached_check(str(agent.path), m.name, str(data_dir), data_signature(files)) if files else None
+        fit = (cached_check(str(agent.path), m.name, str(data_dir), data_signature(files))
+               if files or not agent.spec(m.id).needs_data else None)
         adj = {a["parameter"]: a for a in (fit["adjustments"] if fit else [])}
         with st.container(border=True):
             verdict = "<span class='muted'>add your data to check</span>" if not fit else ICON[fit["status"]] + " " + {
@@ -1201,7 +1252,8 @@ def reuse_actions(agent: PaperAgent, data_dir: Path, files: list[Path]) -> None:
     c1, c2 = st.columns([1.3, 2], vertical_alignment="center")
     name = c1.selectbox("Method", names, key="reuse-method", label_visibility="collapsed") if len(names) > 1 else names[0]
     m = next(x for x in agent.methods if x.name == name)
-    fit = cached_check(str(agent.path), m.name, str(data_dir), data_signature(files)) if files else None
+    fit = (cached_check(str(agent.path), m.name, str(data_dir), data_signature(files))
+               if files or not agent.spec(m.id).needs_data else None)
     overrides = ss.get(f"ov-{m.id}", {})
     missing = [k for k, (_, why) in overrides.items() if not str(why).strip()]
     can = bool(fit and fit["can_run"]) and not missing
@@ -1357,7 +1409,7 @@ def record_section(agent: PaperAgent, runs: list[dict]) -> Path | None:
     with st.expander("Connect from Claude or any MCP client"):
         st.markdown("Run this research object as an agent: ask about the paper, check your data, reproduce, "
                     "reuse and record, from a chat.")
-        st.code(f'claude mcp add {agent.name[:40]} -- recrate serve "{agent.path}"', language="bash")
+        mcp_install(agent.path, "record")
         st.markdown("- **Read the paper**: about_paper, search_paper, describe_method, tables and figures\n"
                     "- **Check and run**: check_my_data, reproduce, run_on_my_data, follow-up checks\n"
                     "- **Figures**: make_figure\n"
@@ -1471,25 +1523,63 @@ def start(agent_none: bool = True) -> None:
                 if c2.button("Open", key=f"ex-{key}", width="stretch"):
                     open_example(key)
                     st.rerun()
-        st.markdown("<div class='eyebrow' style='margin-top:1.2rem'>What you'll get</div>", unsafe_allow_html=True)
-        c = st.columns(3)
-        for col, (t, d) in zip(c, [("Reproduce", "Each method run on the research's own data, compared with the "
-                                    "published result."),
-                                   ("Reuse", "Your data checked against what each method expects; parameters adjusted "
-                                    "and recorded."),
-                                   ("Record", "Every run as a Workflow Run RO-Crate, with an export for your paper.")]):
-            col.markdown(f"**{t}**  \n<span class='muted'>{d}</span>", unsafe_allow_html=True)
+
+
+# ---- the start page ------------------------------------------------------------------------------------
+GET = [("Reproduce", "Each method run on the research's own data, compared with the published result.", "replay"),
+       ("Reuse", "Your data checked against what each method expects; parameters adjusted and recorded.", "tune"),
+       ("Record", "Every run as a Workflow Run RO-Crate, with an export for your paper.", "inventory_2")]
+
+
+def landing() -> None:
+    """The first thing a visitor sees: what ReCRATE is, what they will get, and one way in."""
+    _, mid, _ = st.columns([1, 2.4, 1])
+    with mid, st.container(key="landing"):
+        st.image(str(IMG / "logo.svg"), width=340)
+        st.markdown("<h1 class='hero'>A paper as an agent you can trust</h1>"
+                    "<p class='lede'>Give ReCRATE a paper or its RO-Crate. It checks the paper's results before you rely "
+                    "on them, checks your data before you reuse the method, and records every run.</p>",
+                    unsafe_allow_html=True)
+        c1, c2 = st.columns([1, 1])
+        if c1.button("Start", type="primary", width="stretch", icon=":material/arrow_forward:", key="go"):
+            ss.landing = False
+            st.rerun()
+        with c2.popover("Try an example", width="stretch", icon=":material/science:"):
+            for key, ex in EXAMPLES.items():
+                st.markdown(f"**{ex['title']}**  \n<span class='muted'>{ex['about']}</span>", unsafe_allow_html=True)
+                if st.button("Open", key=f"land-ex-{key}", width="stretch"):
+                    ss.landing = False
+                    open_example(key)
+                    st.rerun()
+        st.markdown("<div class='eyebrow' style='margin-top:2.2rem'>What you'll get</div>", unsafe_allow_html=True)
+        for col, (t, d, icon) in zip(st.columns(3), GET):
+            with col.container(border=True, key=f"get-{t.lower()}"):
+                st.markdown(f":material/{icon}: **{t}**  \n<span class='muted'>{d}</span>", unsafe_allow_html=True)
+        st.markdown("<p class='muted foot'>Built on <a href='https://github.com/jmiao24/Paper2Agent'>Paper2Agent</a>, "
+                    "the <a href='https://doi.org/10.1038/s41597-022-01710-x'>FAIR principles for research software</a> "
+                    "and <a href='https://www.researchobject.org/ro-crate/'>RO-Crate</a>. Every number comes from running "
+                    "a method, never from a language model.</p>", unsafe_allow_html=True)
 
 
 # ---- the top bar: connect, who, reset -------------------------------------------------------------------
 def connect_box() -> None:
     kind, label = engine_plan()
     st.markdown(f"**Chat:** {label}")
-    choice = st.radio("Who answers in the chat", ["auto", "local", "claude", "commands"], key="engine_choice",
-                      format_func={"auto": "Automatic: a free local model if one is running, else Claude if a key is set",
+    choice = st.radio("Who answers in the chat", ["auto", "subscription", "local", "claude", "commands"],
+                      key="engine_choice",
+                      format_func={"auto": "Automatic: Claude on your subscription if Claude Code is installed, else a "
+                                           "free local model, else Claude with an API key",
+                                   "subscription": "Claude, with your Claude subscription (through Claude Code; no key)",
                                    "local": "An open model on this computer (free, no key)",
                                    "claude": "Claude (API key)", "commands": "Simple commands only"}.get)
-    if choice in ("auto", "local"):
+    if choice in ("auto", "subscription"):
+        exe = claude_code_binary()
+        if exe:
+            st.caption(f"Claude Code found ({Path(exe).parent.parent.parent.name if 'extensions' in exe else exe}). "
+                       "Claude answers with your subscription and uses only this research object's tools.")
+        elif choice == "subscription":
+            st.caption("Claude Code isn't installed: install it (or its VS Code extension) and sign in.")
+    if choice in ("auto", "local") and not (choice == "auto" and claude_code_binary()):
         models = available_models(ss.local_url)
         if models:
             current = ss.get("local_model") if ss.get("local_model") in models else pick_model(models)
@@ -1518,13 +1608,33 @@ def connect_box() -> None:
             ss.api_key = None
             st.rerun()
     st.divider()
-    st.markdown("**Or talk to it in Claude Code / Claude Desktop** (your Claude subscription, no key):")
+    st.markdown("**Or talk to it in Claude Desktop or Claude Code** (your Claude subscription, no key):")
     if ss.get("agent_dir"):
-        exe = str(Path(sys.executable).with_name("recrate"))
-        st.code(f'claude mcp add {slug(Path(ss.agent_dir).name)[:30]} -- "{exe}" serve "{ss.agent_dir}"',
-                language="bash", wrap_lines=True)
+        mcp_install(Path(ss.agent_dir), "connect")
     else:
-        st.caption("Open a research object first; the command to copy appears here.")
+        st.caption("Open a research object first.")
+
+
+def mcp_install(agent_dir: Path, key: str) -> None:
+    """Register this research object's agent with an MCP client, as `recrate install-mcp` does, and check it starts."""
+    from recrate.install import describe, install, server_entry, server_name
+
+    c1, c2 = st.columns(2)
+    target = None
+    if c1.button("Add to Claude Desktop", key=f"mcp-desktop-{key}", width="stretch", icon=":material/desktop_mac:"):
+        target = "desktop"
+    if c2.button("Add to this project", key=f"mcp-project-{key}", width="stretch", icon=":material/folder:",
+                 help=f"Writes .mcp.json in {ROOT} (Claude Code and its VS Code extension)"):
+        target = "project"
+    if target:
+        with st.spinner("Registering and starting the server to check it…"):
+            try:
+                res = install(agent_dir, client=target, project_dir=ROOT)
+                (st.success if res["check"]["ok"] else st.error)(describe(res))
+            except Exception as e:  # noqa: BLE001 - shown to the person
+                st.error(f"{type(e).__name__}: {e}")
+    st.caption("Any other MCP client: add this to its configuration.")
+    st.code(json.dumps({"mcpServers": {server_name(agent_dir): server_entry(agent_dir)}}, indent=2), language="json")
 
 
 def topbar() -> None:
@@ -1549,6 +1659,10 @@ def topbar() -> None:
 
 
 # ---- page ---------------------------------------------------------------------------------------------
+ss.setdefault("landing", not ss.get("agent_dir"))
+if ss.landing and not ss.get("agent_dir"):
+    landing()
+    st.stop()
 topbar()
 left, right = st.columns([1, 1.25], gap="small")
 with right:

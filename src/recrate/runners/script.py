@@ -33,13 +33,14 @@ LANGUAGES = {
 }
 
 
-def interpreter(workflow: Path) -> tuple[str, str, list[str]]:
-    """(software name, command, version arguments) for a script; raises if the interpreter is missing."""
+def interpreter(workflow: Path, python: str | Path | None = None) -> tuple[str, str, list[str]]:
+    """(software name, command, version arguments) for a script; raises if the interpreter is missing. ``python``:
+    the research object's own environment (env.py), used for Python scripts when it was built."""
     suffix = Path(workflow).suffix.lower()
     if suffix not in LANGUAGES:
         raise RuntimeError(f"No interpreter for {Path(workflow).name} (scripts: .py, .R, .sh).")
     name, var, default, version = LANGUAGES[suffix]
-    cmd = os.environ.get(var, default)
+    cmd = str(python) if python and suffix == ".py" else os.environ.get(var, default)
     if not (Path(cmd).exists() or shutil.which(cmd)):
         raise RuntimeError(f"{Path(workflow).name} is {name} code, but {cmd} is not installed here "
                            f"(install it, or set {var} to its path).")
@@ -48,12 +49,13 @@ def interpreter(workflow: Path) -> tuple[str, str, list[str]]:
 
 class ScriptRunner(Runner):
     name = "script"
+    python: Path | None = None  # the research object's own environment, when built (env.py)
 
     def run(self, workflow: Path, input_dir: Path, output_dir: Path, params: dict[str, Any],
             channel: int = 0, progress=None) -> RunResult:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        lang, cmd0, version_args = interpreter(workflow)
+        lang, cmd0, version_args = interpreter(workflow, self.python)
         cmd = [cmd0, str(Path(workflow).resolve()),
                "--input_dir", str(Path(input_dir).resolve()), "--output_dir", str(output_dir.resolve())]
         for k, v in params.items():
@@ -72,12 +74,22 @@ class ScriptRunner(Runner):
         m = re.search(r"\d+\.\d+(\.\d+)?", v.stdout + v.stderr)
         version = m.group(0) if m else (platform.python_version() if lang == "Python" else "unknown")
         masks = output_dir / "masks"
+        extra, software = [], [(lang, version)]
+        if lang == "Python":  # every installed package, as provenance (FAIR4RS R2)
+            from ..env import installed_packages
+
+            pkgs = installed_packages(cmd0)
+            if pkgs:
+                (output_dir / "packages.txt").write_text("\n".join(pkgs) + "\n", encoding="utf-8")
+                extra.append(output_dir / "packages.txt")
+                software += [tuple(p.split("==", 1)) for p in pkgs][:300]
         return RunResult(
             results_csv=results,
             masks_dir=masks if masks.exists() else None,
-            software=[(lang, version)],
+            software=software,
             started=started,
             ended=ended,
             params=dict(params),
             log=proc.stdout[-4000:],
+            extra_outputs=extra,
         )

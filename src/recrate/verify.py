@@ -130,6 +130,9 @@ def _check_tolerances(m: dict[str, Any], expected: Path | None, paper: str, rep:
                 elif src == "person" and not (t.get("by") and t.get("reason")):
                     rep.findings.append(Finding("error", name, f"{what} is set by a person: give their name (by) "
                                                                "and a reason"))
+                elif src == "code-stated" and not t.get("file"):
+                    rep.findings.append(Finding("error", name, f"{what} is code-stated: name the file (file) where "
+                                                               "the authors' code or tutorial records it"))
                 elif src == "method-noise" and not t.get("runs"):
                     rep.findings.append(Finding("error", name, f"{what} is method noise: give the number of runs"))
                 elif src == "paper-rounding":

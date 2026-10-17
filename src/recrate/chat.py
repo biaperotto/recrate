@@ -491,6 +491,120 @@ class ClaudeChat:
         yield ("text", "_(Stopped after many steps; tell me how to continue.)_")
 
 
+def claude_code_binary() -> str | None:
+    """The Claude Code program: ``RECRATE_CLAUDE``, ``claude`` on the PATH, or the one bundled with the Claude Code
+    extension for VS Code or Cursor. It signs in with the person's Claude subscription, so no API key is needed."""
+    import shutil
+
+    env = os.environ.get("RECRATE_CLAUDE")
+    if env and Path(env).exists():
+        return env
+    found = shutil.which("claude")
+    if found:
+        return found
+    for base in ("~/.vscode/extensions", "~/.vscode-insiders/extensions", "~/.cursor/extensions"):
+        hits = sorted(Path(base).expanduser().glob("anthropic.claude-code-*/resources/native-binary/claude"))
+        if hits:
+            return str(hits[-1])
+    return None
+
+
+class ClaudeCodeChat:
+    """Claude on the person's own Claude subscription, through Claude Code, with the research object's MCP server as
+    its only tools. The app's chat becomes the same agent as in Claude Desktop, the way Paper2Agent's agents use
+    their MCP servers: Claude reasons and talks; every number comes from a ReCRATE tool. Claude Code's own tools
+    (files, shell, web) are switched off, and the conversation continues across messages (``--resume``)."""
+
+    def __init__(self, agent: PaperAgent, tools: ChatTools, binary: str | None = None, model: str | None = None):
+        self.agent, self.tools, self.model = agent, tools, model
+        self.binary = binary or claude_code_binary()
+        if not self.binary:
+            raise RuntimeError("Claude Code is not installed (or its VS Code extension).")
+        self.session: str | None = None
+
+    def _command(self, text: str) -> list[str]:
+        from .install import server_entry
+
+        try:
+            data = str(self.tools.current_data())
+        except Exception:  # noqa: BLE001 - no data yet
+            data = "none yet"
+        context = (f"You are the chat of the ReCRATE app for this research object. The user's data folder is {data} "
+                   f"(pass it as data_path). Record every run with who='{self.tools.who}'. Use only the recrate tools. "
+                   "Never state a number that did not come from a tool result. Never call review_conclusion unless the "
+                   "user gives their own verdict in this conversation. Keep answers short and plain.")
+        cmd = [self.binary, "-p", text, "--output-format", "stream-json", "--verbose",
+               "--mcp-config", json.dumps({"mcpServers": {"recrate": server_entry(self.agent.path)}}),
+               "--strict-mcp-config", "--tools", "", "--allowedTools", "mcp__recrate", "--setting-sources", "",
+               "--append-system-prompt", context, "--max-turns", "16"]
+        if self.model:
+            cmd += ["--model", self.model]
+        if self.session:
+            cmd += ["--resume", self.session]
+        return cmd
+
+    def _result(self, name: str, content: Any, error: bool) -> ToolResult:
+        """A tool result as the app shows it: figures, the comparison headline, a note."""
+        text = content if isinstance(content, str) else "\n".join(
+            c.get("text", "") for c in (content or []) if isinstance(c, dict) and c.get("type") == "text")
+        atts: list[dict[str, Any]] = []
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+        if error:
+            atts.append({"type": "error", "text": text[:600]})
+        elif isinstance(payload, dict):
+            if payload.get("run_crate"):
+                self.tools.last_run = Path(payload["run_crate"])
+            msg = payload.get("message") or payload.get("headline")
+            if name in {"reproduce", "run_followup_check"} and msg:
+                n = str(payload.get("same_numbers") or "")
+                ok = bool(n) and n.split("/")[0] == n.split("/")[-1]
+                atts.append({"type": "comparison", "ok": ok, "headline": msg})
+            elif msg:
+                atts.append({"type": "note", "text": msg})
+            for a in payload.get("artifacts") or []:
+                if str(a.get("path", "")).lower().endswith((".png", ".jpg", ".svg")):
+                    atts.append({"type": "figure", "path": a["path"], "caption": a.get("description", "")})
+        return ToolResult(text, atts, error)
+
+    def send(self, text: str) -> Iterator[tuple]:
+        import subprocess
+
+        names: dict[str, str] = {}
+        proc = subprocess.Popen(self._command(text), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, cwd=str(self.agent.path))
+        answered = False
+        for line in proc.stdout:
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            kind = e.get("type")
+            if kind == "assistant":
+                for b in e["message"].get("content", []):
+                    if b.get("type") == "text" and b.get("text", "").strip():
+                        answered = True
+                        yield ("text", b["text"])
+                    elif b.get("type") == "tool_use":
+                        name = b["name"].removeprefix("mcp__recrate__")
+                        names[b["id"]] = name
+                        yield ("tool", name, b.get("input") or {})
+            elif kind == "user":
+                for b in e["message"].get("content", []):
+                    if isinstance(b, dict) and b.get("type") == "tool_result":
+                        name = names.get(b.get("tool_use_id"), "tool")
+                        yield ("result", name, self._result(name, b.get("content"), bool(b.get("is_error"))))
+            elif kind == "result":
+                self.session = e.get("session_id") or self.session
+                if e.get("is_error") and not answered:
+                    yield ("text", f"Claude Code stopped: {e.get('result') or e.get('subtype')}")
+        proc.wait()
+        if proc.returncode and not answered:
+            yield ("text", "Claude Code could not answer: " + (proc.stderr.read()[-600:] or f"exit {proc.returncode}"))
+
+
 LOCAL_URL = os.environ.get("RECRATE_LOCAL_URL", "http://localhost:11434/v1")  # Ollama's OpenAI-compatible API
 
 

@@ -105,11 +105,18 @@ class MethodSpec:
 
     # ---- convenience -------------------------------------------------
     @property
+    def needs_data(self) -> bool:
+        """False for a method that takes only values (e.g. "score this sequence"), like many Paper2Agent tools."""
+        return any(p.is_file for p in self.inputs)
+
+    @property
     def data_input(self) -> Parameter:
+        """The data input; for a method that takes only values, an empty placeholder (no properties to check)."""
         for p in self.inputs:
             if p.is_file:
                 return p
-        raise CrateError("No File input parameter declared in the crate.")
+        return Parameter(id="#no-data-input", name="input_dir", type="Dataset",
+                         description="This method takes no input data, only parameter values.")
 
     @property
     def value_inputs(self) -> list[Parameter]:

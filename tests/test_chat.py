@@ -85,3 +85,39 @@ def test_local_chat_ignores_the_apps_notes_and_gives_an_overview(agent, demo, tm
     events = list(chat.send(note + "what is this research about?"))
     assert not [e for e in events if e[0] == "tool"]  # no command triggered by the note
     assert "count_nuclei" in events[0][1] and "Counting and sizing nuclei" in events[0][1]
+
+
+def test_claude_code_engine_streams_tools_and_keeps_the_session(tmp_path):
+    """The app's chat on a Claude subscription: Claude Code's stream is turned into text, tool chips and results."""
+    import json
+    import stat
+    import sys
+
+    from recrate.agent import PaperAgent
+    from recrate.chat import ChatTools, ClaudeCodeChat
+    from recrate.demo import make_demo
+    from recrate.agent import agentify
+
+    demo = make_demo(tmp_path / "demo")
+    agent = agentify(tmp_path / "agent", paper=demo["paper"], crate=demo["crate"], validate="none")
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "mcp__recrate__reproduce",
+                                                       "input": {"method": "count_nuclei"}}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": [
+            {"type": "text", "text": json.dumps({"message": "Reproduced: 2 of 2", "same_numbers": "2/2",
+                                                 "run_crate": str(tmp_path), "artifacts": []})}]}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "It reproduces."}]}},
+        {"type": "result", "subtype": "success", "session_id": "abc"},
+    ]
+    fake = tmp_path / "claude"
+    fake.write_text(f"#!{sys.executable}\nimport sys\nopen({str(tmp_path / 'args.txt')!r}, 'a').write(' '.join(sys.argv) + '\\n')\n"
+                    + "".join(f"print({json.dumps(json.dumps(e))})\n" for e in events))
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    chat = ClaudeCodeChat(PaperAgent.load(agent.path), ChatTools(agent, tmp_path / "up"), binary=str(fake))
+    out = list(chat.send("Does it reproduce?"))
+    assert [e[0] for e in out] == ["tool", "result", "text"] and out[0][1] == "reproduce"
+    assert out[1][2].attachments[0] == {"type": "comparison", "ok": True, "headline": "Reproduced: 2 of 2"}
+    assert chat.session == "abc"
+    list(chat.send("And then?"))
+    args = (tmp_path / "args.txt").read_text().splitlines()
+    assert "--strict-mcp-config" in args[0] and "--resume abc" in args[1]  # only ReCRATE's tools; one conversation
