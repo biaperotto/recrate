@@ -150,10 +150,28 @@
       "defaultValue": "FEMALE"
     },
     {
+      "@id": "#size-dimorphism-index-in-keep",
+      "@type": "FormalParameter",
+      "name": "keep_rows",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Text",
+      "description": "Inclusion rule: rows to keep, as 'Column=Value' conditions separated by ';' (empty: every row)",
+      "defaultValue": ""
+    },
+    {
       "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-length",
       "@type": "PropertyValue",
       "name": "tolerance_abs:culmen_length",
       "value": 0.006
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-length-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:culmen_length",
+      "value": "paper-rounding",
+      "description": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
     },
     {
       "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-depth",
@@ -162,16 +180,37 @@
       "value": 0.006
     },
     {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-depth-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:culmen_depth",
+      "value": "paper-rounding",
+      "description": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
+    },
+    {
       "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-flipper-length",
       "@type": "PropertyValue",
       "name": "tolerance_abs:flipper_length",
       "value": 0.006
     },
     {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-flipper-length-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:flipper_length",
+      "value": "paper-rounding",
+      "description": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
+    },
+    {
       "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-body-mass",
       "@type": "PropertyValue",
       "name": "tolerance_abs:body_mass",
       "value": 0.006
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-body-mass-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:body_mass",
+      "value": "paper-rounding",
+      "description": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
     },
     {
       "@id": "#size-dimorphism-index-out-sdi",
@@ -188,15 +227,34 @@
           "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-length"
         },
         {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-length-source"
+        },
+        {
           "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-depth"
+        },
+        {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-depth-source"
         },
         {
           "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-flipper-length"
         },
         {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-flipper-length-source"
+        },
+        {
           "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-body-mass"
+        },
+        {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-body-mass-source"
         }
       ]
+    },
+    {
+      "@id": "#size-dimorphism-index-followup-0",
+      "@type": "PropertyValue",
+      "name": "followup",
+      "value": "{\"title\": \"Exclude pairs that did not complete their clutch\", \"kind\": \"inclusion rule\", \"changes\": {\"keep_rows\": \"Clutch Completion=Yes\"}, \"why\": \"The paper excludes pairs whose second egg was never observed; the published data records this as Clutch Completion = No, and the method as drafted keeps them.\", \"quote\": \"some pairs were excluded from statistical analyses because a final egg was never observed at the nest\"}",
+      "description": "Exclude pairs that did not complete their clutch"
     },
     {
       "@id": "workflows/size_dimorphism.py",
@@ -229,6 +287,9 @@
         },
         {
           "@id": "#size-dimorphism-index-in-female"
+        },
+        {
+          "@id": "#size-dimorphism-index-in-keep"
         }
       ],
       "output": [
@@ -236,7 +297,12 @@
           "@id": "#size-dimorphism-index-out-sdi"
         }
       ],
-      "description": "Sexual size dimorphism index (SDI) per species for culmen length, culmen depth, flipper length and body mass, after Lovich & Gibbons (1992): mean of the larger sex divided by mean of the smaller sex, minus one, negative when males are larger (Table 2 of the paper)."
+      "description": "Sexual size dimorphism index (SDI) per species for culmen length, culmen depth, flipper length and body mass, after Lovich & Gibbons (1992): mean of the larger sex divided by mean of the smaller sex, minus one, negative when males are larger (Table 2 of the paper).",
+      "additionalProperty": [
+        {
+          "@id": "#size-dimorphism-index-followup-0"
+        }
+      ]
     },
     {
       "@id": "data/size-dimorphism-index/",

@@ -28,13 +28,25 @@ Description format (JSON / dict). Each method becomes one tool of the paper agen
              "description": "...", "scaling": "inverse_pixel_area"}
           ],
           "outputs": [{"id": "out-results", "name": "results", "type": "File", "format": "text/csv",
-                       "tolerances": {"count": 0.05, "mean_area": 0.10},
+                       "tolerances": {"count": {"value": 0.05, "source": "paper-stated",
+                                                "quote": "counts agreed within 5% between observers"}},
                        "abs_tolerances": {}}],   # optional: per-item absolute margins, for rounded values
           "example_data": "data/images/",      # optional: the paper's own data
           "expected": "results/table1.csv"     # optional: the paper's reported results
         }
       ]
     }
+
+Every tolerance says where it came from (see recrate.model): ``paper-rounding`` (half a unit of the last decimal
+printed), ``paper-stated`` (with the ``quote``), ``method-noise`` (with ``runs``) or ``person`` (with ``by`` and
+``reason``). ``recrate check-description`` rejects a tolerance with no source.
+
+A method may also list ``followups``: checks to run when its numbers differ, each a recorded run of its own
+(see recrate.followup)::
+
+    "followups": [{"title": "Exclude incomplete clutches", "kind": "inclusion rule",
+                   "changes": {"keep_rows": "Clutch Completion=Yes"},
+                   "why": "...", "quote": "the paper's sentence that suggests it"}]
 
 A description with a single top-level ``workflow`` / ``inputs`` / ``outputs``
 (no ``methods`` list) is accepted as one method.
@@ -63,6 +75,17 @@ def _pv(pid: str, name: str, value: Any, unit: str | None = None) -> dict[str, A
     if unit:
         e["unitText"] = unit
     return e
+
+
+def tolerance_entry(tol: Any) -> dict[str, Any]:
+    """A tolerance as ``{"value", "source", "evidence"}``, from a number (no source) or a dict with ``source`` and
+    its evidence: ``quote`` (paper-stated), ``by`` and ``reason`` (person), ``runs`` (method-noise), ``note``."""
+    if not isinstance(tol, dict):
+        return {"value": float(tol), "source": None, "evidence": ""}
+    bits = [f'"{tol["quote"]}"' if tol.get("quote") else "",
+            f"set by {tol['by']}" if tol.get("by") else "", tol.get("reason", ""),
+            f"spread over {tol['runs']} runs" if tol.get("runs") else "", tol.get("note", "")]
+    return {"value": float(tol["value"]), "source": tol.get("source"), "evidence": "; ".join(b for b in bits if b)}
 
 
 def normalise(desc: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
@@ -145,14 +168,16 @@ def build_crate(desc: dict[str, Any], out_dir: str | Path, base_dir: str | Path 
             if p.get("scaling"):
                 props.append({"@id": f"{pid}-scaling"})
                 graph.append(_pv(f"{pid}-scaling", "scaling", p["scaling"]))
-            for col, tol in (p.get("tolerances") or {}).items():
-                ppid = f"{pid}-tolerance-{_slug(col)}"
-                props.append({"@id": ppid})
-                graph.append(_pv(ppid, f"tolerance:{col}", tol))
-            for col, tol in (p.get("abs_tolerances") or {}).items():
-                ppid = f"{pid}-tolerance-abs-{_slug(col)}"
-                props.append({"@id": ppid})
-                graph.append(_pv(ppid, f"tolerance_abs:{col}", tol))
+            for key, kind in (("tolerances", "tolerance"), ("abs_tolerances", "tolerance_abs")):
+                for col, tol in (p.get(key) or {}).items():
+                    t = tolerance_entry(tol)
+                    ppid = f"{pid}-{_slug(kind)}-{_slug(col)}"
+                    props.append({"@id": ppid})
+                    graph.append(_pv(ppid, f"{kind}:{col}", t["value"]))
+                    if t.get("source"):
+                        props.append({"@id": f"{ppid}-source"})
+                        graph.append({**_pv(f"{ppid}-source", f"tolerance_source:{col}", t["source"]),
+                                      **({"description": t["evidence"]} if t["evidence"] else {})})
             if props:
                 e["additionalProperty"] = props
             graph.append(e)
@@ -174,6 +199,14 @@ def build_crate(desc: dict[str, Any], out_dir: str | Path, base_dir: str | Path 
         }
         if m.get("description"):
             wf_entity["description"] = m["description"]
+        followups = []
+        for i, f in enumerate(m.get("followups") or []):  # proposed checks for when the numbers differ
+            fid = f"#{prefix}followup-{i}"
+            graph.append({"@id": fid, "@type": "PropertyValue", "name": "followup",
+                          "value": json.dumps(f, ensure_ascii=False), "description": f.get("title", "")})
+            followups.append({"@id": fid})
+        if followups:
+            wf_entity["additionalProperty"] = followups
         graph.append(wf_entity)
 
         if m.get("example_data"):

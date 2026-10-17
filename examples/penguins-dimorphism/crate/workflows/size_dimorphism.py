@@ -7,7 +7,9 @@ a known sex. The authors used R and published no code; this re-implements the in
 ReCRATE's script contract:
     python size_dimorphism.py --input_dir DIR --output_dir DIR [--group_column Species] [--sex_column Sex]
            [--male_label MALE] [--female_label FEMALE] [--measure_columns "Culmen Length (mm),..."]
-Reads every .csv in input_dir; writes output_dir/results.csv with one row per group.
+           [--keep_rows "Column=Value;..."]
+Reads every .csv in input_dir; keeps the rows matching every --keep_rows condition (default: all rows);
+writes output_dir/results.csv with one row per group, and the number of males and females used.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ def main() -> None:
     ap.add_argument("--male_label", default="MALE")
     ap.add_argument("--female_label", default="FEMALE")
     ap.add_argument("--measure_columns", default=DEFAULT_MEASURES)
+    ap.add_argument("--keep_rows", default="", help="Inclusion rule: 'Column=Value' conditions separated by ';'")
     a = ap.parse_args()
 
     measures = [c.strip() for c in a.measure_columns.split(",") if c.strip()]
@@ -46,6 +49,9 @@ def main() -> None:
     for f in sorted(Path(a.input_dir).glob("*.csv")):
         with f.open(newline="", encoding="utf-8") as fh:
             rows += list(csv.DictReader(fh))
+    for cond in filter(None, (c.strip() for c in a.keep_rows.split(";"))):
+        col, _, value = cond.partition("=")
+        rows = [r for r in rows if r.get(col.strip()) == value.strip()]
 
     def values(group: str, sex: str, col: str) -> list[float]:
         out = []

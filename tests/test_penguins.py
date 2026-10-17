@@ -21,7 +21,7 @@ def penguins(tmp_path):
 
 def test_validation_says_exactly_what_differs(penguins):
     m = penguins.methods[0]
-    assert m.status == "differs" and "9 of 12 values within tolerance" in m.detail
+    assert m.status == "differs" and "Found 3 of 12 published values" in m.detail and "other 9 reproduce" in m.detail
     assert m.detail.count("Chinstrap") == 3 and "Gentoo" not in m.detail.split("differs:")[-1]
     assert penguins.card()["published"] == "2014-03-05"
 

@@ -27,7 +27,10 @@ An input crate is a standard [Workflow RO-Crate 1.0](https://about.workflowhub.e
 | `channels` | File input | integer | Expected number of channels |
 | `dimensions` | File input | `2D` / `3D` | Expected dimensionality |
 | `scaling` | value input | `inverse_pixel_area` / `inverse_pixel_size` | How the parameter changes with pixel size |
-| `tolerance:<column>` | output | fraction, e.g. `0.05` | Allowed relative difference for that measurement |
+| `tolerance:<column>` | output | fraction, e.g. `0.05` | Allowed relative difference for that measurement (on the mean) |
+| `tolerance_abs:<column>` | output | number, e.g. `0.005` | Allowed absolute difference, for every item |
+| `tolerance_source:<column>` | output | `paper-rounding` / `paper-stated` / `method-noise` / `person` | Where the tolerance comes from; `description` holds the evidence (quote, person and reason, number of reruns). No source, no verdict |
+| `followup` | workflow | JSON: `title`, `kind`, `changes`, `why`, `quote` | A check to run when the numbers differ (see `recrate/followup.py`) |
 
 A better long-term option for imaging is to take expected calibration directly from the OME metadata of the paper's example images, so it comes from the OME standard rather than a new field.
 

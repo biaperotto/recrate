@@ -7,6 +7,8 @@
   and a numeric default appears in that quote or elsewhere in the paper;
 * every number in the published results file appears in the paper's text (rounded values as printed; a
   minus sign may be printed as − or -), unless the method says where else they come from (``expected_source``);
+* every tolerance says where it comes from (model.TOLERANCE_SOURCES), with its evidence: a quote found in the
+  paper, a person and a reason, the number of reruns; one derived from rounding matches the decimals printed;
 * the description builds into a crate ReCRATE can load.
 
 A drafted description is only as good as what the paper states; this makes "what the paper states" checkable.
@@ -93,13 +95,67 @@ def _row_together(text: str, values: list[str], window: int = 1500) -> bool:
     return False
 
 
+def _printed_decimals(expected: Path | None, column: str) -> int | None:
+    if expected is None or not expected.exists():
+        return None
+    with expected.open(newline="", encoding="utf-8") as fh:
+        vals = [r.get(column, "") or "" for r in csv.DictReader(fh)]
+    decs = [len(v.split(".")[1]) if "." in v else 0 for v in vals if re.fullmatch(r"\s*[-−+]?\d+(\.\d+)?\s*", v)]
+    return max(decs) if decs else None
+
+
+def _check_tolerances(m: dict[str, Any], expected: Path | None, paper: str, rep: Report) -> None:
+    """No source, no verdict: every tolerance names where it comes from, with evidence a person can check."""
+    from .model import TOLERANCE_SOURCES
+
+    name = m.get("name", "?")
+    for o in m.get("outputs", []):
+        for key in ("tolerances", "abs_tolerances"):
+            for col, tol in (o.get(key) or {}).items():
+                rep.checked["tolerances"] += 1
+                t = tol if isinstance(tol, dict) else {"value": tol}
+                src, what = t.get("source"), f"tolerance for {col}"
+                if not src:
+                    rep.findings.append(Finding("error", name, f"{what} has no source: give paper-rounding, "
+                                                               "paper-stated (with quote), method-noise (with runs) "
+                                                               "or person (with by and reason)"))
+                elif src not in TOLERANCE_SOURCES:
+                    rep.findings.append(Finding("error", name, f"{what}: unknown source {src!r} "
+                                                               f"(use one of {', '.join(TOLERANCE_SOURCES)})"))
+                elif src == "paper-stated" and not t.get("quote"):
+                    rep.findings.append(Finding("error", name, f"{what} is paper-stated but quotes nothing"))
+                elif src == "paper-stated" and paper and _norm(t["quote"]) not in paper:
+                    rep.findings.append(Finding("error", name, f"{what}: quote not found in the paper: "
+                                                               f"\"{t['quote'][:120]}\""))
+                elif src == "person" and not (t.get("by") and t.get("reason")):
+                    rep.findings.append(Finding("error", name, f"{what} is set by a person: give their name (by) "
+                                                               "and a reason"))
+                elif src == "method-noise" and not t.get("runs"):
+                    rep.findings.append(Finding("error", name, f"{what} is method noise: give the number of runs"))
+                elif src == "paper-rounding":
+                    dec = _printed_decimals(expected, col)
+                    if key == "tolerances":
+                        rep.findings.append(Finding("warning", name, f"{what}: rounding gives an absolute margin; "
+                                                                     "use abs_tolerances"))
+                    elif dec is not None:
+                        half = 0.5 * 10 ** -dec
+                        if float(t["value"]) < half - 1e-12:
+                            rep.findings.append(Finding("error", name, f"{what} (±{t['value']:g}) is narrower than "
+                                                                       f"the paper's rounding (±{half:g})"))
+                        elif float(t["value"]) > half + 1e-12:
+                            rep.findings.append(Finding("warning", name, f"{what} (±{t['value']:g}) is wider than "
+                                                                         f"the paper's rounding alone (±{half:g})"))
+
+
 def check_description(agent_dir: Path, description: Path) -> Report:
     agent_dir, description = Path(agent_dir), Path(description)
     desc = json.loads(description.read_text(encoding="utf-8"))
     base = description.parent
     paper_md = agent_dir / "paper" / "paper.md"
-    paper = _norm(paper_md.read_text(encoding="utf-8")) if paper_md.exists() else ""
-    rep = Report(checked={"quotes": 0, "published_values": 0, "files": 0})
+    from .reading import tables_text
+
+    paper = _norm(paper_md.read_text(encoding="utf-8") + "\n" + tables_text(agent_dir / "paper")) if paper_md.exists() else ""
+    rep = Report(checked={"quotes": 0, "published_values": 0, "files": 0, "tolerances": 0})
 
     def path(p: str) -> Path:
         q = Path(p)
@@ -134,6 +190,7 @@ def check_description(agent_dir: Path, description: Path) -> Report:
             elif p.get("type", "Text").lower() not in {"file", "dataset", "directory"} and paper:
                 rep.findings.append(Finding("warning", name, f"parameter {p['name']}: no quote from the paper"))
         exp = m.get("expected")
+        _check_tolerances(m, path(exp) if exp else None, paper, rep)
         if exp and path(exp).exists() and paper and not m.get("expected_source"):
             with path(exp).open(newline="", encoding="utf-8") as fh:
                 rows = list(csv.DictReader(fh))

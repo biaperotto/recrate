@@ -36,7 +36,8 @@ class GenericProfile(DomainProfile):
     def inspect(self, data_path: Path) -> dict[str, Any]:
         return {"files": [{"file": f.name, "bytes": f.stat().st_size} for f in _files(Path(data_path))]}
 
-    def check(self, spec: MethodSpec, data_path: Path, params: dict[str, Any] | None = None) -> CheckReport:
+    def check(self, spec: MethodSpec, data_path: Path, params: dict[str, Any] | None = None,
+              pixel_ratio: float | None = None) -> CheckReport:
         data_path = Path(data_path)
         report = CheckReport(profile=self.name, data_path=data_path)
         if not data_path.exists():

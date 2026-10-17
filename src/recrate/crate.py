@@ -36,6 +36,7 @@ class Prop:
     name: str
     value: Any
     unit: str | None = None
+    description: str = ""
 
 
 @dataclass
@@ -80,6 +81,7 @@ class MethodSpec:
     method_name: str = ""
     method_description: str = ""
     draft: bool = False
+    followups: list[dict[str, Any]] = field(default_factory=list)  # declared follow-up checks (recrate.followup)
     raw: dict[str, Any] = field(default_factory=dict)
 
     # ---- convenience -------------------------------------------------
@@ -114,6 +116,20 @@ class MethodSpec:
                     tol[name.split(":", 1)[1]] = float(prop.value)
         return tol
 
+    def tolerance_specs(self) -> list["Tolerance"]:
+        """Every tolerance with its source (``tolerance_source:<column>``): see model.TOLERANCE_SOURCES."""
+        from .model import Tolerance
+
+        out = []
+        for o in self.outputs:
+            for name, prop in o.properties.items():
+                kind, _, col = name.partition(":")
+                if kind in {"tolerance", "tolerance_abs"} and col:
+                    src = o.properties.get(f"tolerance_source:{col}")
+                    out.append(Tolerance(col, float(prop.value), kind == "tolerance_abs",
+                                         str(src.value) if src else None, src.description if src else ""))
+        return out
+
     def summary(self) -> dict[str, Any]:
         """A plain dict for display (the 'method card')."""
         d = self.data_input
@@ -140,7 +156,8 @@ class MethodSpec:
                          **({"scaling": p.prop("scaling")} if p.prop("scaling") else {})}
                 for p in self.value_inputs
             },
-            "tolerances": self.tolerances(),
+            "tolerances": {t.column: {"value": t.value, "absolute": t.absolute, "source": t.source,
+                                      "evidence": t.evidence} for t in self.tolerance_specs()},
             "has_example_data": bool(self.example_data and self.example_data.exists()),
             "has_reported_results": bool(self.expected_results and self.expected_results.exists()),
         }
@@ -186,7 +203,8 @@ def _props(entity: dict[str, Any], graph: dict[str, dict[str, Any]]) -> dict[str
         pv = graph.get(_ref(r) or "", r if isinstance(r, dict) else {})
         name = pv.get("name")
         if name:
-            out[name] = Prop(name=name, value=pv.get("value"), unit=pv.get("unitText") or pv.get("unitCode"))
+            out[name] = Prop(name=name, value=pv.get("value"), unit=pv.get("unitText") or pv.get("unitCode"),
+                             description=pv.get("description", ""))
     return out
 
 
@@ -324,5 +342,7 @@ def load_crate(path: str | Path, method: str | None = None) -> MethodSpec:
         method_name=wf.get("name", Path(wf_id).stem),
         method_description=wf.get("description", ""),
         draft=str(root_props["draft"].value).lower() == "true" if "draft" in root_props else False,
+        followups=[json.loads(graph[_ref(r)]["value"]) for r in _as_list(wf.get("additionalProperty"))
+                   if graph.get(_ref(r) or "", {}).get("name") == "followup"],
         raw=raw,
     )

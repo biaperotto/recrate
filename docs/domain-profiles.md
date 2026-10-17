@@ -31,7 +31,15 @@ class GenomicsProfile(DomainProfile):
         return report
 ```
 
+Two optional methods complete a profile:
+
+* `diagnose_inputs(spec)`: gaps in what the crate declares, before any data is seen (shown as `ready-with-gaps`);
+* `check_results(spec, results_csv, report, reference_csv, pixel_ratio)`: after a run on new data, whether the
+  results look like the paper's (flagged, never blocked). The base class already compares the mean of every
+  column the paper reports and warns when one is ten times larger or smaller.
+
 Register it in `recrate/profiles/__init__.py` and declare it in the crate with the root property `domain profile`.
+Nothing in the app, the CLI or the MCP server changes: they show whatever checks the profile returns.
 
 ## Bioimaging profile details
 
@@ -41,5 +49,7 @@ Register it in `recrate/profiles/__init__.py` and declare it in the crate with t
 * Mixed pixel sizes in one folder fail: split them into consistent sets.
 * Missing calibration fails: size-based results cannot be compared.
 * Parameters with `scaling = inverse_pixel_area` are multiplied by (paper pixel size / your pixel size)²; `inverse_pixel_size` by the plain ratio.
+* Bit depth and intensity range are compared with the paper's own example images (a different bit depth, or a range more than 4× apart, warns).
+* After a run: objects per area and mean object size are compared with a reproduction on the paper's data, in the paper's pixels (converted with the calibrations, or the pixel ratio you state). Density more than 3× apart, or object size more than 2× apart, warns.
 
 Next steps: read OME-Zarr (local and remote) and OMERO images in place; compare Fiji and plugin versions with those declared in the crate; compare masks against the paper's (Dice/IoU) when the crate includes them.

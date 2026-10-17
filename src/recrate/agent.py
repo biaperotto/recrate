@@ -13,12 +13,12 @@ Inputs, in order of preference:
 * **paper with no runnable code**: the agent still answers questions from the
   paper (Paper2Agent's resource layer); methods can be added later.
 
-Then every method with example data and reported results is **validated**: it
-is run on the paper's data and compared with what the paper reports. The result
-is a paper agent folder:
+Then every method with example data and reported results is **reproduced**: it
+is run on the paper's data and compared with what the paper reports, and climbs the verdict ladder
+(materials found, runs, same numbers, same conclusion; see model.py). The result is a paper agent folder:
 
     paper_agents/my_paper/
-      agent.json      manifest: paper, crate source, methods and their validation
+      agent.json      manifest: paper, crate source, methods with their readiness and verdict ladder
       paper/          paper.md (text) and paper.json (title, DOI, code links)
       crate/          the input RO-Crate (supplied or drafted)
       code/           cloned repository, if any
@@ -59,9 +59,13 @@ class MethodStatus:
     id: str
     description: str
     language: str
-    status: str  # validated | differs | not validated | failed
+    status: str  # validated | differs | not validated | failed: derived from the ladder, kept for compatibility
     detail: str = ""
     run_crate: str | None = None
+    readiness: str = ""  # ready | ready-with-gaps | blocked (can it run here? not whether it reproduced)
+    gaps: list[str] = field(default_factory=list)  # what the crate leaves open, or why it is blocked
+    ladder: dict[str, dict[str, str]] = field(default_factory=dict)  # see model.py
+    review: dict[str, Any] | None = None  # a person's review of the conclusion (the ladder's last step)
 
 
 @dataclass
@@ -82,6 +86,16 @@ class PaperAgent:
             return self.crate_override
         d = self.path / "crate"
         return d if (d / "ro-crate-metadata.json").exists() else None
+
+    def tables(self) -> list[dict]:
+        from .reading import tables
+
+        return tables(self.path / "paper")
+
+    def figures(self) -> list[dict]:
+        from .reading import figures
+
+        return figures(self.path / "paper")
 
     @property
     def has_methods(self) -> bool:
@@ -107,8 +121,13 @@ class PaperAgent:
         return search(self.paper.text, query, k) if self.paper else []
 
     def card(self) -> dict[str, Any]:
+        from .model import verdict_sentence
+
         return {**{k: self.manifest.get(k) for k in ("name", "title", "doi", "crate_source", "code", "draft",
                                                       "published")},
+                "verdict": (verdict_sentence({m.name: m.ladder for m in self.methods if m.ladder})
+                            if any(m.ladder for m in self.methods) or not self.methods
+                            else "Not checked yet: nothing reproduced so far."),
                 "methods": [m.__dict__ for m in self.methods],
                 "code_and_data_links": self.paper.repos if self.paper else []}
 
@@ -145,19 +164,45 @@ def runs_own_code(language: str | None) -> bool:
     return "galaxy" not in (language or "").lower()
 
 
+def diagnose(spec: MethodSpec) -> tuple[str, list[str]]:
+    """Readiness before anything runs: ``blocked`` (with why), ``ready-with-gaps`` (with the gaps) or ``ready``."""
+    from .profiles import get_profile
+    from .runners import readiness
+
+    blocked = readiness(spec.workflow_language, spec.workflow_path)
+    if blocked:
+        return "blocked", [blocked]
+    gaps = []
+    if not (spec.example_data and spec.example_data.exists()):
+        gaps.append("No published data in the crate: the method can be reused but not reproduced.")
+    if not (spec.expected_results and spec.expected_results.exists()):
+        gaps.append("No published results in the crate to compare with.")
+    unsourced = [t.column for t in spec.tolerance_specs() if not t.source]
+    if unsourced:
+        gaps.append(f"Tolerance with no stated source: {', '.join(unsourced)} (no verdict on those numbers).")
+    gaps += get_profile(spec.profile).diagnose_inputs(spec)
+    return ("ready-with-gaps" if gaps else "ready"), gaps
+
+
 def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who: str = "ReCRATE validation",
                      validate: str = "all") -> list[MethodStatus]:
-    """Reproduce every method that has example data and reported results.
+    """Reproduce every method that has example data and reported results, and climb its verdict ladder.
 
     ``validate``: ``all``; ``safe`` (only methods that don't execute the workflow's own code); ``none``.
+    Methods run independently: one failing doesn't stop the others.
     """
+    from .model import build_ladder, derived_status
     from .pipeline import reproduce  # local import: pipeline imports heavy deps
 
     out = []
     for m in list_methods(crate_dir):
         spec = load_crate(crate_dir, m["id"])
         st = MethodStatus(m["name"], m["id"], m["description"], m["language"], "not validated")
-        if not (spec.example_data and spec.example_data.exists()):
+        st.readiness, st.gaps = diagnose(spec)
+        comparison, error, blocked = None, None, None
+        if st.readiness == "blocked":
+            blocked = st.detail = st.gaps[0]
+        elif not (spec.example_data and spec.example_data.exists()):
             st.detail = "No example data in the crate."
         elif not (spec.expected_results and spec.expected_results.exists()):
             st.detail = "No reported results in the crate to compare with."
@@ -167,25 +212,75 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
         else:
             try:
                 r = reproduce(spec, runs_dir, runner=runner, agent=who)
-                st.status = "validated" if r.comparison and r.comparison.reproduced else "differs"
+                comparison = r.comparison
                 st.detail = r.comparison.headline() if r.comparison else ""
                 st.run_crate = str(r.run_dir)
             except Exception as e:  # noqa: BLE001 - report any failure as the method's status
-                st.status, st.detail = "failed", f"{type(e).__name__}: {e}"
+                error = st.detail = f"{type(e).__name__}: {e}"
+        st.ladder = build_ladder(spec, comparison, error=error, blocked=blocked, ran=st.run_crate is not None)
+        st.status = derived_status(st.ladder)
         out.append(st)
     return out
+
+
+def record_reproduction(agent_dir: str | Path, method: str, outcome) -> MethodStatus | None:
+    """Make a new reproduction the method's current one in agent.json (its ladder, status and run crate). Earlier
+    runs stay in runs/: the record is append-only. A bare crate folder (no agent.json) is left alone."""
+    from .model import build_ladder, derived_status
+
+    agent_dir = Path(agent_dir)
+    if not (agent_dir / MANIFEST).exists():
+        return None
+    manifest = json.loads((agent_dir / MANIFEST).read_text(encoding="utf-8"))
+    m = next((x for x in manifest.get("methods", []) if method in (x["id"], x["name"])), None)
+    if m is None:
+        return None
+    spec = load_crate(agent_dir / "crate", m["id"])
+    m["ladder"] = outcome.ladder or build_ladder(spec, outcome.comparison, ran=True)
+    m["status"] = derived_status(m["ladder"])
+    m["detail"] = outcome.comparison.headline() if outcome.comparison else ""
+    m["run_crate"], m["review"] = str(outcome.run_dir), None
+    (agent_dir / MANIFEST).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    return MethodStatus(**m)
+
+
+def review_conclusion(agent_dir: str | Path, method: str, who: str, agrees: str, note: str = "") -> MethodStatus:
+    """A person's answer to the ladder's last step for one method: does the reproduction support the paper's
+    conclusion? (``agrees``: yes | partly | no). Stored in agent.json and in the run crate of the reproduction."""
+    from .model import build_ladder, derived_status
+    from .runcrate import review_conclusion as record
+
+    agent_dir = Path(agent_dir)
+    manifest = json.loads((agent_dir / MANIFEST).read_text(encoding="utf-8"))
+    m = next((x for x in manifest.get("methods", []) if method in (x["id"], x["name"])), None)
+    if m is None:
+        raise CrateError(f"No method {method!r} in this agent.")
+    if not m.get("run_crate"):
+        raise CrateError(f"{m['name']} has no reproduction to review yet: reproduce it first.")
+    record(Path(m["run_crate"]), who, agrees, note)
+    m["review"] = {"by": who, "agrees": agrees, "note": note,
+                   "when": datetime.now(timezone.utc).replace(microsecond=0).isoformat(), "run": m["run_crate"]}
+    ladder = m.get("ladder") or build_ladder(load_crate(agent_dir / "crate", m["id"]))
+    ladder["conclusion"] = build_ladder(load_crate(agent_dir / "crate", m["id"]), review=m["review"])["conclusion"]
+    m["ladder"], m["status"] = ladder, derived_status(ladder)
+    (agent_dir / MANIFEST).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    return MethodStatus(**m)
 
 
 def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path | None = None,
              repo: str | None = None, fetch_code: bool = False, draft: str = "none",
              runner: str = "auto", strict: bool = False, validate: str = "all",
-             online: bool = True) -> PaperAgent:
+             online: bool = True, search_crate: bool = True, paper_doi: str | None = None) -> PaperAgent:
     """Build a paper agent folder. See the module docstring."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     online = online and not os.environ.get("RECRATE_OFFLINE")  # registries and DOI metadata need the network
     manifest: dict[str, Any] = {"recrate_version": __version__,
                                 "created": datetime.now(timezone.utc).replace(microsecond=0).isoformat()}
+
+    # A paper without a crate: first look for one already published (WorkflowHub, Zenodo, DataCite, its code)
+    if paper and not crate and online and search_crate:
+        crate = _find_published_crate(Path(paper), out, manifest, paper_doi, repo)
 
     # A Galaxy Workflow RO-Crate (e.g. from WorkflowHub): read its method from the workflow and its tests
     galaxy_src = None
@@ -197,11 +292,12 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
             if not paper and (galaxy_src / "README.md").exists():
                 paper = galaxy_src / "README.md"  # no article: answer from the workflow's own documentation
 
-    # 1. The paper
+    # 1. The paper, as an agent can read it: text by section, tables, figures (see reading.py)
     p: Paper | None = None
     if paper:
         p = read_paper(paper)
         save_paper(p, out / "paper")
+        p = _reading_package(p, Path(paper), out / "paper", manifest, paper_doi, online)
 
     # 2. The code
     code_dir = None
@@ -222,13 +318,16 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
         shutil.copytree(galaxy_src, out / "source-crate")  # the original, unchanged
         import_galaxy_crate(galaxy_src, crate_out)
         manifest["crate_source"] = "derived from a Galaxy Workflow RO-Crate"
+        if manifest.get("crate_found"):
+            manifest["crate_source"] = f"found on {manifest['crate_found']['where']}, derived from its Galaxy workflow"
     elif crate:
         src = resolve_crate_dir(crate)
         if src.resolve() != crate_out.resolve():
             if crate_out.exists():
                 shutil.rmtree(crate_out)
             shutil.copytree(src, crate_out)
-        manifest["crate_source"] = "supplied"
+        manifest["crate_source"] = (f"found on {manifest['crate_found']['where']}" if manifest.get("crate_found")
+                                    else "supplied")
     elif draft == "claude":
         if p is None:
             raise ValueError("Drafting a crate needs the paper (--paper).")
@@ -295,6 +394,84 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     manifest["methods"] = [m.__dict__ for m in methods]
     (out / MANIFEST).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return PaperAgent.load(out)
+
+
+def _reading_package(p: Paper, source: Path, pdir: Path, manifest: dict[str, Any], paper_doi: str | None,
+                     online: bool) -> Paper:
+    """Prefer a structured reading package (Europe PMC) to PDF text; else keep the PDF's figures."""
+    from .reading import copy_package, figures_from_pdf, from_europepmc
+
+    if source.name == "paper.md" and copy_package(source.parent, pdir):  # fetched as a package already
+        manifest["paper_text"] = "reading package (Europe PMC)"
+        return p
+    doi = own_doi(p, paper_doi)
+    if online and doi and not doi.lower().startswith("10.48550/"):
+        from .sources import get_bytes, get_json
+
+        tmp = pdir.parent / ".reading-package"
+        try:
+            pkg = from_europepmc(doi, tmp, get_json, get_bytes)
+        except Exception:  # noqa: BLE001 - not available: keep the PDF text
+            pkg = None
+        if pkg:
+            shutil.copy2(pkg, pdir / "paper.md")
+            copy_package(tmp, pdir)
+            shutil.rmtree(tmp, ignore_errors=True)
+            manifest["paper_text"] = "reading package (Europe PMC structured full text)"
+            new = read_paper(pdir / "paper.md")
+            return Paper(title=p.title, text=new.text, source=p.source, dois=list(dict.fromkeys(p.dois + new.dois)),
+                         repos=list(dict.fromkeys(p.repos + new.repos)))
+        shutil.rmtree(tmp, ignore_errors=True)
+    if source.suffix.lower() == ".pdf":
+        n = len(figures_from_pdf(source, pdir / "figures"))
+        manifest["paper_text"] = f"PDF text, with {n} embedded image(s) kept" if n else "PDF text"
+    return p
+
+
+def own_doi(p: Paper, given: str | None = None) -> str | None:
+    """The paper's own DOI: as given (its DOI or arXiv link), else one printed on its first page (a DOI further
+    down is more likely a reference)."""
+    if given:
+        return given
+    m = re.search(r"arxiv[-:_ ]?\s*(\d{4}\.\d{4,5})", f"{Path(p.source).name} {p.text[:4000]}", re.I)
+    if m:
+        return f"10.48550/arXiv.{m.group(1)}"
+    head = p.text[:3000]
+    return next((d for d in p.dois if d in head), None)
+
+
+def _find_published_crate(paper: Path, out: Path, manifest: dict[str, Any], paper_doi: str | None,
+                          repo: str | None) -> Path | None:
+    """Search for an RO-Crate already published for this paper; fetch the best one. Records the search."""
+    from .crate_search import repos_in, search_crates
+    from .sources import crate_root, fetch
+
+    p = read_paper(paper)
+    doi = own_doi(p, paper_doi)
+    res = search_crates(doi, p.text, repos_in(p.text) + ([repo] if repo else []))
+    manifest["crate_search"] = {"doi": doi, "log": res.log, "summary": res.summary(),
+                                "candidates": [c.__dict__ | {"ref": c.ref.__dict__} for c in res.candidates]}
+    best = res.best
+    if best is None:
+        return None
+    dest = out / "found-crate"
+    if dest.exists():
+        shutil.rmtree(dest)
+    try:
+        if best.ref.kind == "repo":
+            _clone(best.ref.id, dest / "repo")
+            found = crate_root(dest / "repo")
+        else:
+            f = fetch(best.ref, dest)
+            found = f.path if f.kind == "crate" else None
+    except Exception as e:  # noqa: BLE001 - a crate that can't be fetched: say so, and recreate instead
+        manifest["crate_search"]["fetch_error"] = f"{best.label}: {type(e).__name__}: {e}"
+        return None
+    if found is None:
+        manifest["crate_search"]["fetch_error"] = f"{best.label} is not an RO-Crate after all"
+        return None
+    manifest["crate_found"] = {"where": best.where, "label": best.label, "url": best.url, "evidence": best.evidence}
+    return found
 
 
 def _crate_root(crate_dir: Path) -> dict[str, Any]:

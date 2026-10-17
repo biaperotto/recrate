@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import shutil
 import sys
@@ -26,7 +27,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from recrate.agent import PaperAgent, agentify, revalidate, runs_own_code
+from recrate.agent import PaperAgent, agentify, revalidate, review_conclusion, runs_own_code
 from recrate.chat import (LOCAL_URL, ChatTools, ClaudeChat, LocalChat, OpenAICompatChat, claude_available,
                           local_models)
 from recrate.crate import CrateError
@@ -56,22 +57,33 @@ EXAMPLES = {
                  "tags": ["paper + crate", "ecology", "tables"],
                  "agent": ROOT / "examples" / "penguins-dimorphism" / "paper_agent",
                  "build": {"paper": ROOT / "examples" / "penguins-dimorphism" / "paper.pdf",
-                           "crate": ROOT / "examples" / "penguins-dimorphism" / "crate"},
+                           "crate": ROOT / "examples" / "penguins-dimorphism" / "crate",
+                           "paper_doi": "10.1371/journal.pone.0090081"},
                  "data": ROOT / "examples" / "penguins-dimorphism" / "research-data"},
 }
-BADGE = {"validated": ":green-badge[reproduced]", "differs": ":orange-badge[differs]",
+BADGE = {"validated": ":green-badge[reproduced]", "differs": ":orange-badge[differences found]",
          "failed": ":red-badge[failed]", "not validated": ":gray-badge[not run yet]"}
 ICON = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
 SERIES = ["#2a78d6", "#eb6834"]  # reference categorical slots 1-2 (validated palette)
 TOOL_LABEL = {
     "about_paper": "Reading the research object", "search_paper": "Searching the paper",
+    "list_tables": "Listing the paper's tables", "get_table": "Reading a table",
+    "list_figures": "Listing the paper's figures", "show_figure": "Showing a figure",
     "describe_method": "Reading the method", "list_my_files": "Looking at your data",
     "check_my_data": "Checking your data", "reproduce": "Reproducing the published result",
     "run_on_my_data": "Running on your data", "methods_text": "Writing the methods paragraph",
     "approve_run": "Recording your review", "create_output_crate": "Creating the output RO-Crate",
     "reproducibility_record": "Reading the record", "set_pixel_size": "Setting the pixel size",
     "compare_paper_parameters": "Running with the published values unchanged",
+    "followup_checks": "Listing follow-up checks", "run_followup_check": "Running a follow-up check",
+    "make_figure": "Plotting from the run",
 }
+
+
+def chip(name: str, args: dict | None) -> str:
+    """A tool call as the chat shows it: what it does, and the call itself, e.g. reproduce(size_dimorphism_index)."""
+    arg = next((str(v) for k, v in (args or {}).items() if k in ("method", "query", "check", "table", "figure")), "")
+    return f"↳ {TOOL_LABEL.get(name, name)} · `{name}({arg})`"
 SECTIONS = {"validate": "Validate", "reuse": "Reuse", "record": "Record"}
 
 st.html("""<style>
@@ -311,13 +323,21 @@ def build(trusted: bool) -> None:
     title = (ro.get("crate") or ro.get("paper") or {}).get("label", "research object")
     out = ROOT / "agents" / slug(title)
     label = ("Reading the RO-Crate, then reproducing each method…" if ro.get("crate") else
-             "Recreating the RO-Crate: publication date, the software available then, code and cited data…")
+             "Looking for a published RO-Crate (WorkflowHub, Zenodo, DataCite, the paper's code); if there is none, "
+             "recreating it as of publication…")
     with st.spinner(label):
         agentify(out, paper=(ro.get("paper") or {}).get("path"), crate=(ro.get("crate") or {}).get("path"),
-                 repo=ro.get("repo"), validate="all" if trusted else "safe")
+                 repo=ro.get("repo"), validate="all" if trusted else "safe", paper_doi=paper_doi(ro.get("paper")))
     load_agent(out, Path(ro["data"]["path"]) if ro.get("data") else None)
     a = PaperAgent.load(out)
     env = a.environment
+    search = a.manifest.get("crate_search")
+    found = a.manifest.get("crate_found")
+    search_line = ""
+    if search:
+        search_line = (f"\n\n🔎 **Found its RO-Crate** on {found['where']}: [{found['label']}]({found['url']}), "
+                       f"{found['evidence']}." if found else
+                       f"\n\n🔎 {search['summary']} So I recreated it as of publication.")
     lines = [f"- **{m.name}**: {m.status}" + (f". {m.detail}" if m.detail else "") for m in a.methods]
     env_line = ""
     if env:
@@ -326,22 +346,38 @@ def build(trusted: bool) -> None:
                     "software versions determined" + (": " + ", ".join(f"{s.name} {s.version}" for s in known[:5])
                                                       if known else "") + ".")
     ss._goto = "validate"
-    say(f"{'Ready' if a.has_methods else 'Recreated the RO-Crate'}: **{a.card()['title']}**." + env_line
+    say(f"{'Ready' if a.has_methods else 'Recreated the RO-Crate'}: **{a.card()['title']}**." + search_line + env_line
         + ("\n\n" + "\n".join(lines) if lines else "\n\nNo runnable method yet: see **Validate** for what's needed.")
         + "\n\nAsk me anything about it.")
 
 
+def paper_doi(paper: dict | None) -> str | None:
+    """The paper's own DOI, from how it was given (a DOI or an arXiv link); None for an upload."""
+    url = (paper or {}).get("url") or ""
+    for r in identify(url):
+        if r.kind == "doi":
+            return r.id
+        if r.kind == "arxiv":
+            return f"10.48550/arXiv.{r.id}"
+    return None
+
+
 def open_example(key: str) -> None:
     ex = EXAMPLES[key]
-    if not (ex["agent"] / "environment.json").exists():  # missing, or built by an older ReCRATE
+    built = (ex["agent"] / "environment.json").exists()
+    if built and ex["build"].get("paper_doi") and not (ex["agent"] / "paper" / "index.md").exists() \
+            and not os.environ.get("RECRATE_OFFLINE"):
+        built = False  # built before reading packages: rebuild to get the paper's tables and figures
+    if built and any(not m.ladder for m in PaperAgent.load(ex["agent"]).methods):
+        built = False  # built before the verdict ladder
+    if not built:  # missing, or built by an older ReCRATE
         with st.spinner("Building the example: reading the crate and reproducing each method…"):
             agentify(ex["agent"], **ex["build"])
     load_agent(ex["agent"], ex["data"])
     ss.ro = {"example": key}
     ss._goto = "validate"
     a = PaperAgent.load(ex["agent"])
-    n_ok = sum(1 for m in a.methods if m.status == "validated")
-    say(f"Opened **{a.card()['title']}**. {n_ok} of {len(a.methods)} method(s) reproduce the published result. "
+    say(f"Opened **{a.card()['title']}**. {a.card()['verdict']} "
         "Its example data is selected for **Reuse**. Ask me anything, or try *reproduce*, *check my data*, *run*.")
 
 
@@ -419,6 +455,9 @@ def render_attachment(a: dict, key: str) -> None:
         st.caption(a.get("headline") or a.get("text"))
     elif t == "error":
         st.error(a["text"])
+    elif t == "figure":
+        if Path(a["path"]).exists():
+            st.image(a["path"], caption=short(a.get("caption", ""), 300), width="stretch")
     elif t == "table":
         st.dataframe(pd.DataFrame(a["rows"]), hide_index=True, width="stretch")
 
@@ -429,7 +468,7 @@ def render_message(msg: dict, idx) -> None:
             if part["kind"] == "text":
                 st.markdown(part["text"])
             elif part["kind"] == "tool":
-                st.caption(f"↳ {TOOL_LABEL.get(part['name'], part['name'])}")
+                st.caption(chip(part["name"], part.get("args")))
             elif part["kind"] == "attachment":
                 render_attachment(part["data"], f"{idx}-{j}")
 
@@ -527,8 +566,8 @@ def chat_card() -> None:
                             reply["parts"].append({"kind": "text", "text": ev[1]})
                             st.markdown(ev[1])
                         elif ev[0] == "tool":
-                            reply["parts"].append({"kind": "tool", "name": ev[1]})
-                            st.caption(f"↳ {TOOL_LABEL.get(ev[1], ev[1])}")
+                            reply["parts"].append({"kind": "tool", "name": ev[1], "args": ev[2]})
+                            st.caption(chip(ev[1], ev[2]))
                         elif ev[0] == "result":
                             after_tool(ev[1], ev[2])
                             for a in ev[2].attachments:
@@ -596,6 +635,40 @@ def overlay_source(overlay: Path, run_dir: Path, data_dir: Path) -> Path | None:
             if (base / f"{stem}{suf}").exists():
                 return base / f"{stem}{suf}"
     return None
+
+
+def source_view(agent: PaperAgent) -> None:
+    """The paper as ReCRATE read it: its text, and (from a reading package) its tables, figures and supplement."""
+    tables, figures = agent.tables(), agent.figures()
+    supp = sorted(p for p in (agent.path / "paper" / "supplement").glob("*") if p.is_file()) \
+        if (agent.path / "paper" / "supplement").is_dir() else []
+    if not (tables or figures or supp):
+        source_text(agent)
+        return
+    names = ["Text"] + [f"{n} ({len(x)})" for n, x in [("Tables", tables), ("Figures", figures), ("Supplement", supp)] if x]
+    tabs = dict(zip([n.split(" ")[0] for n in names], st.tabs(names)))
+    with tabs["Text"]:
+        source_text(agent)
+    if tables:
+        with tabs["Tables"]:
+            pick = st.selectbox("Table", [t["label"] for t in tables], key="src-table", label_visibility="collapsed")
+            t = next(x for x in tables if x["label"] == pick)
+            if t["caption"]:
+                st.caption(t["caption"])
+            st.dataframe(pd.read_csv(agent.path / "paper" / t["file"], dtype=str, keep_default_na=False),
+                         hide_index=True, width="stretch")
+    if figures:
+        with tabs["Figures"]:
+            pick = st.selectbox("Figure", [f["label"] for f in figures], key="src-figure", label_visibility="collapsed")
+            f = next(x for x in figures if x["label"] == pick)
+            st.image(str(agent.path / "paper" / f["file"]), width="stretch")
+            if f["caption"]:
+                st.caption(f["caption"])
+    if supp:
+        with tabs["Supplement"]:
+            for i, p in enumerate(supp):
+                st.download_button(p.name, p.read_bytes(), file_name=p.name, key=f"supp-{i}",
+                                   icon=":material/attach_file:")
 
 
 def source_text(agent: PaperAgent) -> None:
@@ -814,26 +887,23 @@ def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> Non
     if not agent.methods:
         empty_validate(agent)
     else:
-        n_ok = sum(1 for m in agent.methods if m.status == "validated")
-        n = len(agent.methods)
-        if n_ok == n:
-            st.success(f"**{n_ok} of {n} method(s) reproduce the published result.**")
-        elif any(m.status in {"differs", "failed"} for m in agent.methods):
-            st.warning(f"**{n_ok} of {n} method(s) reproduce the published result.** See below for what differs.")
-        else:
-            st.info(f"**{n_ok} of {n} method(s) reproduced so far.** Use *Reproduce all* below.")
+        verdict_and_ladder(agent)
     for m in agent.methods:
         spec = agent.spec(m.id)
-        has_data = bool(spec.example_data and spec.example_data.exists())
-        has_results = bool(spec.expected_results and spec.expected_results.exists())
         with st.container(border=True):
-            st.markdown(f"**{m.name}** &nbsp; {BADGE.get(m.status, m.status)} &nbsp; :gray-badge[{m.language}]")
-            if m.detail:
+            st.markdown(f"**{m.name}** &nbsp; {BADGE.get(m.status, m.status)} &nbsp; :gray-badge[{m.language}]"
+                        + (f" &nbsp; :gray-badge[{m.readiness}]" if m.readiness else ""))
+            for g in m.gaps:
+                st.caption(("⛔ " if m.readiness == "blocked" else "ℹ️ ") + g)
+            if m.run_crate and Path(m.run_crate).exists():
+                results_by_value(Path(m.run_crate))
+                if m.status == "differs":
+                    followups_view(agent, m, spec)
+                conclusion_review(agent, m)
+            elif m.detail:
                 st.markdown(f"<span class='muted'>{html.escape(m.detail)}</span>", unsafe_allow_html=True)
-            st.caption(("✅ published data" if has_data else "❌ no published data") + " · " +
-                       ("✅ published results" if has_results else "❌ no published results to compare with"))
             run = latest(runs, m.name, "reproduce")
-            if run and st.toggle("Show the latest reproduction", key=f"showrep-{m.id}"):
+            if run and st.toggle("Show the latest reproduction's outputs", key=f"showrep-{m.id}"):
                 results_tab(agent, run, data_dir)
     with st.expander("Software environment" + (f" · as of {env.published}" if env and env.published else "")):
         if env and env.published:
@@ -841,7 +911,96 @@ def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> Non
         environment_table(agent)
     with st.expander("Read the source" + (" · cited passage highlighted" if ss.get("highlight") else ""),
                      expanded=bool(ss.get("highlight"))):
-        source_text(agent)
+        source_view(agent)
+
+
+LADDER_BADGE = {"passed": ":green-badge[passed]", "partial": ":orange-badge[partial]",
+                "failed": ":red-badge[failed]", "not checked": ":gray-badge[not checked]"}
+
+
+def verdict_and_ladder(agent: PaperAgent) -> None:
+    """The verdict sentence (written from the results, never by the model), then one ladder row per method."""
+    from recrate.model import STEPS
+
+    card = agent.card()
+    ladders = [m.ladder for m in agent.methods if m.ladder]
+    numbers = [lad["numbers"]["status"] for lad in ladders]
+    show = (st.success if numbers and all(n == "passed" for n in numbers) else
+            st.warning if any(n in ("partial", "failed") for n in numbers) else
+            st.error if any(lad["runs"]["status"] == "failed" for lad in ladders) else st.info)
+    show(f"**{card['verdict']}**")
+    for m in agent.methods:
+        if not m.ladder:
+            continue
+        cols = st.columns([1.1] + [1] * len(STEPS))
+        cols[0].markdown(f"**{m.name}**")
+        for c, (key, label) in zip(cols[1:], STEPS):
+            stp = m.ladder.get(key, {"status": "not checked", "reason": ""})
+            c.markdown(f"<span class='eyebrow'>{label}</span>", unsafe_allow_html=True)
+            c.markdown(LADDER_BADGE.get(stp["status"], stp["status"]), help=stp["reason"])
+    st.caption("“Ready” never means reproduced: a step advances only on evidence from a run, and only a person "
+               "marks the last one.")
+
+
+def results_by_value(run_dir: Path) -> None:
+    """Every compared value: published, reproduced, difference, tolerance and where it comes from. Mismatches first."""
+    from recrate.figures import comparison_from_run, make_run_figure
+
+    comp = comparison_from_run(run_dir)
+    if comp is None or not comp.measures:
+        return
+    rows = sorted(comp.measures, key=lambda m: m.within)
+    df = pd.DataFrame([{"value": m.measure, "published": m.reported, "reproduced": m.reproduced,
+                        "difference": f"±{m.rel_diff:.3g}" if m.absolute else f"{m.rel_diff:.1%}",
+                        "tolerance (source)": m.tolerance_label, "within": "yes" if m.within else "NO"}
+                       for m in rows])
+    st.markdown(f"**Same numbers: {comp.count} within tolerance**")
+    st.dataframe(df.style.apply(lambda r: ["background-color: #fbe9e2" if r["within"] == "NO" else ""] * len(r),
+                                axis=1), hide_index=True, width="stretch")
+    fig = run_dir / "outputs" / "figures" / "published_vs_reproduced.png"
+    if fig.exists():
+        st.image(str(fig), caption="Plotted from this run's outputs (recorded in its run crate)", width="stretch")
+    elif st.button("Plot published vs reproduced", key=f"fig-{run_dir.name}", icon=":material/scatter_plot:"):
+        make_run_figure(run_dir)
+        st.rerun()
+
+
+def followups_view(agent: PaperAgent, m, spec) -> None:
+    """When numbers differ: the follow-up checks, each its own recorded run. All of them stay visible."""
+    from recrate.followup import followups_of, propose, run_followup
+
+    st.markdown("**Where could the difference come from?** Each check is its own run, linked to this one; the "
+                "result above is never replaced.")
+    done = followups_of(agent.runs_dir, m.run_crate)
+    for d in done:
+        st.caption(f"✔ {d['followup']}: {d['headline']}")
+    for f in propose(spec):
+        c1, c2 = st.columns([4, 1], vertical_alignment="center")
+        c1.markdown(f"*{f.kind}*: **{f.title}**. {f.why}" + (f' The paper: “{f.quote}”' if f.quote else ""))
+        if not f.runnable:
+            c2.caption(f"Needs {f.needs}")
+        elif c2.button("Run check", key=f"fu-{m.id}-{f.id}", width="stretch"):
+            run_with_progress(f"Running '{f.title}'", lambda f=f: run_followup(spec, f.id, agent.runs_dir,
+                                                                               who=ss.tools.who,
+                                                                               runner=runner))
+            note_for_chat(f"Ran the follow-up check '{f.title}' for {m.name}.")
+            st.rerun()
+
+
+def conclusion_review(agent: PaperAgent, m) -> None:
+    """The ladder's last step: only a named person can mark it."""
+    if m.review:
+        st.caption(f"Same conclusion: {m.ladder['conclusion']['status']} ({m.ladder['conclusion']['reason']})")
+        return
+    with st.popover("Review: same conclusion?", icon=":material/rate_review:"):
+        st.caption("Does this reproduction support the paper's conclusion? Recorded with your name in the run crate.")
+        who = st.text_input("Your name", value=ss.tools.who if ss.tools.who != "anonymous" else "", key=f"rev-who-{m.id}")
+        agrees = st.radio("Same conclusion", ["yes", "partly", "no"], horizontal=True, key=f"rev-a-{m.id}")
+        note = st.text_area("Why", key=f"rev-n-{m.id}")
+        if st.button("Record review", type="primary", disabled=not who.strip(), key=f"rev-b-{m.id}"):
+            review_conclusion(agent.path, m.id, who, agrees, note)
+            load_agent(agent.path, ss.tools.data_dir)
+            st.rerun()
 
 
 def empty_validate(agent: PaperAgent) -> None:
@@ -910,6 +1069,10 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
     if not agent.methods:
         st.info("No runnable method yet: see **Validate**.")
         return
+    unproven = [m.name for m in agent.methods if m.status != "validated"]
+    if unproven:
+        st.warning(f"**{', '.join(unproven)}** did not reproduce the paper's results (see **Validate**). You can "
+                   "still reuse it, but use its results with care.")
     st.markdown("<div class='eyebrow'>1 · Your data</div>", unsafe_allow_html=True)
     with st.container(border=True):
         mode = st.segmented_control("Data", ["Upload files", "A folder on this computer"], key="data_mode",
