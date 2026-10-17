@@ -20,9 +20,9 @@ is a paper agent folder:
     paper_agents/my_paper/
       agent.json      manifest: paper, crate source, methods and their validation
       paper/          paper.md (text) and paper.json (title, DOI, code links)
-      crate/          the input RO-Crate (supplied or drafted)
+      crate/          the RO-Crate packaging (supplied or drafted)
       code/           cloned repository, if any
-      runs/           validation runs and every later run (Workflow Run Crates)
+      recrate/        ReCRATE output: validation runs and every later run (Workflow Run Crates)
 
 ``recrate serve paper_agents/my_paper`` exposes it over MCP.
 """
@@ -95,7 +95,7 @@ class PaperAgent:
 
     @property
     def runs_dir(self) -> Path:
-        return self.path / "runs"
+        return self.path / "recrate"
 
     def spec(self, method: str | None = None) -> MethodSpec:
         if self.crate_dir is None:
@@ -173,6 +173,8 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
                 r = reproduce(spec, runs_dir, runner=runner, agent=who)
                 st.status = "validated" if r.comparison and r.comparison.reproduced else "differs"
                 st.detail = r.comparison.headline() if r.comparison else ""
+                if spec.expected_source:
+                    st.detail += f" [reported results from {spec.expected_source}; confirm before trusting]"
                 st.run_crate = str(r.run_dir)
             except Exception as e:  # noqa: BLE001 - report any failure as the method's status
                 st.status, st.detail = "failed", f"{type(e).__name__}: {e}"
@@ -330,7 +332,7 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     # 5. Validate each method against the paper's reported results
     methods: list[MethodStatus] = []
     if spec0 is not None:
-        methods = validate_methods(crate_out, out / "runs", runner=runner, validate=validate)
+        methods = validate_methods(crate_out, out / "recrate", runner=runner, validate=validate)
         if strict:
             methods = [m for m in methods if m.status == "validated"]
     manifest["methods"] = [m.__dict__ for m in methods]
@@ -382,7 +384,7 @@ def revalidate(agent_dir: str | Path, runner: str = "auto") -> PaperAgent:
     if env is not None and not (crate_dir / "environment").exists():  # drafting rewrote the crate: keep the dates
         add_environment(crate_dir, env)
     spec0 = load_crate(crate_dir)
-    manifest["methods"] = [m.__dict__ for m in validate_methods(crate_dir, agent_dir / "runs", runner=runner)]
+    manifest["methods"] = [m.__dict__ for m in validate_methods(crate_dir, agent_dir / "recrate", runner=runner)]
     manifest["crate_source"] = manifest.get("crate_source") if manifest.get("crate_source") != "none" else "drafted"
     manifest["title"] = spec0.name
     manifest["draft"] = spec0.draft

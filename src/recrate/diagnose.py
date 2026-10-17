@@ -261,6 +261,13 @@ def _method_checks(crate_dir: Path, meta: dict[str, str], profile_known: bool) -
                              f"No tolerance declared for the reported measurement(s) "
                              f"{', '.join(cols)}; the {DEFAULT_TOLERANCE:.0%} default would be used.",
                              "Add `tolerance:<column>` PropertyValues to the output parameter.", meta["name"]))
+    if has_results and spec.draft and not spec.expected_source:
+        # The reported results are the ground truth the verdict is judged against; in a draft
+        # they were extracted by an LLM, so a person needs to know where to check them.
+        f.append(Finding("method", WARNING,
+                         "Draft crate: the reported results cite no source in the paper, so a person "
+                         "cannot confirm the numbers the verdict is judged against.",
+                         "Set `expected_source` (e.g. 'Table 1, p. 4') for this method.", meta["name"]))
 
     # Profile input-property declarations (declare-only, via the profile hook).
     props_ok = True

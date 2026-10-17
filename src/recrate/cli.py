@@ -16,6 +16,7 @@ Use it:
     recrate write-methods RUN
     recrate publish agents/my_paper RUN
     recrate record  agents/my_paper
+    recrate export  agents/my_paper dist/   # package crate/ as a WorkflowHub .crate.zip
 
 TARGET can be a paper agent folder or a bare crate folder.
 """
@@ -235,6 +236,16 @@ def cmd_draft(a) -> int:
     return 0
 
 
+def cmd_export(a) -> int:
+    from .crate import resolve_crate_dir
+    from .export import export_crate_zip
+
+    crate = resolve_crate_dir(a.target)
+    out = export_crate_zip(crate, a.out)
+    print(f"Wrote WorkflowHub crate to {out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     from .runners import CHOICES
 
@@ -245,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def runner_opts(sp, who: bool = True):
         sp.add_argument("--runner", default="auto", choices=CHOICES)
-        sp.add_argument("--runs-dir", default=None, help="Default: the agent's runs/ folder")
+        sp.add_argument("--runs-dir", default=None, help="Default: the agent's recrate/ folder")
         if who:
             sp.add_argument("--who", default="anonymous", help="Name recorded as the person who ran it")
 
@@ -340,6 +351,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("target")
     s.add_argument("--runs-dir", default=None)
     s.set_defaults(func=cmd_record)
+
+    s = sub.add_parser("export", help="Package a crate as a WorkflowHub-ingestible .crate.zip")
+    s.add_argument("target", help="A paper agent folder or a bare crate folder")
+    s.add_argument("out", help="Output .crate.zip path, or a directory to write it into")
+    s.set_defaults(func=cmd_export)
 
     s = sub.add_parser("draft", help="Build an input crate from a JSON description")
     s.add_argument("description")

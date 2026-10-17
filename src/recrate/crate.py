@@ -36,6 +36,7 @@ class Prop:
     name: str
     value: Any
     unit: str | None = None
+    description: str | None = None
 
 
 @dataclass
@@ -76,6 +77,7 @@ class MethodSpec:
     outputs: list[Parameter] = field(default_factory=list)
     example_data: Path | None = None
     expected_results: Path | None = None
+    expected_source: str | None = None
     method_id: str = ""
     method_name: str = ""
     method_description: str = ""
@@ -105,6 +107,15 @@ class MethodSpec:
                     tol[name.split(":", 1)[1]] = float(prop.value)
         return tol
 
+    def tolerance_sources(self) -> dict[str, str]:
+        """Where in the paper each tolerance is stated, when the crate records it."""
+        src: dict[str, str] = {}
+        for out in self.outputs:
+            for name, prop in out.properties.items():
+                if name.startswith("tolerance:") and prop.description:
+                    src[name.split(":", 1)[1]] = prop.description
+        return src
+
     def summary(self) -> dict[str, Any]:
         """A plain dict for display (the 'method card')."""
         d = self.data_input
@@ -132,8 +143,10 @@ class MethodSpec:
                 for p in self.value_inputs
             },
             "tolerances": self.tolerances(),
+            "tolerance_sources": self.tolerance_sources(),
             "has_example_data": bool(self.example_data and self.example_data.exists()),
             "has_reported_results": bool(self.expected_results and self.expected_results.exists()),
+            "reported_results_source": self.expected_source,
         }
 
 
@@ -177,7 +190,8 @@ def _props(entity: dict[str, Any], graph: dict[str, dict[str, Any]]) -> dict[str
         pv = graph.get(_ref(r) or "", r if isinstance(r, dict) else {})
         name = pv.get("name")
         if name:
-            out[name] = Prop(name=name, value=pv.get("value"), unit=pv.get("unitText") or pv.get("unitCode"))
+            out[name] = Prop(name=name, value=pv.get("value"), unit=pv.get("unitText") or pv.get("unitCode"),
+                             description=pv.get("description"))
     return out
 
 
@@ -285,7 +299,7 @@ def load_crate(path: str | Path, method: str | None = None) -> MethodSpec:
     input_ids = {p.id for p in inputs}
     output_ids = {p.id for p in outputs}
 
-    example_data = expected = None
+    example_data = expected = expected_source = None
     for eid, e in graph.items():
         target = _ref(e.get("exampleOfWork"))
         if not target or eid.startswith("#") or "://" in eid:
@@ -294,6 +308,8 @@ def load_crate(path: str | Path, method: str | None = None) -> MethodSpec:
             example_data = root_dir / eid
         elif target in output_ids and expected is None:
             expected = root_dir / eid
+            sp = _props(e, graph).get("source")
+            expected_source = str(sp.value) if sp and sp.value is not None else None
 
     return MethodSpec(
         path=root_dir,
@@ -311,6 +327,7 @@ def load_crate(path: str | Path, method: str | None = None) -> MethodSpec:
         outputs=outputs,
         example_data=example_data,
         expected_results=expected,
+        expected_source=expected_source,
         method_id=wf_id,
         method_name=wf.get("name", Path(wf_id).stem),
         method_description=wf.get("description", ""),

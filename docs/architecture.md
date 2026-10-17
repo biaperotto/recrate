@@ -22,9 +22,9 @@ Each method is reported as **runnable** (workflow file, a runner for its languag
 agents/my_paper/
   agent.json      manifest: title, DOI, crate source (found+URL / uploaded / supplied / drafted / none), readiness, diagnosis, methods and validation
   paper/          paper.md (text), paper.json (title, DOI, code and data links)
-  crate/          input RO-Crate: one ComputationalWorkflow per method
+  crate/          the RO-Crate packaging (supplied or drafted): one ComputationalWorkflow per method
   code/           the paper's repository, if cloned
-  runs/           validation runs and every later run, as Workflow Run Crates
+  recrate/        ReCRATE output: validation runs and every later run, as Workflow Run Crates
 ```
 
 | Input | What happens |
@@ -60,7 +60,7 @@ The server's instructions tell the agent to check data before running, explain e
 
 | Thing | Where | Why |
 | --- | --- | --- |
-| The methods (recipe) | Workflow RO-Crate on WorkflowHub, with a DOI the paper cites | WorkflowHub registers workflows |
+| The methods (recipe) | Workflow RO-Crate on WorkflowHub, with a DOI the paper cites (`recrate export <agent> <out>` packages `crate/` as a `.crate.zip` WorkflowHub ingests) | WorkflowHub registers workflows |
 | Each run | Run crate with the results; deposit on Zenodo with `isBasedOn` → paper crate | Runs are data products |
 | The reproducibility record | Collected from run crates pointing at the paper's crate | Anyone can rebuild it |
 

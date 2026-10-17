@@ -28,9 +28,14 @@ Description format (JSON / dict). Each method becomes one tool of the paper agen
              "description": "...", "scaling": "inverse_pixel_area"}
           ],
           "outputs": [{"id": "out-results", "name": "results", "type": "File", "format": "text/csv",
-                       "tolerances": {"count": 0.05, "mean_area": 0.10}}],
+                       "tolerances": {"count": 0.05, "mean_area": 0.10},
+                       # optional: where in the paper each tolerance is stated
+                       "tolerance_sources": {"count": "Methods, §2.3"}}],
           "example_data": "data/images/",      # optional: the paper's own data
-          "expected": "results/table1.csv"     # optional: the paper's reported results
+          "expected": "results/table1.csv",    # optional: the paper's reported results
+          "expected_source": "Table 1 (p. 4)"  # optional but strongly encouraged for drafts:
+                                                # where in the paper the reported results are, so a
+                                                # person can confirm the numbers the verdict uses
         }
       ]
     }
@@ -57,10 +62,13 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "method"
 
 
-def _pv(pid: str, name: str, value: Any, unit: str | None = None) -> dict[str, Any]:
+def _pv(pid: str, name: str, value: Any, unit: str | None = None,
+        description: str | None = None) -> dict[str, Any]:
     e = {"@id": pid, "@type": "PropertyValue", "name": name, "value": value}
     if unit:
         e["unitText"] = unit
+    if description:
+        e["description"] = description
     return e
 
 
@@ -144,10 +152,11 @@ def build_crate(desc: dict[str, Any], out_dir: str | Path, base_dir: str | Path 
             if p.get("scaling"):
                 props.append({"@id": f"{pid}-scaling"})
                 graph.append(_pv(f"{pid}-scaling", "scaling", p["scaling"]))
+            tol_sources = p.get("tolerance_sources") or {}
             for col, tol in (p.get("tolerances") or {}).items():
                 ppid = f"{pid}-tolerance-{_slug(col)}"
                 props.append({"@id": ppid})
-                graph.append(_pv(ppid, f"tolerance:{col}", tol))
+                graph.append(_pv(ppid, f"tolerance:{col}", tol, description=tol_sources.get(col)))
             if props:
                 e["additionalProperty"] = props
             graph.append(e)
@@ -195,9 +204,14 @@ def build_crate(desc: dict[str, Any], out_dir: str | Path, base_dir: str | Path 
             e_src = src(m["expected"])
             if e_src.resolve() != (out_dir / e_rel).resolve():
                 shutil.copy2(e_src, out_dir / e_rel)
-            graph.append({"@id": e_rel, "@type": "File",
+            exp_entity: dict[str, Any] = {"@id": e_rel, "@type": "File",
                           "name": f"Results reported in the paper ({m.get('name')})",
-                          "encodingFormat": "text/csv", "exampleOfWork": output_refs[0]})
+                          "encodingFormat": "text/csv", "exampleOfWork": output_refs[0]}
+            if m.get("expected_source"):
+                sid = f"{e_rel}-source"
+                exp_entity["additionalProperty"] = [{"@id": sid}]
+                graph.append(_pv(sid, "source", m["expected_source"]))
+            graph.append(exp_entity)
             has_part.append({"@id": e_rel})
 
     root_props = [{"@id": "#domain-profile"}]
