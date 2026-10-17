@@ -166,9 +166,6 @@ mark.cite {background: rgba(232,163,61,.3); color: inherit; padding: 0 .1em; bor
 .onramp {max-width: 640px; margin: 2.5rem auto 1rem; text-align: center;}
 .onramp h1 {font-size: 2.2rem; margin: .6rem 0 .3rem;}
 .onramp .sub {color: var(--muted); margin-bottom: 1.2rem;}
-.flowbar {display: flex; justify-content: center; gap: .5rem; font-size: .8rem; color: var(--muted);}
-.flowbar .s {padding: .15rem .6rem; border-radius: 999px; border: 1px solid var(--line); background: var(--card);}
-.flowbar .s.on {color: #fff; background: var(--accent); border-color: var(--accent);}
 .st-key-sourcebox h1, .st-key-sourcebox h2, .st-key-sourcebox h3 {font-size: 1rem !important;}
 </style>""")
 
@@ -334,7 +331,6 @@ def build(trusted: bool) -> None:
              "recreating it as of publication…")
     _, mid, _ = st.columns([1, 2.4, 1])
     with mid:
-        flowbar(2)
         status = st.status("Building the research object", expanded=True)
     status.write(label)
 
@@ -1494,16 +1490,9 @@ def workstation(agent: PaperAgent) -> None:
             record_actions(agent, run_dir)
 
 
-def flowbar(active: int) -> None:
-    steps = ["1 Add a paper", "2 Review the crate", "3 Validate"]
-    st.html("<div class='flowbar'>" + "".join(
-        f"<span class='s{' on' if i == active else ''}'>{t}</span>" for i, t in enumerate(steps, 1)) + "</div>")
-
-
 def welcome_screen() -> None:
     _, mid, _ = st.columns([1, 2.4, 1])
     with mid:
-        flowbar(1)
         if ss.get("build_error"):
             st.error(ss.pop("build_error"))
         st.html("<div class='onramp'><h1>Welcome to ReCRATE</h1><div class='sub'>Paste a preprint link and we rebuild "
@@ -1540,7 +1529,6 @@ def review_screen() -> None:
     agent = PaperAgent.load(ss.agent_dir)
     _, mid, _ = st.columns([1, 2.4, 1])
     with mid:
-        flowbar(2)
         st.html("<div class='onramp'><h1>Review the crate</h1><div class='sub'>Here is what we built. "
                 "Check it looks right before validating.</div></div>")
         ups = st.file_uploader("or upload a crate you already have", type=["zip", "json", "pdf"],
