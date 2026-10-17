@@ -303,9 +303,34 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     manifest: dict[str, Any] = {"recrate_version": __version__,
                                 "created": datetime.now(timezone.utc).replace(microsecond=0).isoformat()}
 
+    def _acquire_paper(src: str | Path) -> tuple["Paper | None", Any]:
+        """Read ``src`` (a local file or a link to fetch, M0) into a Paper, saved under the agent's paper/ folder."""
+        _tick("paper", "Reading the paper")
+        if Path(str(src)).expanduser().is_file():
+            pp, fe = read_paper(src), None
+        else:
+            from .fetch import fetch_paper
+
+            fe = fetch_paper(str(src), out / "work", pdf=pdf)
+            pp = fe.paper
+            manifest["landing_url"] = fe.landing_url
+            if not fe.full_text:
+                manifest["paper_note"] = fe.message
+        if pp is not None:
+            save_paper(pp, out / "paper")
+            # Prefer a structured reading package (Europe PMC) over bare text; keep the fetched file as the source.
+            pp = _reading_package(pp, Path(pp.source), out / "paper", manifest, paper_doi, online)
+        return pp, fe
+
+    # 1. The paper, read as an agent can (see reading.py) — fetched first so a crate search can use it.
+    p: Paper | None = None
+    fetched = None
+    if paper:
+        p, fetched = _acquire_paper(paper)
+
     # A paper without a crate: first look for one already published (WorkflowHub, Zenodo, DataCite, its code)
-    if paper and not crate and online and search_crate:
-        crate = _find_published_crate(Path(paper), out, manifest, paper_doi, repo)
+    if p is not None and not crate and online and search_crate:
+        crate = _find_published_crate(p, out, manifest, paper_doi, repo)
 
     # A Galaxy Workflow RO-Crate (e.g. from WorkflowHub): read its method from the workflow and its tests
     galaxy_src = None
@@ -316,26 +341,7 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
             galaxy_src = resolve_crate_dir(crate)
             if not paper and (galaxy_src / "README.md").exists():
                 paper = galaxy_src / "README.md"  # no article: answer from the workflow's own documentation
-
-    # 1. The paper: a local file, or a link to fetch (M0), read as an agent can (see reading.py)
-    p: Paper | None = None
-    fetched = None
-    if paper:
-        _tick("paper", "Reading the paper")
-        if Path(str(paper)).expanduser().is_file():
-            p = read_paper(paper)
-        else:
-            from .fetch import fetch_paper
-
-            fetched = fetch_paper(str(paper), out / "work", pdf=pdf)
-            p = fetched.paper
-            manifest["landing_url"] = fetched.landing_url
-            if not fetched.full_text:
-                manifest["paper_note"] = fetched.message
-        if p is not None:
-            save_paper(p, out / "paper")
-            # Prefer a structured reading package (Europe PMC) over bare text; keep the fetched file as the source.
-            p = _reading_package(p, Path(p.source), out / "paper", manifest, paper_doi, online)
+                p, fetched = _acquire_paper(paper)
 
     # 2. The code
     code_dir = None
@@ -513,13 +519,15 @@ def own_doi(p: Paper, given: str | None = None) -> str | None:
     return next((d for d in p.dois if d in head), None)
 
 
-def _find_published_crate(paper: Path, out: Path, manifest: dict[str, Any], paper_doi: str | None,
+def _find_published_crate(p: Paper, out: Path, manifest: dict[str, Any], paper_doi: str | None,
                           repo: str | None) -> Path | None:
-    """Search for an RO-Crate already published for this paper; fetch the best one. Records the search."""
+    """Search for an RO-Crate already published for this paper; fetch the best one. Records the search.
+
+    ``p`` is the paper already read (from a local file or a fetched link); searching never re-reads the link.
+    """
     from .crate_search import repos_in, search_crates
     from .sources import crate_root, fetch
 
-    p = read_paper(paper)
     doi = own_doi(p, paper_doi)
     res = search_crates(doi, p.text, repos_in(p.text) + ([repo] if repo else []))
     manifest["crate_search"] = {"doi": doi, "log": res.log, "summary": res.summary(),
