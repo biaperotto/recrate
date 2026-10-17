@@ -22,15 +22,17 @@ dependencies = [
   "scikit-image>=0.21",
   "pillow>=10",
   "pypdf>=4",
+  "pyyaml>=6",
+  "certifi",
 ]
 
 [project.optional-dependencies]
 fiji = ["pyimagej>=1.5"]
 draft = ["anthropic>=0.40"]
 mcp = ["mcp>=1.2"]  # 1.x (FastMCP) and 2.x (MCPServer) both supported
-app = ["streamlit>=1.30", "pandas>=2"]
+app = ["streamlit>=1.43", "pandas>=2", "matplotlib>=3.7"]
 dev = ["pytest>=7"]
-all = ["pyimagej>=1.5", "anthropic>=0.40", "mcp>=1.2", "streamlit>=1.30", "pandas>=2", "pytest>=7"]
+all = ["pyimagej>=1.5", "anthropic>=0.40", "mcp>=1.2", "streamlit>=1.43", "pandas>=2", "matplotlib>=3.7", "pytest>=7"]
 
 [project.scripts]
 recrate = "recrate.cli:main"

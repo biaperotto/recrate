@@ -48,7 +48,7 @@ class FijiRunner(Runner):
         return True
 
     def run(self, workflow: Path, input_dir: Path, output_dir: Path, params: dict[str, Any],
-            channel: int = 0) -> RunResult:
+            channel: int = 0, progress=None) -> RunResult:
         ij = _gateway()
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)

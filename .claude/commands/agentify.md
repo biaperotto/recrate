@@ -5,7 +5,9 @@ argument-hint: <paper agent folder made by `recrate agentify --paper ...`>
 
 You are turning a scientific paper into a runnable paper agent with ReCRATE. The paper agent folder is
 `$ARGUMENTS`. It contains `paper/paper.md` (the paper's text), `paper/paper.json` (DOI and code links) and,
-if cloned, `code/` (the paper's repository). There is no crate yet: your job is to write one.
+if cloned, `code/` (the paper's repository). `crate/` may already hold an RO-Crate ReCRATE recreated from the
+paper (its software as of publication in `crate/environment/`, its code and cited data), with no runnable method
+yet: your job is to describe the methods so they can run. `recrate validate` keeps the dated environment.
 
 Work like a careful co-author. Only state what the paper or code supports; never invent numbers.
 

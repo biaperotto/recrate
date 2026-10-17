@@ -44,7 +44,7 @@ class PythonReferenceRunner(Runner):
     name = "python-reference"
 
     def run(self, workflow: Path, input_dir: Path, output_dir: Path, params: dict[str, Any],
-            channel: int = 0) -> RunResult:
+            channel: int = 0, progress=None) -> RunResult:
         if Path(workflow).name not in SUPPORTED_WORKFLOWS:
             raise ValueError(
                 f"The Python reference runner only mirrors {sorted(SUPPORTED_WORKFLOWS)}; "
@@ -63,7 +63,10 @@ class PythonReferenceRunner(Runner):
         with results.open("w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
             w.writerow(["image", "count", "mean_area", "area_unit", "pixel_size", "pixel_unit"])
-            for img_path in list_images(Path(input_dir)):
+            images = list_images(Path(input_dir))
+            for i, img_path in enumerate(images):
+                if progress:
+                    progress(i, len(images), img_path.name)
                 meta = read_image_metadata(img_path)
                 with tifffile.TiffFile(img_path) as tif:
                     arr = tif.series[0].asarray()

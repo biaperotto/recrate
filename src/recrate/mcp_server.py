@@ -163,8 +163,8 @@ def build_server(agent_dir: str | Path) -> FastMCP:
     @mcp.tool(description="The paper's reproducibility record: every run based on its crate, by whom, "
                           "on what data, with which adjustments and verdicts.")
     def reproducibility_record() -> dict[str, Any]:
-        if agent.crate_dir is None:
-            return {"headline": "No crate yet, so no runs.", "runs": []}
+        if not agent.has_methods:
+            return {"headline": "No runnable method yet, so no runs.", "runs": []}
         runs = find_runs(agent.spec(), _runs())
         s = summarise_record(runs)
         return {"headline": headline(s), "summary": s, "runs": runs}

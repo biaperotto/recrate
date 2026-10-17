@@ -201,7 +201,7 @@ def build_crate(desc: dict[str, Any], out_dir: str | Path, base_dir: str | Path 
             has_part.append({"@id": e_rel})
 
     root_props = [{"@id": "#domain-profile"}]
-    graph.append(_pv("#domain-profile", "domain profile", desc.get("profile", "bioimaging")))
+    graph.append(_pv("#domain-profile", "domain profile", desc.get("profile", "generic")))
     if desc.get("draft"):
         root_props.append({"@id": "#draft"})
         graph.append(_pv("#draft", "draft", True))

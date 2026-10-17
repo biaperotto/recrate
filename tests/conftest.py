@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+
 import pytest
+
+os.environ.setdefault("RECRATE_OFFLINE", "1")  # no registry or DOI lookups in tests
 
 from recrate.agent import agentify
 from recrate.demo import make_demo

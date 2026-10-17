@@ -68,7 +68,7 @@ class MethodSpec:
     citation: str | None = None
     license: str | None = None
     authors: list[str] = field(default_factory=list)
-    profile: str = "bioimaging"
+    profile: str = "generic"
     workflow_path: Path | None = None
     workflow_language: str | None = None
     software: list[tuple[str, str | None]] = field(default_factory=list)
@@ -278,7 +278,7 @@ def load_crate(path: str | Path, method: str | None = None) -> MethodSpec:
         authors.append(a.get("name") or _ref(r) or "")
 
     root_props = _props(root, graph)
-    profile = str(root_props["domain profile"].value) if "domain profile" in root_props else "bioimaging"
+    profile = str(root_props["domain profile"].value) if "domain profile" in root_props else "generic"
 
     inputs = [_param(r, graph) for r in _as_list(wf.get("input"))]
     outputs = [_param(r, graph) for r in _as_list(wf.get("output"))]
