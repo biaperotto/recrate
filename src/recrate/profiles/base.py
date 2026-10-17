@@ -82,3 +82,13 @@ class DomainProfile:
 
     def check(self, spec: MethodSpec, data_path: Path, params: dict[str, Any] | None = None) -> CheckReport:
         raise NotImplementedError
+
+    def diagnose_inputs(self, spec: MethodSpec) -> list[dict[str, str]]:
+        """Declare-only checks: are the crate properties this profile needs to
+        check user data actually present on the method?
+
+        Returns findings as ``{"severity", "message", "fix"}`` dicts (severity is
+        ``warning`` or ``info``). It inspects the crate only; it never reads data
+        and never runs the method. The default profile declares nothing to check.
+        """
+        return []
