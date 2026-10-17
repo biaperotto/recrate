@@ -1195,6 +1195,18 @@ def workstation(agent: PaperAgent) -> None:
                         "crate " + str(card.get("crate_source")) + (" (draft)" if card.get("draft") else "")] if x]
     st.markdown(f"#### {card['title']}")
     st.markdown("<span class='muted'>" + " · ".join(meta) + "</span>", unsafe_allow_html=True)
+    diag = agent.diagnosis() if hasattr(agent, "diagnosis") else None
+    if diag:
+        readiness = diag.get("readiness", "unknown")
+        banner = {"ready": st.success, "ready-with-gaps": st.warning}.get(readiness, st.error)
+        banner(f"Readiness: {readiness}")
+        fixes = [f for f in (diag.get("crate_findings", [])
+                             + [x for m in diag.get("methods", []) for x in m.get("findings", [])])
+                 if f.get("severity") in ("blocking", "warning")]
+        if fixes:
+            with st.expander(f"What's missing and how to fix it ({len(fixes)})"):
+                st.table(pd.DataFrame([{"severity": f["severity"],
+                                        "finding": f["message"], "fix": f.get("fix", "")} for f in fixes]))
     counts = {"validate": f"Validate · {n_ok}/{len(agent.methods)}" if agent.methods else "Validate",
               "reuse": "Reuse" + (f" · {len(files)} files" if files else ""),
               "record": f"Record · {len(runs)}" if runs else "Record"}

@@ -157,9 +157,34 @@ class BioimagingProfile(DomainProfile):
     name = "bioimaging"
     description = "Calibration-aware checks for 2D/3D microscopy image analysis (OME / ImageJ metadata)."
 
+    #: value-parameter names that are lengths/areas in pixels and so need a
+    #: ``scaling`` property to be rescaled safely for other pixel sizes.
+    PIXEL_PARAM = re.compile(r"(_px$|_px_|pixel)", re.I)
+
     def inspect(self, data_path: Path) -> dict[str, Any]:
         files = list_images(Path(data_path))
         return {"files": [read_image_metadata(f) for f in files]}
+
+    def diagnose_inputs(self, spec: MethodSpec) -> list[dict[str, str]]:
+        out: list[dict[str, str]] = []
+        try:
+            data_input = spec.data_input
+        except Exception:  # noqa: BLE001 - no file input; the generic layer reports that
+            return out
+        for prop in ("pixel size", "channels", "dimensions"):
+            if prop not in data_input.properties:
+                out.append({"severity": "warning",
+                            "message": f"The data input declares no '{prop}', so user data cannot be "
+                                       f"checked against the method on this property.",
+                            "fix": f"Add a PropertyValue '{prop}' to the File input parameter."})
+        for p in spec.value_inputs:
+            if self.PIXEL_PARAM.search(p.name or "") and not p.prop("scaling"):
+                out.append({"severity": "warning",
+                            "message": f"Parameter '{p.name}' looks like a value in pixels but declares no "
+                                       f"'scaling', so it cannot be rescaled for other pixel sizes.",
+                            "fix": f"Add a 'scaling' PropertyValue (inverse_pixel_area or inverse_pixel_size) "
+                                   f"to '{p.name}'."})
+        return out
 
     def check(self, spec: MethodSpec, data_path: Path, params: dict[str, Any] | None = None) -> CheckReport:
         data_path = Path(data_path)

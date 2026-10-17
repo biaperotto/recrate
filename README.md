@@ -38,6 +38,25 @@ ReCRATE puts the [FAIR principles for research software (FAIR4RS)](https://doi.o
 
 **Real papers.** From *Cell Detection with Star-convex Polygons* ([arXiv:1806.03535](https://arxiv.org/abs/1806.03535)), ReCRATE recreates the crate: published June 2018, and StarDist's first release (0.1.0, 26 June 2018) came *after* the paper, which the crate says rather than inventing a version. From *ReXGroundingCT* ([arXiv:2507.22030](https://arxiv.org/abs/2507.22030)) it records the dataset on Hugging Face and the models the paper used (GPT-4, GPT-4o). A paper alone rarely says how to run its methods; the next step, `/agentify` in Claude Code, reads the paper and its code and describes them so they can be validated.
 
+## Diagnose a paper from a link
+
+Before agentifying, you can point ReCRATE at a paper by DOI, URL, arXiv/bioRxiv link or local file. It fetches the paper, **locates its RO-Crate** and reports whether the methods are ready to validate and reuse — without running anything.
+
+```bash
+recrate diagnose https://doi.org/10.xxxx/yyyy --out diag/
+```
+
+1. **Fetch** (`fetch.py`): resolve the link to a DOI and landing page, download the open-access full text (the page's `citation_pdf_url`, or the HTML) and collect FAIR Signposting links. Paywalled? It says so and continues with metadata only; add the text with `--pdf <file>`.
+2. **Locate** (`locate.py`): search Signposting, then Crossref/DataCite related identifiers, then the paper's own code links, and download the first good crate (Zenodo/Figshare `ro-crate-metadata.json` or `*.crate.zip`, a GitHub repo, or a WorkflowHub RO-Crate). Every candidate tried is recorded in `locate.json`. No crate found? Upload one with `--crate <folder|zip|url>` or draft it (`--draft claude`).
+3. **Diagnose** (`diagnose.py`): deterministic checks against [docs/crate-spec.md](docs/crate-spec.md) — does the crate parse, cite this paper, declare a workflow, a runner for its language, inputs/outputs, example data, reported results, tolerances and the profile's input properties? Each method is reported as **runnable / validatable / reusable**, with an overall readiness of **ready**, **ready-with-gaps** or **blocked**. Written as `diagnosis.json` and `diagnosis.md`. "Ready" means ready to validate — never "reproduced". No LLM decides a finding.
+
+```bash
+recrate diagnose paper.pdf --crate my_crate/ --out diag/      # diagnose a crate you already have
+recrate agentify --paper https://doi.org/10.xxxx/yyyy --locate --out agents/my_paper   # fetch + locate, then agentify
+```
+
+`agentify` runs Diagnose first and stores the readiness, findings and crate source (found + URL, uploaded, drafted, or none) in `agent.json`; the paper agent exposes it over MCP (the `diagnosis` tool and `paper://diagnosis` resource) so Claude can explain what is missing and how to fix it.
+
 ## Run it
 
 ```bash
@@ -89,12 +108,18 @@ What each principle looks like when a method is reused through ReCRATE (what the
 
 ```
 src/recrate/
+  fetch.py         get a paper from a DOI / URL / arXiv / bioRxiv / file (Diagnose M0)
+  locate.py        find and download the paper's RO-Crate (Signposting, Crossref/DataCite) (M1)
+  diagnose.py      is the crate ready to validate and reuse? readiness + findings (M2)
+  http.py          the one cached network seam (stdlib urllib), patched in tests
   sources.py       identifiers and uploads → paper, crate, code, data (WorkflowHub, Zenodo, DOI, arXiv)
+  paper.py         paper text, DOI and code links, passage search
   paper_crate.py   an RO-Crate recreated for a paper published without one
   environment.py   publication date; software named by the paper and code; versions as of publication
   agent.py         sources → agent; validation of each method
   galaxy.py        Galaxy Workflow RO-Crates: derive a ReCRATE crate; run ported Galaxy imaging tools
-  crate.py         read an input crate (one method per workflow); draft.py builds one from a description
+  drafter.py       draft a crate from the paper with Claude (optional); draft.py builds one from a description
+  crate.py         read an input crate (one method per workflow)
   profiles/        how data is checked: generic (any workflow), bioimaging (calibration, channels, 2D/3D)
   runners/         Galaxy (ported tools), ImageJ macros, Python scripts; unknown languages are refused
   pipeline.py      reproduce / check / run on your data
@@ -102,6 +127,7 @@ src/recrate/
   workspace.py     comparison runs, parameter sources, flags, export bundle; figures.py: figure panels
   chat.py          the chat: tools; open models (OpenAI-compatible), Claude, or simple commands
   mcp_server.py    the agent over MCP
+.claude/commands/agentify.md   Claude Code command: draft, validate and repair a crate from a paper
 app/app.py         the web app
 examples/          workflowhub-nuclei-segmentation (real crate and data), demo (synthetic)
 ```

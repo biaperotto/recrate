@@ -46,6 +46,18 @@ See [`examples/demo/paper_crate/ro-crate-metadata.json`](../examples/demo/paper_
 recrate draft my_method.json my_crate/
 ```
 
+## Crate source
+
+When a crate reaches a paper agent, ReCRATE records where it came from in `agent.json` as `crate_source`:
+
+| `crate_source` | Meaning |
+| --- | --- |
+| `found` | Located online by `recrate diagnose` / `agentify --locate` (Signposting, Crossref/DataCite, or the paper's code links). The URL is stored as `crate_url`. |
+| `uploaded` | Supplied to `recrate diagnose --crate <folder\|zip\|url>`. |
+| `supplied` | Supplied to `recrate agentify --crate <folder>`. |
+| `drafted` | Built from the paper (and code) by Claude; marked `draft` until a person confirms it. |
+| `none` | No crate yet; the agent answers from the paper only. |
+
 ## Run crates
 
 Run crates conform to Process Run Crate 0.5, Workflow Run Crate 0.5 and Workflow RO-Crate 1.0. ReCRATE-specific parts:
