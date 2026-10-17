@@ -414,8 +414,14 @@ def add_and_build(text: str, files: list) -> None:
     if ss.ro.get("crate") or ss.ro.get("paper"):
         build(trusted=False)
     elif not lines:
-        say("I didn't find an RO-Crate, a paper or an identifier in that. Try a DOI, a WorkflowHub or arXiv link, or "
-            "upload a PDF or a crate zip.")
+        msg = ("I didn't find an RO-Crate, a paper or an identifier in that. Try a DOI, a WorkflowHub or arXiv link, or "
+               "upload a PDF or a crate zip.")
+        say(msg)
+        ss.build_error = msg  # shown once on Welcome (say() is not rendered there)
+    else:
+        failed = [l for l in lines if l.startswith("⚠️")]
+        if failed:  # nothing usable resulted and a fetch failed: surface it on Welcome too
+            ss.build_error = "\n\n".join(failed)
 
 
 # ---- chat --------------------------------------------------------------------------------------
