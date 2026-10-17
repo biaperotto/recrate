@@ -30,6 +30,7 @@ is a paper agent folder:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -83,6 +84,16 @@ class PaperAgent:
         return d if (d / "ro-crate-metadata.json").exists() else None
 
     @property
+    def has_methods(self) -> bool:
+        return self.crate_dir is not None and bool(list_methods(self.crate_dir))
+
+    @property
+    def environment(self):
+        from .environment import load
+
+        return load(self.path / "environment.json")
+
+    @property
     def runs_dir(self) -> Path:
         return self.path / "runs"
 
@@ -97,7 +108,8 @@ class PaperAgent:
 
     def card(self) -> dict[str, Any]:
         return {**{k: self.manifest.get(k) for k in
-                   ("name", "title", "doi", "crate_source", "crate_url", "code", "draft", "readiness")},
+                   ("name", "title", "doi", "crate_source", "crate_url", "code", "draft", "readiness",
+                    "published")},
                 "methods": [m.__dict__ for m in self.methods],
                 "code_and_data_links": self.paper.repos if self.paper else []}
 
@@ -131,9 +143,18 @@ def _clone(repo: str, dest: Path) -> str:
     return repo
 
 
-def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who: str = "ReCRATE validation") \
-        -> list[MethodStatus]:
-    """Reproduce every method that has example data and reported results."""
+def runs_own_code(language: str | None) -> bool:
+    """Whether running this method executes the workflow's own code (a script or macro), rather than
+    ReCRATE's ports (Galaxy imaging tools). Code from an unknown source should only run when trusted."""
+    return "galaxy" not in (language or "").lower()
+
+
+def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who: str = "ReCRATE validation",
+                     validate: str = "all") -> list[MethodStatus]:
+    """Reproduce every method that has example data and reported results.
+
+    ``validate``: ``all``; ``safe`` (only methods that don't execute the workflow's own code); ``none``.
+    """
     from .pipeline import reproduce  # local import: pipeline imports heavy deps
 
     out = []
@@ -144,6 +165,9 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
             st.detail = "No example data in the crate."
         elif not (spec.expected_results and spec.expected_results.exists()):
             st.detail = "No reported results in the crate to compare with."
+        elif validate == "none" or (validate == "safe" and runs_own_code(m["language"])):
+            st.detail = ("Not run yet: validating executes the workflow's own code. "
+                         "Run it when you trust the source.")
         else:
             try:
                 r = reproduce(spec, runs_dir, runner=runner, agent=who)
@@ -159,7 +183,7 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
 def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path | None = None,
              repo: str | None = None, fetch_code: bool = False, draft: str = "none",
              runner: str = "auto", strict: bool = False, locate: bool = False,
-             pdf: str | None = None) -> PaperAgent:
+             pdf: str | None = None, validate: str = "all", online: bool = True) -> PaperAgent:
     """Build a paper agent folder. See the module docstring.
 
     ``paper`` may be a local file or a link (DOI / URL / arXiv / bioRxiv). With
@@ -169,8 +193,19 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     """
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    online = online and not os.environ.get("RECRATE_OFFLINE")  # registries and DOI metadata need the network
     manifest: dict[str, Any] = {"recrate_version": __version__,
                                 "created": datetime.now(timezone.utc).replace(microsecond=0).isoformat()}
+
+    # A Galaxy Workflow RO-Crate (e.g. from WorkflowHub): read its method from the workflow and its tests
+    galaxy_src = None
+    if crate:
+        from .galaxy import is_galaxy_crate
+
+        if is_galaxy_crate(resolve_crate_dir(crate)):
+            galaxy_src = resolve_crate_dir(crate)
+            if not paper and (galaxy_src / "README.md").exists():
+                paper = galaxy_src / "README.md"  # no article: answer from the workflow's own documentation
 
     # 1. The paper: a local file, or a link to fetch (M0).
     p: Paper | None = None
@@ -199,7 +234,16 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
 
     # 3. The crate: supplied, drafted, or none yet
     crate_out = out / "crate"
-    if crate:
+    if galaxy_src is not None:
+        from .galaxy import import_galaxy_crate
+
+        for d in (crate_out, out / "source-crate"):
+            if d.exists():
+                shutil.rmtree(d)
+        shutil.copytree(galaxy_src, out / "source-crate")  # the original, unchanged
+        import_galaxy_crate(galaxy_src, crate_out)
+        manifest["crate_source"] = "derived from a Galaxy Workflow RO-Crate"
+    elif crate:
         src = resolve_crate_dir(crate)
         if src.resolve() != crate_out.resolve():
             if crate_out.exists():
@@ -231,12 +275,46 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
         if p is not None:
             (out / "DRAFT_ME.md").write_text(_draft_instructions(p, code_dir, out), encoding="utf-8")
 
+    # 3b. The software environment as of publication
+    from . import environment as envmod
+    from .paper_crate import add_environment, build_paper_crate
+
+    env = None
+    if p is not None and manifest["crate_source"] in {"none", "drafted"}:
+        fetch_json = None
+        if online:
+            from .sources import get_json as fetch_json
+        arxiv = next((d.split("arxiv.", 1)[-1] for d in p.dois if d.lower().startswith("10.48550/arxiv.")), None)
+        if arxiv is None:  # "arXiv:1806.03535" in the text, or a file named after its arXiv identifier
+            m = re.search(r"arxiv[-:_ ]?\s*(\d{4}\.\d{4,5})", f"{Path(p.source).name} {p.text[:4000]}", re.I)
+            arxiv = m.group(1) if m else None
+        when, when_src = envmod.publication_date(p.text, doi=p.doi, arxiv=arxiv, pdf=Path(p.source),
+                                                 fetch_json=fetch_json)
+        env = envmod.environment_for(p.text, when, when_src, code_dir=code_dir, fetch_json=fetch_json)
+        if manifest["crate_source"] == "none":
+            build_paper_crate(p, env, crate_out, code_url=manifest.get("code"), paper_file=Path(p.source),
+                              paper_id=None if p.doi or not arxiv else f"https://arxiv.org/abs/{arxiv}")
+            manifest["crate_source"] = "recreated from the paper"
+        else:
+            add_environment(crate_out, env)
+    elif (crate_out / "ro-crate-metadata.json").exists():
+        env = envmod.from_crate(crate_out)
+        if env.published is None and p is not None:  # the crate has no date: use the paper's
+            when, when_src = envmod.publication_date(p.text, pdf=Path(p.source))
+            env.published, env.published_source = (when.isoformat() if when else None), when_src
+    if env is not None:
+        envmod.save(env, out / "environment.json")
+        manifest["published"] = env.published
+
     # 4. Names
-    spec0 = load_crate(crate_out) if (crate_out / "ro-crate-metadata.json").exists() else None
-    manifest["title"] = (spec0.name if spec0 else None) or (p.title if p else out.name)
+    has_crate = (crate_out / "ro-crate-metadata.json").exists()
+    spec0 = load_crate(crate_out) if has_crate and list_methods(crate_out) else None
+    root0 = _crate_root(crate_out) if has_crate else {}
+    manifest["title"] = (spec0.name if spec0 else None) or root0.get("name") or (p.title if p else out.name)
     manifest["name"] = _slug(manifest["title"])
-    manifest["doi"] = (spec0.citation if spec0 else None) or (f"https://doi.org/{p.doi}" if p and p.doi else None)
-    manifest["draft"] = bool(spec0.draft) if spec0 else False
+    cit = (root0.get("citation") or {}).get("@id") if isinstance(root0.get("citation"), dict) else root0.get("citation")
+    manifest["doi"] = (spec0.citation if spec0 else None) or cit or (f"https://doi.org/{p.doi}" if p and p.doi else None)
+    manifest["draft"] = bool(spec0.draft) if spec0 else manifest["crate_source"] == "recreated from the paper"
     manifest["paper"] = str(paper) if paper else None
 
     # 4b. Diagnose the crate (M2): store readiness and findings for the agent to explain.
@@ -252,7 +330,7 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     # 5. Validate each method against the paper's reported results
     methods: list[MethodStatus] = []
     if spec0 is not None:
-        methods = validate_methods(crate_out, out / "runs", runner=runner)
+        methods = validate_methods(crate_out, out / "runs", runner=runner, validate=validate)
         if strict:
             methods = [m for m in methods if m.status == "validated"]
     manifest["methods"] = [m.__dict__ for m in methods]
@@ -267,6 +345,11 @@ def _draft_crate(p: Paper, out: Path, crate_out: Path, code_dir: Path | None) ->
     desc = draft_description(p.text, base=out, code_dir=code_dir)
     (out / "crate_description.json").write_text(json.dumps(desc, indent=2, ensure_ascii=False), encoding="utf-8")
     build_crate(desc, crate_out, base_dir=out)
+
+
+def _crate_root(crate_dir: Path) -> dict[str, Any]:
+    meta = json.loads((Path(crate_dir) / "ro-crate-metadata.json").read_text(encoding="utf-8"))
+    return next((e for e in meta.get("@graph", []) if e.get("@id") == "./"), {})
 
 
 def _draft_instructions(p: Paper, code_dir: Path | None, out: Path) -> str:
@@ -292,6 +375,12 @@ def revalidate(agent_dir: str | Path, runner: str = "auto") -> PaperAgent:
     agent_dir = Path(agent_dir)
     manifest = json.loads((agent_dir / MANIFEST).read_text(encoding="utf-8"))
     crate_dir = agent_dir / "crate"
+    from .environment import load as load_env
+    from .paper_crate import add_environment
+
+    env = load_env(agent_dir / "environment.json")
+    if env is not None and not (crate_dir / "environment").exists():  # drafting rewrote the crate: keep the dates
+        add_environment(crate_dir, env)
     spec0 = load_crate(crate_dir)
     manifest["methods"] = [m.__dict__ for m in validate_methods(crate_dir, agent_dir / "runs", runner=runner)]
     manifest["crate_source"] = manifest.get("crate_source") if manifest.get("crate_source") != "none" else "drafted"

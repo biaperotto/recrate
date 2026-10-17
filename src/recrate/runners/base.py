@@ -35,5 +35,6 @@ class Runner:
         return True
 
     def run(self, workflow: Path, input_dir: Path, output_dir: Path, params: dict[str, Any],
-            channel: int = 0) -> RunResult:
+            channel: int = 0, progress=None) -> RunResult:
+        """``progress(done, total, name)`` is called per image by runners that can report it."""
         raise NotImplementedError

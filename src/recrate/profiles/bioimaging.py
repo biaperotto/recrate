@@ -29,6 +29,53 @@ from .base import FAIL, OK, WARN, Adjustment, CheckItem, CheckReport, DomainProf
 
 IMAGE_SUFFIXES = {".tif", ".tiff"}
 PIXEL_SIZE_REL_TOL = 0.05
+CALIBRATION_FILE = "recrate-calibration.json"  # written when a person supplies a missing calibration
+
+
+def set_calibration(src: Path, dest: Path, pixel_size: float, unit: str = "µm", who: str = "anonymous",
+                    source: str = "") -> list[str]:
+    """Give uncalibrated TIFFs a pixel size a person supplied, in ``dest`` (may equal ``src``).
+
+    Images that already carry a calibration are copied unchanged. The calibration is written into
+    each file (ImageJ resolution tags, read by Fiji and Python alike) and recorded in
+    ``recrate-calibration.json`` next to them, which run crates keep as an input. Returns the files
+    that were calibrated.
+    """
+    import json
+    import shutil
+    from datetime import datetime, timezone
+
+    src, dest = Path(src), Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    unit = normalise_unit(unit) or "µm"
+    changed = []
+    for f in list_images(src):
+        out = dest / f.name
+        meta = read_image_metadata(f)
+        if meta["pixel_size"] is not None and to_um(meta["pixel_size"], meta["unit"]) is not None:
+            if out.resolve() != f.resolve():
+                shutil.copy2(f, out)
+            continue
+        with tifffile.TiffFile(f) as tif:
+            arr = tif.series[0].asarray()
+            axes = tif.series[0].axes
+        ij_axes = {"YX": "YX", "CYX": "CYX", "ZYX": "ZYX", "ZCYX": "ZCYX", "TZCYX": "TZCYX"}.get(axes)
+        tifffile.imwrite(out, arr, imagej=True, resolution=(1 / pixel_size, 1 / pixel_size),
+                         metadata={"unit": "micron" if unit == "µm" else unit, **({"axes": ij_axes} if ij_axes else {})})
+        changed.append(f.name)
+    record = {"pixel_size": pixel_size, "unit": unit, "provided_by": who, "source": source,
+              "files": changed, "when": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+              "note": "Calibration supplied by a person because the files had none."}
+    if changed:
+        (dest / CALIBRATION_FILE).write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+    return changed
+
+
+def user_calibration(data_path: Path) -> dict[str, Any] | None:
+    import json
+
+    p = Path(data_path) / CALIBRATION_FILE
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 _UNIT_ALIASES = {
     "um": "µm", "µm": "µm", "μm": "µm", "micron": "µm", "microns": "µm", "micrometer": "µm",
@@ -208,6 +255,13 @@ class BioimagingProfile(DomainProfile):
                         note = "; ".join(f"{a.parameter} {a.old:g} → {a.new:g}" for a in adj) or \
                                "No scalable parameters declared; results may not be comparable."
                         report.items.append(CheckItem("Pixel size", exp_txt, f"{obs:g} µm", WARN, note))
+        cal = user_calibration(data_path) if data_path.is_dir() else None
+        if cal:
+            item = next((i for i in report.items if i.name == "Pixel size"), None)
+            if item is not None:
+                src = f" ({cal['source']})" if cal.get("source") else ""
+                item.note = (item.note + "; " if item.note else "") + \
+                    f"user-provided by {cal['provided_by']}{src} for {len(cal['files'])} file(s)"
         return report
 
     @staticmethod

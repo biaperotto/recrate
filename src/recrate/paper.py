@@ -16,7 +16,9 @@ DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s\"<>,;]+[^\s\"<>,;.)\]])", re.I)
 REPO_RE = re.compile(
     r"https?://(?:www\.)?(?:github\.com|gitlab\.com|bitbucket\.org|codeberg\.org)/[\w.-]+/[\w.-]+"
     r"|https?://(?:doi\.org/10\.5281/zenodo\.\d+|zenodo\.org/(?:records?|doi)/[\w./-]+)"
-    r"|https?://workflowhub\.eu/workflows/\d+",
+    r"|https?://workflowhub\.eu/workflows/\d+"
+    r"|https?://huggingface\.co/(?:datasets/|spaces/)?[\w.-]+/[\w.-]+"
+    r"|https?://(?:www\.)?(?:figshare\.com|datadryad\.org|osf\.io|physionet\.org|kaggle\.com)/[\w./-]+",
     re.I,
 )
 

@@ -68,6 +68,7 @@ def write_run_crate(
     comparison: Comparison | None,
     agent: str = "anonymous",
     overlays: list[Path] | None = None,
+    param_notes: dict[str, str] | None = None,
 ) -> Path:
     """Create a run crate folder from a finished run. Returns its path."""
     out_dir = Path(out_dir)
@@ -149,6 +150,8 @@ def write_run_crate(
         if name in adjust:
             a = adjust[name]
             e["description"] = f"Adjusted from {a.old} to {a.new}: {a.reason}."
+        if param_notes and name in param_notes:
+            e["description"] = param_notes[name]
         pv_refs.append(add(e))
 
     # Outputs
@@ -171,7 +174,8 @@ def write_run_crate(
                                 "name": f"Overlay {ov.stem}", "encodingFormat": "image/png"}, part=True))
 
     person_ref = add(_person(agent))
-    adjust_txt = "; ".join(f"{a.parameter} {a.old} → {a.new} ({a.reason})" for a in adjust.values())
+    adjust_txt = "; ".join([f"{a.parameter} {a.old} → {a.new} ({a.reason})" for a in adjust.values()]
+                           + [f"{k}: {v}" for k, v in (param_notes or {}).items()])
     run_ref = add({
         "@id": "#run",
         "@type": "CreateAction",
@@ -311,6 +315,95 @@ def approve(run_dir: Path, who: str, accepted: bool = True, note: str = "") -> N
     meta["@graph"].extend([approval, result])
     root.setdefault("mentions", []).append({"@id": approval["@id"]})
     save_crate(run_dir, meta)
+
+
+def review_image(run_dir: Path, who: str, image: str, accepted: bool, note: str = "") -> None:
+    """Record a person's check of one image's result (its overlay), as an AssessAction on that input."""
+    meta = load_run_crate(run_dir)
+    idx = entity_index(meta)
+    root = idx["./"]
+    stem = Path(image).stem
+    target = next((e["@id"] for e in meta["@graph"] if e.get("@type") == "File"
+                   and str(e["@id"]).split("/")[-1].startswith(stem) and "overlays/" in str(e["@id"])),
+                  next((e["@id"] for e in meta["@graph"] if e.get("name") == image), image))
+    person = _person(who)
+    if person["@id"] not in idx:
+        meta["@graph"].append(person)
+    n = sum(1 for e in meta["@graph"] if str(e["@id"]).startswith("#review-") and e.get("@type") == "AssessAction")
+    rid = f"#review-{n}"
+    meta["@graph"].extend([
+        {"@id": rid, "@type": "AssessAction", "name": f"Visual check of {image}",
+         "agent": {"@id": person["@id"]}, "object": [{"@id": target}],
+         "endTime": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+         "actionStatus": {"@id": "http://schema.org/CompletedActionStatus"}, "result": {"@id": f"{rid}-result"}},
+        {"@id": f"{rid}-result", "@type": "PropertyValue", "name": f"review of {image}",
+         "value": "accepted" if accepted else "rejected", **({"description": note} if note else {})},
+    ])
+    root.setdefault("mentions", []).append({"@id": rid})
+    save_crate(run_dir, meta)
+
+
+def image_reviews(run_dir: Path) -> dict[str, dict[str, Any]]:
+    """Latest review per image: {image: {"value": accepted|rejected, "note": ..., "by": ...}}."""
+    meta = load_run_crate(run_dir)
+    idx = entity_index(meta)
+    out: dict[str, dict[str, Any]] = {}
+    for e in meta["@graph"]:
+        if str(e["@id"]).startswith("#review-") and e.get("@type") == "AssessAction":
+            res = idx.get(e["result"]["@id"], {})
+            image = res.get("name", "").removeprefix("review of ")
+            out[image] = {"value": res.get("value"), "note": res.get("description", ""),
+                          "by": idx.get(e["agent"]["@id"], {}).get("name")}
+    return out
+
+
+def run_story(run_dir: Path) -> dict[str, Any]:
+    """The run crate as a readable account: what ran, on what, with which settings, checked by whom."""
+    meta = load_run_crate(run_dir)
+    idx = entity_index(meta)
+    root, run = idx["./"], idx.get("#run", {})
+    wf = idx.get(run.get("instrument", {}).get("@id", ""), {})
+    software = [idx[s["@id"]] for s in wf.get("softwareRequirements", []) if s["@id"] in idx]
+    objs = [idx.get(o["@id"], {}) for o in run.get("object", [])]
+    formal = {e["@id"]: e for e in meta["@graph"] if e.get("@type") == "FormalParameter"}
+
+    def assess(aid: str) -> list[dict[str, Any]]:
+        a = idx.get(aid)
+        if not a:
+            return []
+        res = a.get("result", [])
+        res = res if isinstance(res, list) else [res]
+        return [idx[r["@id"]] for r in res if r["@id"] in idx]
+
+    approvals = []
+    for e in meta["@graph"]:
+        if e.get("@type") == "AssessAction" and str(e["@id"]).startswith(("#approval-", "#review-")):
+            r = assess(e["@id"])
+            approvals.append({"what": e.get("name"), "by": idx.get(e["agent"]["@id"], {}).get("name"),
+                              "when": e.get("endTime"), "value": r[0].get("value") if r else None,
+                              "note": r[0].get("description", "") if r else ""})
+    return {
+        "title": root.get("name"),
+        "summary": root.get("description"),
+        "paper_crate": root.get("isBasedOn", {}).get("@id"),
+        "paper": root.get("citation", {}).get("@id"),
+        "workflow": {"file": wf.get("@id"), "language": idx.get(wf.get("programmingLanguage", {}).get("@id", ""),
+                                                                {}).get("name")},
+        "software": [f"{s['name']} {s.get('softwareVersion', '')}".strip() for s in software],
+        "who": idx.get(run.get("agent", {}).get("@id", ""), {}).get("name"),
+        "started": run.get("startTime"), "ended": run.get("endTime"),
+        "inputs": [{"file": o.get("name"), "size_bytes": int(o.get("contentSize", 0)),
+                    "sha256": o.get("sha256", "")} for o in objs if o.get("@type") == "File"],
+        "parameters": [{"name": o.get("name"), "value": o.get("value"),
+                        "paper_default": formal.get(o.get("exampleOfWork", {}).get("@id", ""), {}).get("defaultValue"),
+                        "note": o.get("description", "")} for o in objs if o.get("@type") == "PropertyValue"],
+        "checks": [{"check": c.get("name"), "status": c.get("value"), "detail": c.get("description", "")}
+                   for c in assess("#input-check")],
+        "comparison": [{"measure": c.get("name"), "value": c.get("value"), "detail": c.get("description", "")}
+                       for c in assess("#comparison")],
+        "reviews": approvals,
+        "outputs": [p["@id"] for p in root.get("hasPart", []) if str(p["@id"]).startswith("outputs/")],
+    }
 
 
 def summarise_run(run_dir: Path) -> dict[str, Any]:

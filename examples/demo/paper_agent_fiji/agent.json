@@ -1,0 +1,30 @@
+{
+  "recrate_version": "0.1.0",
+  "created": "2026-10-17T12:31:16+00:00",
+  "crate_source": "supplied",
+  "title": "Counting and sizing nuclei in 2D fluorescence images with Fiji",
+  "name": "counting-and-sizing-nuclei-in-2d-fluorescence-images-with",
+  "doi": "https://doi.org/10.0000/recrate-demo-paper",
+  "draft": false,
+  "paper": "examples/demo/paper.md",
+  "methods": [
+    {
+      "name": "count_nuclei",
+      "id": "workflows/count_nuclei.ijm",
+      "description": "Counts nuclei per field and their mean area (Otsu threshold, debris filter).",
+      "language": "ImageJ Macro Language",
+      "status": "validated",
+      "detail": "Reproduced: count 22 vs 22 reported (0.0%, tolerance 5%); mean_area 107.11 vs 107.51 reported (0.4%, tolerance 10%)",
+      "run_crate": "examples/demo/paper_agent_fiji/runs/20261017T123226530-reproduce"
+    },
+    {
+      "name": "size_distribution",
+      "id": "workflows/size_distribution.py",
+      "description": "Median nuclear area and fraction of large nuclei per field.",
+      "language": "Python",
+      "status": "failed",
+      "detail": "RuntimeError: The macro finished but wrote no results.csv; check the macro's output path.",
+      "run_crate": null
+    }
+  ]
+}

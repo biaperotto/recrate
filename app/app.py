@@ -1,174 +1,1345 @@
-"""ReCRATE web app: talk to a paper, reproduce it, and run its methods on your images.
+"""ReCRATE web app: FAIR recreation of scientific research.
 
     pip install -e ".[app]"
-    recrate demo-data examples/demo
-    recrate agentify --paper examples/demo/paper.md --crate examples/demo/paper_crate --out examples/demo/paper_agent
     streamlit run app/app.py
+
+Two cards, side by side, with a divider you can drag:
+
+* the chat: give it a research RO-Crate or a paper (DOI, link or file), then talk to the research object. It
+  works with an open model on your machine (Ollama, LM Studio: free, no key), with Claude (an API key), or
+  with simple commands;
+* the workstation: Validate the research on its own data, Reuse its methods on yours, and the Record of every
+  run (Workflow Run RO-Crates) with an export bundle.
 """
 
 from __future__ import annotations
 
+import html
+import json
+import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
-from recrate.agent import PaperAgent
+from recrate.agent import PaperAgent, agentify, revalidate, runs_own_code
+from recrate.chat import (LOCAL_URL, ChatTools, ClaudeChat, LocalChat, OpenAICompatChat, claude_available,
+                          local_models)
 from recrate.crate import CrateError
-from recrate.methods import methods_paragraph
-from recrate.pipeline import check_inputs, reproduce, run_on_data
+from recrate.figures import Panel, comparison_chart, panel_figure, pixel_size_um
+from recrate.paper import passages
+from recrate.pipeline import check_inputs, run_on_data
+from recrate.profiles.bioimaging import list_images
 from recrate.record import find_runs, headline, publish_back, summarise_record
-from recrate.runcrate import approve
+from recrate.runcrate import approve, image_reviews, review_image, run_story, summarise_run
+from recrate.sources import fetch, from_upload, identify
+from recrate.workspace import (comparable_with_paper, export_bundle, flag_images, methods_markdown, numeric_columns,
+                               parameter_sources, read_rows, references_bib, whatif)
 
-st.set_page_config(page_title="ReCRATE", layout="wide")
 ROOT = Path(__file__).resolve().parent.parent
-BADGE = {"validated": "✅ validated", "differs": "⚠️ differs", "failed": "❌ failed", "not validated": "• not validated"}
+IMG = ROOT / "docs" / "img"
+st.set_page_config(page_title="ReCRATE", page_icon=str(IMG / "mark.svg"), layout="wide",
+                   initial_sidebar_state="collapsed")
 
-st.title("ReCRATE")
-st.caption("A paper you can talk to and run on your own data, with checks and a record of every run.")
+WH = ROOT / "examples" / "workflowhub-nuclei-segmentation"
+DEMO = ROOT / "examples" / "demo"
+EXAMPLES = {
+    "workflowhub": {"title": "Nuclei segmentation · WorkflowHub #771",
+                    "about": "A published Galaxy workflow crate, with public microscopy images from Zenodo.",
+                    "tags": ["RO-Crate", "Galaxy", "real data"],
+                    "agent": WH / "paper_agent", "build": {"crate": WH / "crate"}, "data": WH / "research-data" / "B2"},
+    "demo": {"title": "Counting and sizing nuclei · synthetic paper",
+             "about": "Two methods (a Fiji macro, a Python script); your images have a different pixel size.",
+             "tags": ["paper + crate", "Fiji", "Python"],
+             "agent": DEMO / "paper_agent", "build": {"paper": DEMO / "paper.md", "crate": DEMO / "paper_crate"},
+             "data": DEMO / "my_images"},
+}
+BADGE = {"validated": ":green-badge[reproduced]", "differs": ":orange-badge[differs]",
+         "failed": ":red-badge[failed]", "not validated": ":gray-badge[not run yet]"}
+ICON = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
+SERIES = ["#2a78d6", "#eb6834"]  # reference categorical slots 1-2 (validated palette)
+TOOL_LABEL = {
+    "about_paper": "Reading the research object", "search_paper": "Searching the paper",
+    "describe_method": "Reading the method", "list_my_files": "Looking at your data",
+    "check_my_data": "Checking your data", "reproduce": "Reproducing the published result",
+    "run_on_my_data": "Running on your data", "methods_text": "Writing the methods paragraph",
+    "approve_run": "Recording your review", "create_output_crate": "Creating the output RO-Crate",
+    "reproducibility_record": "Reading the record", "set_pixel_size": "Setting the pixel size",
+    "compare_paper_parameters": "Running with the published values unchanged",
+}
+SECTIONS = {"validate": "Validate", "reuse": "Reuse", "record": "Record"}
 
-with st.sidebar:
-    who = st.text_input("Your name (recorded in each run)", value="anonymous")
-    runner = st.selectbox("Runner", ["auto", "fiji", "reference", "script"],
-                          help="auto picks Fiji for macros (Python reference without FIJI_PATH) and the "
-                               "paper's own script for Python methods.")
+st.html("""<style>
+:root {--bg:#f1efea; --card:#ffffff; --line:#e6e3da; --ink:#1d2b2a; --muted:#6b7472; --accent:#1f7a6b;
+       --accent-soft:#e8f2ef; --bubble:#f3f1ec; --dark:#1d2b2a;}
+.stApp {background: var(--bg);}
+header[data-testid="stHeader"] {height: 0; background: transparent;}
+.block-container {padding: .9rem 1.4rem .6rem; max-width: 100%;}
+h1, h2, h3, h4, h5 {letter-spacing: -.01em; color: var(--ink);}
+.muted {color: var(--muted); font-size: .86rem;}
+.eyebrow {font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600;}
+.quote {border-left: 3px solid var(--accent); padding: .1rem .7rem; margin: .2rem 0 .4rem; font-size: .86rem; color: #3c4846;}
+mark.cite {background: rgba(232,163,61,.3); color: inherit; padding: 0 .1em; border-radius: 2px;}
 
-# ---- 1. The paper agent ----------------------------------------------------------------
-st.header("1. The paper")
-agent_path = st.text_input("Paper agent folder (made with `recrate agentify`), or a crate folder",
-                           value=str(ROOT / "examples" / "demo" / "paper_agent"))
-try:
-    agent = PaperAgent.load(agent_path)
-except (CrateError, FileNotFoundError) as e:
-    st.info(f"Load a paper agent to start ({e}). Run `recrate demo-data examples/demo` and "
-            "`recrate agentify ...` first (see the README).")
-    st.stop()
+/* top bar */
+.st-key-topbar {background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: .3rem .9rem;
+  margin-bottom: .6rem;}
+.st-key-topbar button {padding: .25rem .8rem; min-height: 2.1rem;}
+.st-key-topbar [data-testid="stImage"] {margin: 0;}
 
-card = agent.card()
-st.subheader(card["title"])
-if card.get("doi"):
-    st.markdown(f"[{card['doi']}]({card['doi']})")
-st.caption(f"Crate: {card['crate_source']}"
-           + (f" · {card['crate_url']}" if card.get("crate_url") else "")
-           + (" · draft, needs confirming" if card.get("draft") else ""))
+/* the two cards */
+[data-testid="stHorizontalBlock"]:has(.st-key-chatcard) {flex-wrap: nowrap !important; align-items: stretch;}
+[data-testid="stHorizontalBlock"]:has(.st-key-chatcard) > [data-testid="stColumn"] {min-width: 0;}
+.st-key-chatcard, .st-key-workcard {background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+  height: calc(100vh - 8.4rem) !important; max-height: calc(100vh - 8.4rem); overflow: hidden;
+  padding: 1rem 1.1rem .8rem; flex-wrap: nowrap !important; flex: 0 0 auto !important;}
+.st-key-chatcard > *, .st-key-workcard > * {flex: 0 0 auto;}
+.st-key-chatcard > *:has(.st-key-chatscroll), .st-key-workcard > *:has(.st-key-workscroll) {flex: 1 1 0 !important;
+  min-height: 0 !important; height: auto !important;}
+.st-key-chatscroll, .st-key-workscroll {height: 100% !important; overflow-y: auto !important; overflow-x: hidden;
+  padding-right: .3rem; flex-wrap: nowrap !important;}
+.st-key-workfoot {border-top: 1px solid var(--line); padding-top: .7rem; margin: 0 -1.1rem; padding-left: 1.1rem;
+  padding-right: 1.1rem;}
 
-diag = agent.diagnosis() if hasattr(agent, "diagnosis") else None
-if diag:
-    readiness = diag.get("readiness", "unknown")
-    banner = {"ready": st.success, "ready-with-gaps": st.warning}.get(readiness, st.error)
-    banner(f"Readiness: {readiness}")
-    fixes = [f for f in (diag.get("crate_findings", [])
-                         + [x for m in diag.get("methods", []) for x in m.get("findings", [])])
-             if f.get("severity") in ("blocking", "warning")]
-    if fixes:
-        with st.expander(f"What's missing and how to fix it ({len(fixes)})"):
-            st.table(pd.DataFrame([{"severity": f["severity"],
-                                    "finding": f["message"], "fix": f.get("fix", "")} for f in fixes]))
+/* chat bubbles */
+[class*="st-key-msg-a-"] {background: var(--bubble); border-radius: 14px 14px 14px 4px; padding: .7rem .95rem .8rem;
+  max-width: 92%; gap: .3rem;}
+[class*="st-key-msg-u-"] {background: var(--dark); color: #fff; border-radius: 14px 14px 4px 14px; padding: .7rem .95rem .8rem;
+  max-width: 85%; margin-left: auto; gap: .2rem;}
+[class*="st-key-msg-u-"] p, [class*="st-key-msg-u-"] code {color: #fff !important;}
+[class*="st-key-msg-"] p {margin-bottom: .2rem;}
+.ctx {background: var(--dark); color: #f1efea; border-radius: 14px; padding: .8rem 1rem; margin: .1rem 0 .6rem;}
+.ctx .eyebrow {color: #9fb3ae;}
+.ctx .t {font-weight: 600; font-size: 1rem; margin: .15rem 0 .2rem; color: #fff;}
+.ctx .m {font-size: .82rem; color: #c9d4d1;}
+.ctx summary {cursor: pointer; font-size: .8rem; color: #9fb3ae; margin-top: .3rem;}
+.ctx details p {font-size: .82rem; color: #c9d4d1; margin: .3rem 0 0;}
+.chip {display: inline-flex; align-items: center; gap: .35rem; font-size: .75rem; border: 1px solid var(--line);
+  border-radius: 999px; padding: .1rem .55rem; color: var(--muted); background: #fbfaf7;}
+.dot {width: 7px; height: 7px; border-radius: 50%; display: inline-block;}
 
-if card["methods"]:
-    st.table(pd.DataFrame([{"method": m["name"], "language": m["language"], "validation": BADGE.get(m["status"],
-                            m["status"]), "detail": m["detail"]} for m in card["methods"]]))
-else:
-    st.warning("No runnable methods yet: this agent answers from the paper. See DRAFT_ME.md in the agent folder.")
+/* section bar = tabs */
+.st-key-sectionbar [data-testid="stButtonGroup"] {width: 100%;}
+.st-key-sectionbar button {border: none !important; background: transparent !important; border-radius: 0 !important;
+  border-bottom: 2px solid transparent !important; padding: .55rem 1.1rem !important; box-shadow: none !important;}
+.st-key-sectionbar button p {font-size: 1.05rem; font-weight: 600; color: var(--muted);}
+.st-key-sectionbar button[aria-checked="true"], .st-key-sectionbar button[kind="segmented_controlActive"] {
+  border-bottom: 2px solid var(--accent) !important;}
+.st-key-sectionbar button[aria-checked="true"] p, .st-key-sectionbar button[kind="segmented_controlActive"] p {color: var(--ink);}
+.st-key-sectionbar {border-bottom: 1px solid var(--line); margin: 0 -1.1rem; padding: 0 1.1rem;}
 
-q = st.text_input("Ask the paper", placeholder="e.g. what pixel size were the images? how is debris removed?")
-if q:
-    for h in agent.search(q, 3):
-        st.markdown(f"> {' '.join(h['text'].split())[:700]}")
-    st.caption("Connect the agent to Claude (`recrate serve`) for full answers grounded in these passages.")
+/* draggable divider */
+.rc-split {flex: 0 0 12px; cursor: col-resize; display: flex; align-items: center; justify-content: center;
+  align-self: stretch; margin: 0 -4px;}
+.rc-split::after {content: ""; width: 4px; height: 56px; border-radius: 4px; background: #cfcabe; transition: background .15s;}
+.rc-split:hover::after, .rc-split.dragging::after {background: var(--accent);}
 
-if not card["methods"]:
-    st.stop()
+/* the research object's files */
+.tree {font-size: .85rem; line-height: 1.55;}
+.tree details > div {margin-left: 1rem; border-left: 1px solid var(--line); padding-left: .55rem;}
+.tree summary {cursor: pointer; list-style: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.tree summary::-webkit-details-marker {display: none;}
+.tree summary::before {content: "▸"; display: inline-block; width: .9rem; color: #8a8985;}
+.tree details[open] > summary::before {content: "▾";}
+.tree .f {white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.tree .tag {font-size: .7rem; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 0 .35rem;
+  margin-left: .3rem;}
+.tree .n {color: #8a8985; font-size: .78rem;}
+.st-key-sourcebox p, .st-key-sourcebox li {font-size: .86rem; line-height: 1.5;}
+.st-key-sourcebox h1, .st-key-sourcebox h2, .st-key-sourcebox h3 {font-size: 1rem !important;}
+</style>""")
 
-# ---- 2. Method and reproduction ---------------------------------------------------------
-st.header("2. Pick a method and reproduce it")
-method = st.selectbox("Method", [m["name"] for m in card["methods"]])
-spec = agent.spec(method)
-mc = spec.summary()
-c1, c2 = st.columns(2)
-with c1:
-    st.markdown(f"**{mc['method']}**: {mc['method_description']}")
-    st.markdown(f"Workflow `{mc['workflow']}` ({mc['language']}), declared software: "
-                f"{', '.join(mc['software']) or 'not stated'}")
-    st.markdown("**Expects**")
-    st.table(pd.DataFrame([{"property": k, "value": str(v)} for k, v in mc["expects"].items()]))
-with c2:
-    st.markdown("**Parameters**")
-    st.table(pd.DataFrame([{"name": k, "default": v["default"], "scaling": v.get("scaling", "")}
-                           for k, v in mc["parameters"].items()]))
-    if st.button("Reproduce on the paper's data", disabled=not mc["has_example_data"]):
-        with st.spinner("Running..."):
-            st.session_state["repro"] = reproduce(spec, agent.runs_dir, runner=runner, agent=who)
-    repro = st.session_state.get("repro")
-    if repro and repro.comparison:
-        (st.success if repro.comparison.reproduced else st.error)(repro.comparison.headline())
+# The divider between the chat and the workstation: drag to resize, double-click to reset.
+st.html("""<script>
+(function () {
+  const KEY = "recrate-split";
+  function apply(col, right, px) {
+    col.style.flex = "0 0 " + px + "px"; col.style.width = px + "px"; col.style.maxWidth = "none";
+    right.style.flex = "1 1 0"; right.style.minWidth = "0"; right.style.width = "auto";
+  }
+  function setup() {
+    const chat = document.querySelector(".st-key-chatcard");
+    if (!chat) return;
+    const col = chat.closest('[data-testid="stColumn"]');
+    if (!col) return;
+    const row = col.parentElement, right = col.nextElementSibling && col.nextElementSibling.classList.contains("rc-split")
+      ? col.nextElementSibling.nextElementSibling : col.nextElementSibling;
+    if (!right) return;
+    const saved = parseFloat(localStorage.getItem(KEY) || "");
+    if (!row.querySelector(":scope > .rc-split")) {
+      const bar = document.createElement("div");
+      bar.className = "rc-split"; bar.title = "Drag to resize · double-click to reset";
+      row.insertBefore(bar, right);
+      bar.addEventListener("mousedown", function (e) {
+        e.preventDefault(); bar.classList.add("dragging");
+        const x0 = e.clientX, w0 = col.getBoundingClientRect().width;
+        function move(ev) {
+          const total = row.getBoundingClientRect().width;
+          const px = Math.min(Math.max(w0 + ev.clientX - x0, 320), total - 420);
+          apply(col, right, px); localStorage.setItem(KEY, px);
+        }
+        function up() { bar.classList.remove("dragging"); document.removeEventListener("mousemove", move);
+          document.removeEventListener("mouseup", up); document.body.style.cursor = ""; }
+        document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+        document.body.style.cursor = "col-resize";
+      });
+      bar.addEventListener("dblclick", function () { localStorage.removeItem(KEY); col.removeAttribute("style");
+        right.removeAttribute("style"); });
+    }
+    if (saved && !col.style.flex) apply(col, right, saved);
+  }
+  setup();
+  if (!window.__recrateSplit) { window.__recrateSplit = new MutationObserver(setup);
+    window.__recrateSplit.observe(document.body, {childList: true, subtree: true}); }
+})();
+</script>""", unsafe_allow_javascript=True)
+ss = st.session_state
 
-# ---- 3. My images ---------------------------------------------------------------------
-st.header("3. Check my images")
-mode = st.radio("Your images", ["Folder path", "Upload files"], horizontal=True)
-data_dir: Path | None = None
-if mode == "Folder path":
-    p = st.text_input("Folder with your images", value=str(ROOT / "examples" / "demo" / "my_images"))
-    data_dir = Path(p) if p and Path(p).exists() else None
-else:
-    files = st.file_uploader("TIFF / OME-TIFF images", type=["tif", "tiff"], accept_multiple_files=True)
-    if files:
-        tmp = Path(st.session_state.setdefault("upload_dir", tempfile.mkdtemp(prefix="recrate-upload-")))
-        shutil.rmtree(tmp, ignore_errors=True)
-        tmp.mkdir(parents=True)
+
+def fmt_bytes(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return str(n)
+
+
+def short(text: str, limit: int = 240) -> str:
+    """The first sentences of a description, leaving out sentences that are only there to give a link."""
+    out = ""
+    for sent in re.split(r"(?<=[.!?])\s+", " ".join(text.split())):
+        if "http" in sent:
+            continue
+        if out and len(out) + len(sent) > limit:
+            break
+        out = f"{out} {sent}".strip()
+    return out
+
+
+def slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:50] or "research-object"
+
+
+def default_name() -> str:
+    """Who runs are recorded as: git's user.name, else the computer's user name."""
+    import getpass
+    import subprocess
+
+    try:
+        name = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, timeout=3).stdout.strip()
+    except Exception:  # noqa: BLE001
+        name = ""
+    return name or getpass.getuser()
+
+
+ss.setdefault("who", default_name())
+ss.setdefault("history", [])
+ss.setdefault("ro", {})
+ss.setdefault("figures", {})
+ss.setdefault("context_notes", [])
+ss.setdefault("uploads", Path(tempfile.mkdtemp(prefix="recrate-")))
+ss.setdefault("engine_choice", "auto")
+ss.setdefault("local_url", LOCAL_URL)
+ss.setdefault("section", "validate")
+who = ss.who
+runner = "auto"  # each workflow's language picks its runner (Galaxy, Fiji, Python)
+
+
+# ---- which model answers in the chat ----------------------------------------------------------
+@st.cache_data(ttl=20, show_spinner=False)
+def available_models(url: str) -> list[str]:
+    return local_models(url)
+
+
+def pick_model(models: list[str]) -> str | None:
+    for pref in ("qwen2.5", "qwen3", "llama3.1", "llama3.2", "mistral", "gemma"):
+        hit = next((m for m in models if pref in m.lower()), None)
+        if hit:
+            return hit
+    return models[0] if models else None
+
+
+def engine_plan() -> tuple[str, str]:
+    """(kind, label): claude | local | commands, chosen by the person or automatically (free first)."""
+    choice = ss.engine_choice
+    has_claude, _ = claude_available(ss.get("api_key"))
+    models = available_models(ss.local_url) if choice in ("auto", "local") else []
+    model = ss.get("local_model") if ss.get("local_model") in models else pick_model(models)
+    if choice == "claude" and has_claude:
+        return "claude", "Claude"
+    if choice in ("auto", "local") and model:
+        return "local", f"{model} · on this computer"
+    if choice == "auto" and has_claude:
+        return "claude", "Claude"
+    return "commands", "Simple commands"
+
+
+def make_engine(agent: PaperAgent, tools: ChatTools):
+    kind, _ = engine_plan()
+    if kind == "claude":
+        return ClaudeChat(agent, tools, api_key=ss.get("api_key"))
+    if kind == "local":
+        models = available_models(ss.local_url)
+        model = ss.get("local_model") if ss.get("local_model") in models else pick_model(models)
+        return OpenAICompatChat(agent, tools, model, ss.local_url)
+    return LocalChat(agent, tools)
+
+
+# ---- building the agent ----------------------------------------------------------------------
+def load_agent(path: Path, data: Path | None = None) -> None:
+    ss.agent_dir = str(path)
+    agent = PaperAgent.load(path)
+    ss.tools = ChatTools(agent, ss.uploads / "data")
+    ss.tools.data_dir = data
+    ss.engine = make_engine(agent, ss.tools)
+    ss.engine_kind = engine_plan()[0]
+    ss.run_name = None
+    ss.highlight = None
+
+
+def say(text: str) -> None:
+    ss.history.append({"role": "assistant", "parts": [{"kind": "text", "text": text}]})
+
+
+def build(trusted: bool) -> None:
+    ro = ss.ro
+    title = (ro.get("crate") or ro.get("paper") or {}).get("label", "research object")
+    out = ROOT / "agents" / slug(title)
+    label = ("Reading the RO-Crate, then reproducing each method…" if ro.get("crate") else
+             "Recreating the RO-Crate: publication date, the software available then, code and cited data…")
+    with st.spinner(label):
+        agentify(out, paper=(ro.get("paper") or {}).get("path"), crate=(ro.get("crate") or {}).get("path"),
+                 repo=ro.get("repo"), validate="all" if trusted else "safe")
+    load_agent(out, Path(ro["data"]["path"]) if ro.get("data") else None)
+    a = PaperAgent.load(out)
+    env = a.environment
+    lines = [f"- **{m.name}**: {m.status}" + (f". {m.detail}" if m.detail else "") for m in a.methods]
+    env_line = ""
+    if env:
+        known = [s for s in env.software if s.version and s.how != "later"]
+        env_line = (f"\n\nPublished **{env.published or 'on an unknown date'}**. {len(known)} of {len(env.software)} "
+                    "software versions determined" + (": " + ", ".join(f"{s.name} {s.version}" for s in known[:5])
+                                                      if known else "") + ".")
+    ss._goto = "validate"
+    say(f"{'Ready' if a.has_methods else 'Recreated the RO-Crate'}: **{a.card()['title']}**." + env_line
+        + ("\n\n" + "\n".join(lines) if lines else "\n\nNo runnable method yet: see **Validate** for what's needed.")
+        + "\n\nAsk me anything about it.")
+
+
+def open_example(key: str) -> None:
+    ex = EXAMPLES[key]
+    if not (ex["agent"] / "environment.json").exists():  # missing, or built by an older ReCRATE
+        with st.spinner("Building the example: reading the crate and reproducing each method…"):
+            agentify(ex["agent"], **ex["build"])
+    load_agent(ex["agent"], ex["data"])
+    ss.ro = {"example": key}
+    ss._goto = "validate"
+    a = PaperAgent.load(ex["agent"])
+    n_ok = sum(1 for m in a.methods if m.status == "validated")
+    say(f"Opened **{a.card()['title']}**. {n_ok} of {len(a.methods)} method(s) reproduce the published result. "
+        "Its example data is selected for **Reuse**. Ask me anything, or try *reproduce*, *check my data*, *run*.")
+
+
+def add_sources(text: str, files: list) -> list[str]:
+    """Turn what the person gave into parts of the research object. Returns lines to report."""
+    out, dest = [], ss.uploads / f"src-{len(ss.history)}"
+    for f in files:
+        p = dest / "upload" / f.name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(f.getbuffer())
+        out.append(record(from_upload(p, dest / slug(f.name))))
+    for ref in identify(text or ""):
+        try:
+            with st.spinner(f"Fetching {ref.label}…"):
+                found = fetch(ref, dest / slug(ref.label))
+            if found.kind == "code":
+                ss.ro["repo"] = found.url
+                out.append(f"💻 **Code**: {found.url}")
+            else:
+                out.append(record(found))
+        except Exception as e:  # noqa: BLE001 - network or format problems are reported, not raised
+            out.append(f"⚠️ Couldn't fetch {ref.label}: {e}")
+    return out
+
+
+def record(found) -> str:
+    icon = {"paper": "📄 **Paper**", "crate": "📦 **RO-Crate**", "data": "🗂️ **Data**"}.get(found.kind, "❔")
+    if found.kind in {"paper", "crate", "data"} and found.path:
+        ss.ro[found.kind] = {"label": found.label, "path": str(found.path), "url": found.url}
+    notes = (" · " + " · ".join(found.notes)) if found.notes else ""
+    link = f" ([link]({found.url}))" if found.url else ""
+    return f"{icon}: {found.label}{link}{notes}"
+
+
+def add_and_build(text: str, files: list) -> None:
+    """Add what was given; as soon as there is a crate or a paper, build (one step for the person)."""
+    lines = add_sources(text, files)
+    if lines:
+        say("\n".join(f"- {l}" for l in lines))
+    if ss.ro.get("crate") or ss.ro.get("paper"):
+        build(trusted=False)
+    elif not lines:
+        say("I didn't find an RO-Crate, a paper or an identifier in that. Try a DOI, a WorkflowHub or arXiv link, or "
+            "upload a PDF or a crate zip.")
+
+
+# ---- chat --------------------------------------------------------------------------------------
+def render_attachment(a: dict, key: str) -> None:
+    t = a["type"]
+    if t == "passages":
+        for h in a["items"][:2]:
+            st.markdown(f"<div class='quote'>{html.escape(' '.join(h['text'].split())[:420])}…</div>",
+                        unsafe_allow_html=True)
+    elif t == "checks":
+        st.markdown(f"**Input check: {ICON[a['status']]} {a['status']}**")
+        for r in a["rows"]:
+            if r["status"] != "ok" or r["note"]:
+                st.caption(f"{ICON[r['status']]} {r['check']}: published {r['paper']} · yours {r['your data']}"
+                           + (f" · {r['note']}" if r["note"] else ""))
+        for adj in a["adjustments"]:
+            st.caption(f"↳ {adj['parameter']} {adj['old']} → {adj['new']}: {adj['reason']}")
+    elif t == "comparison":
+        (st.success if a["ok"] else st.error)(a["headline"])
+    elif t == "params":
+        st.caption("Parameters: " + ", ".join(f"`{k} = {v}`" for k, v in a["params"].items()))
+    elif t == "crate":
+        z = Path(a["zip"])
+        st.success(f"Output RO-Crate ready. {a['record']}")
+        if z.exists():
+            st.download_button("Download the RO-Crate (.zip)", z.read_bytes(), file_name=z.name,
+                               mime="application/zip", key=f"dl-{key}", icon=":material/download:")
+    elif t == "methods_text":
+        st.code(a["text"], language=None, wrap_lines=True)
+    elif t in {"record", "note"}:
+        st.caption(a.get("headline") or a.get("text"))
+    elif t == "error":
+        st.error(a["text"])
+    elif t == "table":
+        st.dataframe(pd.DataFrame(a["rows"]), hide_index=True, width="stretch")
+
+
+def render_message(msg: dict, idx) -> None:
+    with st.container(key=f"msg-{'u' if msg['role'] == 'user' else 'a'}-{idx}"):
+        for j, part in enumerate(msg["parts"]):
+            if part["kind"] == "text":
+                st.markdown(part["text"])
+            elif part["kind"] == "tool":
+                st.caption(f"↳ {TOOL_LABEL.get(part['name'], part['name'])}")
+            elif part["kind"] == "attachment":
+                render_attachment(part["data"], f"{idx}-{j}")
+
+
+def after_tool(name: str, result) -> None:
+    for a in result.attachments:
+        if a["type"] == "passages" and a["items"]:
+            from recrate.workspace import quote_for
+
+            terms = re.findall(r"[a-z]{4,}", ss.get("last_prompt", "").lower())
+            ss.highlight = quote_for(a["items"][0]["text"], terms) or " ".join(a["items"][0]["text"].split())[:200]
+    if name in {"reproduce", "run_on_my_data"} and ss.tools.last_run is not None:
+        ss.run_name = ss.tools.last_run.name
+
+
+INTRO = ("Hi! Give me a piece of research and I'll recreate it, so you can **validate** it on its own data or "
+         "**reuse** its methods on yours.\n\n"
+         "- a research **RO-Crate**: a zip, a WorkflowHub link or DOI, a Zenodo DOI\n"
+         "- or a **paper**: a PDF, a DOI or an arXiv link. I'll recreate its RO-Crate with the software as it was "
+         "when it was published\n\n"
+         "Paste a link below, or use the panel on the right.")
+
+
+def context_card(agent: PaperAgent) -> None:
+    c = agent.card()
+    n_ok = sum(1 for m in agent.methods if m.status == "validated")
+    meta = " · ".join(x for x in [c.get("published") and f"published {c['published']}",
+                                  f"{n_ok}/{len(agent.methods)} reproduced" if agent.methods else "no runnable method yet",
+                                  c.get("crate_source")] if x)
+    about = short(agent.methods[0].description, 400) if agent.methods and agent.methods[0].description else ""
+    src = f"<p><a href='{html.escape(c['doi'])}' style='color:#9fd3c4'>{html.escape(c['doi'])}</a></p>" if c.get("doi") else ""
+    st.markdown(f"<div class='ctx'><div class='eyebrow'>Research object</div><div class='t'>{html.escape(c['title'])}"
+                f"</div><div class='m'>{html.escape(meta)}</div>"
+                + (f"<details><summary>Show more ▾</summary><p>{html.escape(about)}</p>{src}</details>" if about or src else "")
+                + "</div>", unsafe_allow_html=True)
+
+
+def chat_card() -> None:
+    kind, label = engine_plan()
+    color = {"claude": "#d97757", "local": "#1f7a6b", "commands": "#b8b3a7"}[kind]
+    h1, h2 = st.columns([1, 1.4], vertical_alignment="center")
+    h1.markdown("**Chat**")
+    h2.markdown(f"<div style='text-align:right'><span class='chip'><span class='dot' style='background:{color}'></span>"
+                f"{html.escape(label)}</span></div>", unsafe_allow_html=True)
+    has_agent = bool(ss.get("agent_dir"))
+    if has_agent and ss.get("engine_kind") != kind:  # the model choice changed: switch engines, keep the transcript
+        ss.engine = make_engine(PaperAgent.load(ss.agent_dir), ss.tools)
+        ss.engine_kind = kind
+    box = st.container(key="chatscroll")
+    with box:
+        if has_agent:
+            context_card(PaperAgent.load(ss.agent_dir))
+        if not ss.history:
+            render_message({"role": "assistant", "parts": [{"kind": "text", "text": INTRO}]}, "intro")
+        for i, msg in enumerate(ss.history):
+            render_message(msg, i)
+    entry = st.chat_input("Ask about the research, or attach your data…" if has_agent else
+                          "Paste a DOI or link, or attach a paper or crate…", accept_file="multiple")
+    st.markdown("<div class='muted' style='font-size:.72rem;margin-top:-.2rem'>Enter to send · Shift+Enter for a new "
+                "line</div>", unsafe_allow_html=True)
+    if not entry:
+        return
+    text, files = entry.text or "", list(entry.files or [])
+    ss.last_prompt = text
+    shown = text + (("\n\n📎 " + ", ".join(f.name for f in files)) if files else "")
+    ss.history.append({"role": "user", "parts": [{"kind": "text", "text": shown or "(files)"}]})
+
+    if not has_agent or (identify(text) and not files):
+        add_and_build(text, files)
+        st.rerun()
+
+    sent = text
+    if files:  # attached files become your data
+        d = ss.uploads / "data"
+        d.mkdir(parents=True, exist_ok=True)
         for f in files:
-            (tmp / f.name).write_bytes(f.getbuffer())
-        data_dir = tmp
+            (d / f.name).write_bytes(f.getbuffer())
+        ss.tools.data_dir = None
+        sent = (text or "I added my data.") + f"\n\n[The user attached: {', '.join(f.name for f in files)}. " \
+            "Tools use them when data_path is omitted.]"
+    if ss.context_notes:
+        sent = "[Done in the workstation since my last message: " + "; ".join(ss.context_notes) + "]\n\n" + sent
+        ss.context_notes = []
+    reply = {"role": "assistant", "parts": []}
+    idx = len(ss.history)
+    with box:
+        render_message(ss.history[-1], idx - 1)
+        with st.container(key=f"msg-a-live-{idx}"):
+            bar = st.empty()
+            ss.tools.progress = lambda i, n, name: bar.progress(i / max(n, 1), text=f"{name} ({i + 1}/{n})")
+            try:
+                with st.spinner("Thinking…"):
+                    for ev in ss.engine.send(sent):
+                        if ev[0] == "text":
+                            reply["parts"].append({"kind": "text", "text": ev[1]})
+                            st.markdown(ev[1])
+                        elif ev[0] == "tool":
+                            reply["parts"].append({"kind": "tool", "name": ev[1]})
+                            st.caption(f"↳ {TOOL_LABEL.get(ev[1], ev[1])}")
+                        elif ev[0] == "result":
+                            after_tool(ev[1], ev[2])
+                            for a in ev[2].attachments:
+                                j = len(reply["parts"])
+                                reply["parts"].append({"kind": "attachment", "data": a})
+                                render_attachment(a, f"live-{idx}-{j}")
+            except Exception as e:  # noqa: BLE001 - connection or model errors are shown, not raised
+                msg = f"Something went wrong: {type(e).__name__}: {e}"
+                reply["parts"].append({"kind": "attachment", "data": {"type": "error", "text": msg}})
+                st.error(msg)
+            finally:
+                ss.tools.progress = None
+                bar.empty()
+    ss.history.append(reply)
+    st.rerun()
 
-if data_dir:
-    report = check_inputs(spec, data_dir)
-    icon = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
-    st.table(pd.DataFrame([{**r, "status": f"{icon[r['status']]} {r['status']}"} for r in report.as_rows()]))
-    if report.adjustments:
-        st.warning("Proposed adjustments so the method measures the same physical sizes:\n\n" +
-                   "\n".join(f"- **{a.parameter}**: {a.old} → {a.new} ({a.reason})" for a in report.adjustments))
-    if not report.can_run:
-        st.error("Your data does not fit this method yet. Fix the failed checks first.")
+
+# ---- workstation helpers ----------------------------------------------------------------------------
+def data_signature(files: list[Path]) -> tuple:
+    return tuple((p.name, p.stat().st_mtime_ns) for p in files)
+
+
+@st.cache_data(show_spinner=False)
+def cached_check(agent_dir: str, method: str, data: str, sig: tuple) -> dict:
+    a = PaperAgent.load(agent_dir)
+    try:
+        r = check_inputs(a.spec(method), Path(data))
+    except CrateError as e:
+        return {"status": "fail", "can_run": False, "adjustments": [],
+                "rows": [{"check": "Method inputs", "paper": "not declared", "your data": "-", "status": "fail",
+                          "note": f"{e} The crate doesn't say what data this method expects."}]}
+    return {"status": r.status, "can_run": r.can_run, "rows": r.as_rows(),
+            "adjustments": [a.__dict__ for a in r.adjustments]}
+
+
+def note_for_chat(text: str) -> None:
+    ss.history.append({"role": "assistant", "parts": [{"kind": "text", "text": text}]})
+    ss.context_notes.append(text)
+
+
+def run_with_progress(label: str, fn):
+    bar = st.progress(0.0, text=label)
+    ss.tools.progress = lambda i, n, name: bar.progress(i / max(n, 1), text=f"{label}: {name} ({i + 1}/{n})")
+    try:
+        return fn()
+    finally:
+        ss.tools.progress = None
+        bar.empty()
+
+
+def latest(runs: list[dict], method: str, mode: str) -> Path | None:
+    hits = [r for r in runs if r["method"] == method and r["mode"] == mode]
+    return Path(hits[-1]["path"]) if hits else None
+
+
+def run_inputs(run_dir: Path, data_dir: Path) -> Path:
+    d = run_dir / "inputs"
+    return d if d.exists() and any(d.iterdir()) else data_dir
+
+
+def overlay_source(overlay: Path, run_dir: Path, data_dir: Path) -> Path | None:
+    stem = overlay.name.removesuffix("_overlay.png")
+    for base in (run_dir / "inputs", data_dir):
+        for suf in (".tif", ".tiff"):
+            if (base / f"{stem}{suf}").exists():
+                return base / f"{stem}{suf}"
+    return None
+
+
+def source_text(agent: PaperAgent) -> None:
+    if not agent.paper:
+        st.caption("No paper text in this research object.")
+        return
+    hl = ss.get("highlight")
+    key = " ".join(hl.split())[:60] if hl else None
+    with st.container(height=360, border=False, key="sourcebox"):
+        for p in passages(agent.paper.text):
+            flat = " ".join(p.split())
+            if key and key in flat:
+                s = html.escape(" ".join(hl.split()))
+                st.markdown(html.escape(flat).replace(s, f"<mark class=cite>{s}</mark>"), unsafe_allow_html=True)
+            else:
+                st.markdown(p)
+
+
+def environment_table(agent: PaperAgent) -> None:
+    env = agent.environment
+    if env is None or not env.software:
+        st.caption("No software named in the sources.")
+        return
+    st.dataframe(pd.DataFrame([{"software": s.name, "version": s.version or "?", "how we know": s.note}
+                               for s in env.software]), hide_index=True, width="stretch",
+                 column_config={"how we know": st.column_config.TextColumn(width="large")})
+    req = agent.crate_dir / "environment" / "requirements.txt" if agent.crate_dir else None
+    if req and req.exists() and "==" in req.read_text(encoding="utf-8"):
+        st.download_button("requirements.txt (pinned as of publication)", req.read_bytes(), file_name="requirements.txt",
+                           icon=":material/download:")
+
+
+# ---- results, review and figures (shared by Validate and Reuse) ----------------------------
+def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None:
+    if run_dir is None:
+        st.caption("No runs yet: reproduce a method or run it on your data.")
+        return
+    s = summarise_run(run_dir)
+    spec = agent.spec(s["method"])
+    rows = read_rows(run_dir / "outputs" / "results.csv")
+    reported = read_rows(spec.expected_results) if spec.expected_results and spec.expected_results.exists() else None
+    w = ss.tools.whatifs.get(run_dir.name)
+    changed: list[str] = []
+    if s["mode"] == "reproduce":
+        (st.success if s["verdict"] == "reproduced" else st.error)(s["headline"])
+        other, lab1, lab2, ref_rows = reported, "This run", "Published", None
     else:
-        apply = st.checkbox("Apply the adjustments", value=True, disabled=not report.adjustments)
-        channel = st.number_input("Channel to analyse (0-based)", min_value=0, value=0, step=1)
-        st.header("4. Results and record")
-        if st.button(f"Run {method} on my images"):
-            with st.spinner("Running..."):
-                st.session_state["reuse"] = run_on_data(spec, data_dir, agent.runs_dir, runner=runner, agent=who,
-                                                        auto_adjust=apply, channel=int(channel))
+        same, why = comparable_with_paper(spec, run_inputs(run_dir, data_dir))
+        if not same:
+            st.caption(f"ℹ️ {why}")
+            reported = None
+        used = {p["name"]: p["value"] for p in run_story(run_dir)["parameters"]}
+        changed = [f"{k} {v}" for k, v in used.items() if k in spec.default_params() and str(spec.default_params()[k]) != v]
+        lab1 = "Your run" + (f" ({', '.join(changed)})" if changed else "")
+        lab2 = "Published values unchanged (" + ", ".join(f"{k} {v}" for k, v in spec.default_params().items()
+                                                         if str(v) != used.get(k)) + ")"
+        other, ref_rows = (w["rows"] if w else None), reported
+    metrics = numeric_columns(rows)
+    if not metrics:
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        return
+    metric = st.segmented_control("Measure", metrics, default=metrics[0], key=f"metric-{s['run']}",
+                                  label_visibility="collapsed") or metrics[0]
+    mean = lambda rr: sum(float(r[metric]) for r in rr if r.get(metric)) / max(1, len(rr))  # noqa: E731
+    c = st.columns(3)
+    c[0].metric("This run" if s["mode"] == "reproduce" else "Your run", f"{mean(rows):.4g}", border=True, help=lab1)
+    if s["mode"] == "reproduce" and other:
+        c[1].metric("Published", f"{mean(other):.4g}", border=True)
+    elif other:
+        c[1].metric("Published values", f"{mean(other):.4g}", delta=f"{mean(other) - mean(rows):+.3g}",
+                    delta_color="off", border=True, help=lab2)
+    if ref_rows:
+        c[2].metric("Published data", f"{mean(ref_rows):.4g}", border=True, help="Reported on the published data")
+    df = pd.DataFrame([{"item": r.get("image") or r[list(r)[0]], "value": float(r[metric]), "series": lab1} for r in rows])
+    if other:
+        df = pd.concat([df, pd.DataFrame([{"item": r.get("image") or r[list(r)[0]], "value": float(r[metric]),
+                                           "series": lab2} for r in other if r.get(metric)])])
+    domain = [lab1] + ([lab2] if other else [])
+    pts = alt.Chart(df).mark_circle(size=110, opacity=1).encode(
+        x=alt.X("item:N", title=None, axis=alt.Axis(labelAngle=0, labelLimit=120)),
+        xOffset=alt.XOffset("series:N", scale=alt.Scale(domain=domain)),
+        y=alt.Y("value:Q", title=metric.replace("_", " "), scale=alt.Scale(zero=False), axis=alt.Axis(format=",.4~r")),
+        color=alt.Color("series:N", scale=alt.Scale(domain=domain, range=SERIES[:len(domain)]),
+                        legend=alt.Legend(orient="bottom", direction="vertical", title=None, labelLimit=0)),
+        tooltip=["item", "series", alt.Tooltip("value:Q", format=".4g")])
+    layers, rng = [pts], None
+    vals = [float(r[metric]) for r in (ref_rows or []) if r.get(metric)]
+    if vals:
+        rng = (min(vals), max(vals))
+        ref = pd.DataFrame({"lo": [rng[0]], "hi": [rng[1]], "label": ["published range" if rng[1] > rng[0] else "published"]})
+        mark = (alt.Chart(ref).mark_rect(color="#8a8985", opacity=0.18).encode(y="lo:Q", y2="hi:Q") if rng[1] > rng[0]
+                else alt.Chart(ref).mark_rule(color="#8a8985", strokeDash=[4, 3], strokeWidth=1.5).encode(y="lo:Q"))
+        lbl = alt.Chart(ref).mark_text(align="left", dx=4, dy=-7, color="#8a8985", fontSize=11).encode(
+            y="hi:Q", x=alt.value(0), text="label:N")
+        layers = [mark, lbl, pts]
+    st.altair_chart(alt.layer(*layers).properties(height=250), width="stretch")
+    if s["mode"] != "reproduce" and not other and changed:
+        if st.button("Compare with the published values unchanged", key=f"cmp-{s['run']}"):
+            ss.tools.whatifs[s["run"]] = run_with_progress("Running with the published values", lambda: whatif(
+                spec, run_inputs(run_dir, data_dir), spec.default_params(), runner=runner))
+            st.rerun()
+    c1, c2 = st.columns(2)
+    chart_png = comparison_chart([r.get("image") or r[list(r)[0]] for r in rows], [float(r[metric]) for r in rows],
+                                 [float(r[metric]) for r in other] if other else None, metric, lab1, lab2, rng)
+    c1.download_button("Chart (PNG)", chart_png, file_name=f"{s['run']}-{metric}.png", mime="image/png",
+                       width="stretch", icon=":material/download:", key=f"chartdl-{s['run']}-{metric}")
+    if c2.button("Add chart to the export", width="stretch", key=f"addchart-{s['run']}-{metric}"):
+        ss.figures[f"{s['run']}-{metric}.png"] = chart_png
+        st.toast("Added to the export bundle.")
+    with st.expander("Table"):
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    ovs = sorted((run_dir / "outputs" / "overlays").glob("*.png"))
+    if ovs:
+        with st.expander(f"Review each result ({len(ovs)})"):
+            review(agent, run_dir, ovs, rows, spec, data_dir)
+        with st.expander("Make a figure"):
+            figure_builder(agent, run_dir, data_dir)
 
-reuse = st.session_state.get("reuse")
-if reuse:
-    run_dir = reuse.run_dir
-    st.markdown(f"**Parameters used:** `{reuse.params}`")
-    st.dataframe(pd.read_csv(run_dir / "outputs" / "results.csv"), use_container_width=True)
-    overlays = sorted((run_dir / "outputs" / "overlays").glob("*.png"))
-    if overlays:
-        st.image([str(o) for o in overlays], caption=[o.stem for o in overlays], width=260)
-        a1, a2 = st.columns(2)
-        if a1.button("Looks right: approve"):
-            approve(run_dir, who, True)
-            st.success("Approval recorded in the run crate.")
-        if a2.button("Something is wrong: reject"):
-            approve(run_dir, who, False)
-            st.warning("Rejection recorded in the run crate.")
-    st.subheader("Methods paragraph")
-    st.text_area("Copy into your paper", methods_paragraph(run_dir), height=160)
-    zip_path = shutil.make_archive(str(run_dir), "zip", run_dir)
+
+def review(agent, run_dir: Path, ovs: list[Path], rows: list[dict], spec, data_dir: Path) -> None:
+    s = summarise_run(run_dir)
+    by = {r.get("image"): r for r in rows}
+    metrics = numeric_columns(rows)
+    reported = read_rows(spec.expected_results) if s["mode"] == "reuse" and spec.expected_results and \
+        spec.expected_results.exists() and comparable_with_paper(spec, run_inputs(run_dir, data_dir))[0] else None
+    flags = flag_images(rows, metrics[0], reported, spec.tolerances().get(metrics[0], 0.1)) if metrics else {}
+    reviews = image_reviews(run_dir)
+    st.caption(f"{len(reviews)} of {len(ovs)} reviewed · {sum(1 for v in flags.values() if v)} flagged · whole run: "
+               f"{s['approved'] or 'not reviewed'}")
+    c1, c2 = st.columns(2)
+    if c1.button("Whole run looks right", key=f"wok-{s['run']}", width="stretch", icon=":material/thumb_up:"):
+        approve(run_dir, ss.tools.who, True)
+        st.rerun()
+    if c2.button("Something's wrong", key=f"wno-{s['run']}", width="stretch", icon=":material/thumb_down:"):
+        approve(run_dir, ss.tools.who, False)
+        st.rerun()
+    order = sorted(ovs, key=lambda o: (not flags.get(o.name.replace("_overlay.png", ".tif")), o.name))
+    grid = st.columns(3)
+    for k, ov in enumerate(order):
+        stem = ov.name.removesuffix("_overlay.png")
+        img = next((n for n in by if n and Path(n).stem == stem), f"{stem}.tif")
+        with grid[k % 3].container(border=True):
+            st.image(str(ov), width="stretch")
+            st.caption(f"**{stem}** · " + " · ".join(f"{m} {float(by[img][m]):.3g}" for m in metrics[:2] if img in by))
+            for f in flags.get(img, []):
+                st.caption(f"⚠️ {f}")
+            rv = reviews.get(img)
+            if rv:
+                st.caption(("✅ accepted" if rv["value"] == "accepted" else "❌ rejected") + f" by {rv['by']}"
+                           + (f": {rv['note']}" if rv["note"] else ""))
+            b1, b2 = st.columns(2)
+            if b1.button("Right", key=f"iok-{s['run']}-{stem}", width="stretch", icon=":material/thumb_up:"):
+                review_image(run_dir, ss.tools.who, img, True)
+                st.rerun()
+            if b2.button("Wrong", key=f"ino-{s['run']}-{stem}", width="stretch", icon=":material/thumb_down:"):
+                review_image(run_dir, ss.tools.who, img, False)
+                st.rerun()
+
+
+def figure_builder(agent: PaperAgent, run_dir: Path, data_dir: Path) -> None:
+    srcs: dict[str, tuple[str, float | None]] = {}
+    for f in list_images(data_dir)[:24] if data_dir.exists() else []:
+        srcs[f"Your image · {f.stem}"] = (str(f), None)
+    for ov in sorted((run_dir / "outputs" / "overlays").glob("*.png")):
+        src = overlay_source(ov, run_dir, data_dir)
+        srcs[f"Detected · {ov.stem.removesuffix('_overlay')}"] = (str(ov), pixel_size_um(src) if src else None)
+    for stem, p in (ss.tools.whatifs.get(run_dir.name) or {}).get("overlays", {}).items():
+        src = overlay_source(Path(p), run_dir, data_dir)
+        srcs[f"Detected, published values · {stem}"] = (p, pixel_size_um(src) if src else None)
+    for m in agent.methods:
+        spec = agent.spec(m.id)
+        if spec.example_data and spec.example_data.exists():
+            for f in list_images(spec.example_data)[:6]:
+                srcs[f"Published image · {f.stem}"] = (str(f), None)
+            break
+    labels, k = list(srcs), run_dir.name
+    if st.button("Preset: published image vs yours, same scale", key=f"fig-preset-{k}"):
+        ss[f"fig_pick-{k}"] = [l for l in [next((l for l in labels if l.startswith(p)), None) for p in
+                                           ("Published image", "Your image", "Detected ·", "Detected, published")] if l]
+        ss[f"fig_same-{k}"] = True
+    chosen = st.multiselect("Panels, in order", labels, key=f"fig_pick-{k}", max_selections=12)
+    if not chosen:
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    cols = c1.number_input("Columns", 1, 4, value=min(len(chosen), 2), key=f"fig-cols-{k}")
+    fmt = c2.selectbox("Format", ["png", "pdf", "svg"], key=f"fig-fmt-{k}")
+    same = c3.toggle("Same scale", key=f"fig_same-{k}", help="Resample to one µm per pixel")
+    bar = c4.number_input("Scale bar µm", min_value=0.0, value=0.0, step=5.0, help="0 = automatic", key=f"fig-bar-{k}")
+    panels = [Panel(srcs[l][0], l.split(" · ")[0], srcs[l][1]) for l in chosen]
+    kw = dict(cols=int(cols), width_in=7.0, scale_bar_um=bar or None, same_scale=same, letters=True)
+    try:
+        preview, notes = panel_figure(panels, fmt="png", dpi=100, **kw)
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Couldn't build the figure: {e}")
+        return
+    st.image(preview, width="stretch")
+    st.caption(" ".join(notes))
+    data, _ = panel_figure(panels, fmt=fmt, dpi=300, **kw)
+    name = f"figure-{len(ss.figures) + 1}.{fmt}"
     d1, d2 = st.columns(2)
-    d1.download_button("Download run crate (.zip)", Path(zip_path).read_bytes(), file_name=Path(zip_path).name)
-    if d2.button("Publish back to the paper's record"):
-        st.success(headline(publish_back(spec, run_dir)["summary"]))
+    d1.download_button(f"Figure ({fmt.upper()})", data, file_name=name, width="stretch", icon=":material/download:",
+                       key=f"fig-dl-{k}",
+                       mime={"png": "image/png", "pdf": "application/pdf", "svg": "image/svg+xml"}[fmt])
+    if d2.button("Add to the export", width="stretch", key=f"fig-add-{k}"):
+        ss.figures[name] = data
+        st.toast(f"{name} added to the export bundle.")
 
-# ---- Record --------------------------------------------------------------------------
-st.header("The paper's reproducibility record")
-runs = find_runs(spec, agent.runs_dir)
-if runs:
-    st.info(headline(summarise_record(runs)))
-    st.dataframe(pd.DataFrame([{k: r[k] for k in ("when", "method", "mode", "verdict", "by", "images", "approved")}
-                               for r in runs]), use_container_width=True)
-else:
-    st.caption("No runs yet.")
+
+# ---- Validate: does the research reproduce on its own data? ------------------------------------------
+def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> None:
+    env = agent.environment
+    if not agent.methods:
+        empty_validate(agent)
+    else:
+        n_ok = sum(1 for m in agent.methods if m.status == "validated")
+        n = len(agent.methods)
+        if n_ok == n:
+            st.success(f"**{n_ok} of {n} method(s) reproduce the published result.**")
+        elif any(m.status in {"differs", "failed"} for m in agent.methods):
+            st.warning(f"**{n_ok} of {n} method(s) reproduce the published result.** See below for what differs.")
+        else:
+            st.info(f"**{n_ok} of {n} method(s) reproduced so far.** Use *Reproduce all* below.")
+    for m in agent.methods:
+        spec = agent.spec(m.id)
+        has_data = bool(spec.example_data and spec.example_data.exists())
+        has_results = bool(spec.expected_results and spec.expected_results.exists())
+        with st.container(border=True):
+            st.markdown(f"**{m.name}** &nbsp; {BADGE.get(m.status, m.status)} &nbsp; :gray-badge[{m.language}]")
+            if m.detail:
+                st.markdown(f"<span class='muted'>{html.escape(m.detail)}</span>", unsafe_allow_html=True)
+            st.caption(("✅ published data" if has_data else "❌ no published data") + " · " +
+                       ("✅ published results" if has_results else "❌ no published results to compare with"))
+            run = latest(runs, m.name, "reproduce")
+            if run and st.toggle("Show the latest reproduction", key=f"showrep-{m.id}"):
+                results_tab(agent, run, data_dir)
+    with st.expander("Software environment" + (f" · as of {env.published}" if env and env.published else "")):
+        if env and env.published:
+            st.caption(f"Publication date from {env.published_source}.")
+        environment_table(agent)
+    with st.expander("Read the source" + (" · cited passage highlighted" if ss.get("highlight") else ""),
+                     expanded=bool(ss.get("highlight"))):
+        source_text(agent)
+
+
+def empty_validate(agent: PaperAgent) -> None:
+    """A research object with no runnable method: say what was found, and exactly how to make it runnable."""
+    import json as _json
+
+    g = _json.loads((agent.crate_dir / "ro-crate-metadata.json").read_text(encoding="utf-8"))["@graph"] if agent.crate_dir else []
+    data = [e for e in g if e.get("@type") == "Dataset" and e["@id"] != "./"]
+    code = [e for e in g if e.get("@type") == "SoftwareSourceCode"]
+    st.info("**Nothing to run yet.** ReCRATE recreated this research's RO-Crate from the paper, but the paper alone "
+            "doesn't say how to run its methods: that needs a runnable description (the workflow or script, its "
+            "inputs and parameters, and the published results to compare with).")
+    with st.container(border=True):
+        st.markdown("**What the paper gives**")
+        st.markdown(("- Data: " + ", ".join(f"[{e['name'].split('(')[-1].rstrip(')')}]({e['@id']})" for e in data))
+                    if data else "- Data: none linked in the paper")
+        st.markdown(("- Code: " + ", ".join(f"[{e['@id']}]({e['@id']})" for e in code)) if code else
+                    "- Code: no repository linked in the paper")
+        env = agent.environment
+        st.markdown(f"- Software and models named: {len(env.software) if env else 0} (see *Software environment* below)")
+    with st.container(border=True):
+        st.markdown("**Make its methods runnable with your Claude subscription** (free with it, no API key)")
+        rel = agent.path.relative_to(ROOT) if agent.path.is_relative_to(ROOT) else agent.path
+        st.markdown("1. Open a terminal in the ReCRATE folder and start Claude Code:")
+        st.code(f'cd "{ROOT}"\nclaude', language="bash")
+        st.markdown("2. In Claude Code, run the command below. Claude reads the paper and its code, describes each "
+                    "method, runs it on the published data and repairs it until it validates.")
+        st.code(f"/agentify {rel}", language=None)
+        st.markdown("3. Come back here and reload.")
+        if st.button("Reload this research object", icon=":material/refresh:"):
+            load_agent(agent.path, ss.tools.data_dir)
+            st.rerun()
+        if not code:
+            st.caption("This paper links no code, so Claude can only describe methods it can implement from the text "
+                       "and the data; it will say what it couldn't find.")
+
+
+def validate_actions(agent: PaperAgent) -> None:
+    runnable = [m for m in agent.methods if agent.spec(m.id).example_data and agent.spec(m.id).example_data.exists()]
+    needs_trust = [m for m in runnable if runs_own_code(m.language) and m.status == "not validated"]
+    c1, c2 = st.columns([3, 1], vertical_alignment="center")
+    c2.caption(f"{len(runnable)} with published data")
+    if needs_trust:
+        with c1.popover("Reproduce all", type="primary", width="stretch", icon=":material/replay:"):
+            st.markdown("This runs the workflows' own code (" + ", ".join(sorted({m.language for m in needs_trust}))
+                        + ") on your computer. Do it only if you trust where it comes from.")
+            if st.button("I trust it: run", type="primary", key="trust-all"):
+                with st.spinner("Reproducing…"):
+                    revalidate(agent.path, runner=runner)
+                load_agent(agent.path, ss.tools.data_dir)
+                note_for_chat("Reproduced all methods on the published data.")
+                st.rerun()
+    elif c1.button("Reproduce all", type="primary", width="stretch", icon=":material/replay:", disabled=not runnable):
+        heads = []
+        for m in runnable:
+            res = run_with_progress(f"Reproducing {m.name}", lambda m=m: ss.tools.call("reproduce", {"method": m.name}))
+            heads.append(f"**{m.name}**: " + next((a["headline"] for a in res.attachments if a["type"] == "comparison"),
+                                                   next((a["text"] for a in res.attachments if a["type"] == "error"), "done")))
+        note_for_chat("Reproduced on the published data.\n\n" + "\n".join(f"- {h}" for h in heads))
+        st.rerun()
+
+
+# ---- Reuse: your data, checked, run ---------------------------------------------------------------------
+def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: list[Path]) -> None:
+    tools: ChatTools = ss.tools
+    if not agent.methods:
+        st.info("No runnable method yet: see **Validate**.")
+        return
+    st.markdown("<div class='eyebrow'>1 · Your data</div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        mode = st.segmented_control("Data", ["Upload files", "A folder on this computer"], key="data_mode",
+                                    default="A folder on this computer" if tools.data_dir else "Upload files",
+                                    label_visibility="collapsed")
+        if mode == "A folder on this computer":
+            folder = st.text_input("Folder", value=str(tools.data_dir or ""), placeholder="/path/to/your/data",
+                                   help="Nothing is copied: best for large datasets.", label_visibility="collapsed")
+            if folder and Path(folder).expanduser().is_dir() and Path(folder).expanduser() != tools.data_dir:
+                tools.data_dir = Path(folder).expanduser()
+                st.rerun()
+        else:
+            up = st.file_uploader("Your data files", accept_multiple_files=True, label_visibility="collapsed")
+            if up:
+                d = ss.uploads / "data"
+                d.mkdir(parents=True, exist_ok=True)
+                new = [f for f in up if not (d / f.name).exists()]
+                for f in new:
+                    (d / f.name).write_bytes(f.getbuffer())
+                if new or tools.data_dir is not None:
+                    tools.data_dir = None
+                    st.rerun()
+        st.caption(f"{len(files)} file(s) · {fmt_bytes(sum(f.stat().st_size for f in files))} · "
+                   + ("uploaded" if data_dir == ss.uploads / "data" else f"folder `{data_dir.name}`") if files else
+                   "No data yet: upload files, or point at a folder.")
+    st.markdown("<div class='eyebrow' style='margin-top:.6rem'>2 · Does it fit each method?</div>", unsafe_allow_html=True)
+    missing_px = False
+    for m in agent.methods:
+        spec = agent.spec(m.id)
+        fit = cached_check(str(agent.path), m.name, str(data_dir), data_signature(files)) if files else None
+        adj = {a["parameter"]: a for a in (fit["adjustments"] if fit else [])}
+        with st.container(border=True):
+            verdict = "<span class='muted'>add your data to check</span>" if not fit else ICON[fit["status"]] + " " + {
+                "ok": "fits as is", "warn": f"fits with {len(adj)} adjustment(s)" if adj else "fits, with warnings",
+                "fail": "doesn't fit yet"}[fit["status"]]
+            st.markdown(f"**{m.name}** &nbsp; {verdict}", unsafe_allow_html=True)
+            if fit:
+                for a in fit["adjustments"]:
+                    st.caption(f"↳ {a['parameter']} {a['old']:g} → {a['new']:g}: {a['reason']}")
+                for row in fit["rows"]:
+                    if row["status"] == "fail":
+                        st.caption(f"❌ {row['check']}: {row['note']}")
+                        missing_px |= row["check"] == "Pixel size" and row["your data"] == "missing"
+            overrides = {}
+            with st.expander("Parameters, and where they come from"):
+                for s in parameter_sources(agent, spec):
+                    st.markdown(f"`{s['name']}` = **{s['default']}**" +
+                                (f" &nbsp; <span class='muted'>scales with {s['scaling'].replace('_', ' ')}</span>"
+                                 if s["scaling"] else ""), unsafe_allow_html=True)
+                    if s["quote"]:
+                        c1, c2 = st.columns([6, 1])
+                        c1.markdown(f"<div class='quote'>{html.escape(s['quote'])}</div>", unsafe_allow_html=True)
+                        if c2.button("Show", key=f"show-{m.id}-{s['name']}", help="Highlight it in the source (Validate)"):
+                            ss.highlight, ss._goto = s["quote"], "validate"
+                            st.rerun()
+                    elif s["description"]:
+                        st.caption(s["description"])
+                    if s["name"] in adj:
+                        st.caption(f"↳ for your data: **{adj[s['name']]['new']:g}** ({adj[s['name']]['reason']})")
+                    if st.toggle("Use my own value", key=f"own-{m.id}-{s['name']}"):
+                        c1, c2 = st.columns([1, 2])
+                        num = isinstance(s["default"], (int, float))
+                        start = float(adj[s["name"]]["new"]) if s["name"] in adj else (float(s["default"]) if num else 0.0)
+                        v = (c1.number_input("Value", value=start, key=f"val-{m.id}-{s['name']}") if num else
+                             c1.text_input("Value", value=str(s["default"]), key=f"val-{m.id}-{s['name']}"))
+                        why = c2.text_input("Why? (recorded)", key=f"why-{m.id}-{s['name']}")
+                        overrides[s["name"]] = (v, why)
+                if fit:
+                    st.markdown("**All input checks**")
+                    st.dataframe(pd.DataFrame([{**x, "status": f"{ICON[x['status']]} {x['status']}",
+                                                "paper": str(x["paper"]), "your data": str(x["your data"])}
+                                               for x in fit["rows"]]), hide_index=True, width="stretch")
+            ss[f"ov-{m.id}"] = overrides
+            missing = [k for k, (_, why) in overrides.items() if not why.strip()]
+            if missing:
+                st.warning(f"Give a reason for: {', '.join(missing)}.")
+            run = latest(runs, m.name, "reuse")
+            if run and st.toggle("Show the latest run on your data", key=f"showrun-{m.id}",
+                                 value=ss.get("run_name") == run.name):
+                results_tab(agent, run, data_dir)
+    if missing_px:
+        with st.form("pixel-size"):
+            st.markdown("**Your images have no pixel size.** Enter it from the acquisition metadata; it is written "
+                        "into working copies and recorded as provided by you.")
+            c1, c2 = st.columns([2, 1])
+            px = c1.number_input("Pixel size", min_value=0.0, value=0.0, step=0.01, format="%.4f")
+            unit = c2.selectbox("Unit", ["µm", "nm"])
+            src = st.text_input("Where does this value come from?")
+            if st.form_submit_button("Set pixel size", type="primary") and px > 0:
+                res = tools.call("set_pixel_size", {"pixel_size": px, "unit": unit, "source": src})
+                note_for_chat(res.attachments[0]["text"] if res.attachments else "Pixel size set.")
+                st.rerun()
+
+
+def reuse_actions(agent: PaperAgent, data_dir: Path, files: list[Path]) -> None:
+    tools: ChatTools = ss.tools
+    if not agent.methods:
+        return
+    names = [m.name for m in agent.methods]
+    c1, c2 = st.columns([1.3, 2], vertical_alignment="center")
+    name = c1.selectbox("Method", names, key="reuse-method", label_visibility="collapsed") if len(names) > 1 else names[0]
+    m = next(x for x in agent.methods if x.name == name)
+    fit = cached_check(str(agent.path), m.name, str(data_dir), data_signature(files)) if files else None
+    overrides = ss.get(f"ov-{m.id}", {})
+    missing = [k for k, (_, why) in overrides.items() if not str(why).strip()]
+    can = bool(fit and fit["can_run"]) and not missing
+    why_not = None if can else ("Add your data first" if not fit else
+                                "Give a reason for your own values" if missing else "Your data doesn't fit yet")
+    if len(names) == 1:
+        c1.markdown(f"**{name}**")
+    if c2.button(f"Run on my data", type="primary", width="stretch", disabled=not can, icon=":material/play_arrow:",
+                 help=why_not):
+        spec = agent.spec(m.id)
+        adj = fit["adjustments"] if fit else []
+        out = run_with_progress(f"Running {m.name}", lambda: run_on_data(
+            spec, data_dir, agent.runs_dir, runner=runner, agent=tools.who, overrides=overrides or None,
+            progress=tools.progress))
+        ss.run_name = out.run_dir.name
+        tools.last_run = out.run_dir
+        if adj or overrides:
+            tools.whatifs[out.run_dir.name] = run_with_progress(
+                "Running with the published values", lambda: whatif(spec, data_dir, spec.default_params(), runner=runner))
+        note_for_chat(f"Ran **{m.name}** on your data ({', '.join(f'{k} = {v}' for k, v in out.params.items())}).")
+        st.rerun()
+    if why_not:
+        st.caption(why_not)
+
+
+# ---- Record: every run, and what to take away ------------------------------------------------------------
+ROLE = [
+    (r"(^|/)ro-crate-metadata\.json$", "RO-Crate metadata"), (r"(^|/)ro-crate-preview\.html$", "readable preview"),
+    (r"^crate/workflows?/|^crate/[^/]+\.(ga|ijm|cwl|nf|smk|py)$", "workflow"),
+    (r"^crate/data/", "published data"), (r"^crate/expected/", "published results"),
+    (r"^crate/environment/", "environment"), (r"^crate/[^/]+\.(pdf|md|txt)$", "paper"),
+    (r"^paper/", "paper text"), (r"^source-crate/", "original, unchanged"), (r"^code/", "code"),
+]
+FOLDER_LABEL = {"crate": "RO-Crate", "paper": "Paper", "runs": "Runs", "source-crate": "Original RO-Crate", "code": "Code",
+                "data": "published data", "expected": "published results", "environment": "environment"}
+HIDE = {"agent.json", "environment.json", "deposits", "exports", "crate_description.json", "DRAFT_ME.md", ".git", "runs"}
+
+
+def role(rel: str) -> str | None:
+    return next((label for pat, label in ROLE if re.search(pat, rel)), None)
+
+
+def tree_html(root: Path, d: Path, depth: int = 0) -> str:
+    items = sorted([p for p in d.iterdir() if p.name not in HIDE and not p.name.startswith(".")],
+                   key=lambda p: (p.is_file(), {"crate": 0, "paper": 1, "source-crate": 2}.get(p.name, 9), p.name))
+    out = []
+    for f in [p for p in items if p.is_dir()]:
+        n = sum(1 for x in f.rglob("*") if x.is_file())
+        tag = FOLDER_LABEL.get(f.name) if depth > 0 else None
+        title = FOLDER_LABEL.get(f.name, f.name) if depth == 0 else f.name
+        out.append(f"<details{' open' if depth == 0 and f.name == 'crate' else ''}><summary>📁 {html.escape(title)}"
+                   + (f"<span class='tag'>{tag}</span>" if tag and tag != f.name else "")
+                   + f" <span class='n'>{n}</span></summary><div>{tree_html(root, f, depth + 1)}</div></details>")
+    files = [p for p in items if p.is_file()]
+    for f in files[:20]:
+        r = role(f.relative_to(root).as_posix())
+        tag = r if r and r not in {"published data", "code"} else None
+        out.append(f"<div class='f'>📄 {html.escape(f.name)}" + (f"<span class='tag'>{tag}</span>" if tag else "") + "</div>")
+    if len(files) > 20:
+        out.append(f"<div class='n'>… {len(files) - 20} more</div>")
+    return "".join(out)
+
+
+def preview(root: Path, rel: str) -> None:
+    f = root / rel
+    suf = f.suffix.lower()
+    st.caption(f"{rel} · {fmt_bytes(f.stat().st_size)}" + (f" · {role(rel)}" if role(rel) else ""))
+    try:
+        if suf == ".json":
+            st.json(json.loads(f.read_text(encoding="utf-8")), expanded=1)
+        elif suf in {".csv", ".tsv", ".tabular"}:
+            st.dataframe(pd.read_csv(f, sep="," if suf == ".csv" else "\t"), hide_index=True, width="stretch", height=220)
+        elif suf in {".png", ".jpg", ".jpeg"}:
+            st.image(str(f), width="stretch")
+        elif suf in {".tif", ".tiff"}:
+            from recrate.figures import load_display
+
+            st.image(load_display(f), width="stretch", clamp=True)
+        elif suf in {".pdf", ".zip"}:
+            st.download_button("Download", f.read_bytes(), file_name=f.name)
+        else:
+            st.code(f.read_text(encoding="utf-8", errors="replace")[:3000], language=None, wrap_lines=True)
+    except Exception as e:  # noqa: BLE001
+        st.caption(f"Can't preview this file ({e}).")
+
+
+def record_section(agent: PaperAgent, runs: list[dict]) -> Path | None:
+    run_dir = None
+    if not runs:
+        st.info("No runs yet. Every reproduction and every run on your data is written here as a Workflow Run "
+                "RO-Crate: what ran, on which data, with which settings, checked by whom.")
+    else:
+        st.markdown(f"**{headline(summarise_record(runs))}**")
+        rows = [{"when": (r["when"] or "")[:16].replace("T", " "), "what": r["mode"].replace("reuse", "your data")
+                 .replace("reproduce", "validation"), "method": r["method"],
+                 "result": r["verdict"] if r["mode"] == "reproduce" else "",
+                 "by": r["by"], "reviewed": r["approved"] or ""} for r in reversed(runs)]
+        names = [r["run"] for r in reversed(runs)]
+        sel = st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", height=min(38 * len(rows) + 40, 260),
+                           on_select="rerun", selection_mode="single-row", key="runs-table")
+        picked = (sel.selection.rows or [None])[0] if sel and hasattr(sel, "selection") else None
+        if picked is None:
+            want = ss.get("run_name")
+            picked = names.index(want) if want in names else 0
+        run_dir = agent.runs_dir / names[picked]
+        r = run_story(run_dir)
+        with st.container(border=True):
+            st.markdown(f"**{r['title']}**")
+            st.markdown(f"<span class='muted'>{html.escape(r['summary'] or '')}</span>", unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            c1.markdown(f"**Who** {r['who']}  \n**When** {(r['ended'] or '')[:19].replace('T', ' ')}")
+            c2.markdown(f"**Workflow** `{Path(r['workflow']['file'] or '').name}` ({r['workflow']['language']})")
+            st.caption("Software: " + "; ".join(r["software"]))
+            st.dataframe(pd.DataFrame([{"parameter": p["name"], "value": str(p["value"]), "published": str(p["paper_default"]),
+                                        "why": p["note"]} for p in r["parameters"]]), hide_index=True, width="stretch")
+            with st.expander(f"Inputs ({len(r['inputs'])}), with checksums"):
+                st.dataframe(pd.DataFrame([{"file": i["file"], "size": fmt_bytes(i["size_bytes"]),
+                                            "sha256": i["sha256"][:16] + "…"} for i in r["inputs"]]),
+                             hide_index=True, width="stretch")
+            if r["checks"] or r["comparison"] or r["reviews"]:
+                with st.expander("Checks, comparison and reviews"):
+                    for title, rows_ in (("Input checks", r["checks"]), ("Comparison with the published result",
+                                                                         r["comparison"]), ("Reviews", r["reviews"])):
+                        if rows_:
+                            st.markdown(f"**{title}**")
+                            st.dataframe(pd.DataFrame([{k: str(v) for k, v in x.items()} for x in rows_]),
+                                         hide_index=True, width="stretch")
+            with st.expander("Methods paragraph and references"):
+                spec = agent.spec(summarise_run(run_dir)["method"])
+                st.code(methods_markdown(run_dir), language="markdown", wrap_lines=True)
+                st.code(references_bib(agent, spec, run_dir), language="bibtex")
+    with st.expander("Files of this research object"):
+        root = agent.path
+        st.markdown(f"<div class='tree'>{tree_html(root, root)}</div>", unsafe_allow_html=True)
+        files = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()
+                       and not any(part in HIDE or part.startswith(".") for part in p.relative_to(root).parts))
+        pick = st.selectbox("Preview a file", files, index=None, placeholder="Preview a file…",
+                            label_visibility="collapsed")
+        if pick:
+            preview(root, pick)
+    return run_dir
+
+
+def record_actions(agent: PaperAgent, run_dir: Path | None) -> None:
+    if run_dir is None:
+        st.caption("Runs appear here as you validate or reuse.")
+        return
+    spec = agent.spec(summarise_run(run_dir)["method"])
+    c1, c2, c3 = st.columns([1, 1.3, 1.3], vertical_alignment="center")
+    with c1.popover("Include", width="stretch", icon=":material/tune:"):
+        inc = {k for k, on in {
+            "crate": st.checkbox("Run crate", value=True), "results": st.checkbox("Results", value=True),
+            "methods": st.checkbox("Methods paragraph", value=True), "references": st.checkbox("References", value=True),
+            "figures": st.checkbox(f"Figures ({len(ss.figures)})", value=bool(ss.figures), disabled=not ss.figures),
+        }.items() if on}
+    ss.export_include = inc
+    if c2.button("Add to the record", width="stretch", icon=":material/bookmark_add:",
+                 help="Register this run in the research object's reproducibility record"):
+        st.toast(headline(publish_back(spec, run_dir)["summary"]))
+    bundle = ss.get("bundle")
+    if bundle and Path(bundle).exists() and Path(bundle).name.startswith(run_dir.name):
+        c3.download_button("Download bundle", Path(bundle).read_bytes(), file_name=Path(bundle).name,
+                           mime="application/zip", width="stretch", type="primary", icon=":material/download:")
+    elif c3.button("Export bundle", type="primary", width="stretch", icon=":material/inventory_2:"):
+        ss.bundle = str(export_bundle(agent, spec, run_dir, figures=ss.figures, include=ss.export_include))
+        st.rerun()
+
+
+# ---- the workstation card ------------------------------------------------------------------------------
+def workstation(agent: PaperAgent) -> None:
+    tools: ChatTools = ss.tools
+    tools.runner, tools.who = runner, who or "anonymous"
+    card = agent.card()
+    data_dir = tools.current_data()
+    files = [p for p in data_dir.rglob("*") if p.is_file() and not p.name.startswith(".")] if data_dir.exists() else []
+    runs = find_runs(agent.spec(), agent.runs_dir) if agent.has_methods else []
+    n_ok = sum(1 for m in agent.methods if m.status == "validated")
+    meta = [x for x in [card.get("doi") and f"[{card['doi'].removeprefix('https://doi.org/').removeprefix('https://')}]"
+                        f"({card['doi']})", card.get("published") and f"published {card['published']}",
+                        "crate " + str(card.get("crate_source")) + (" (draft)" if card.get("draft") else "")] if x]
+    st.markdown(f"#### {card['title']}")
+    st.markdown("<span class='muted'>" + " · ".join(meta) + "</span>", unsafe_allow_html=True)
+    diag = agent.diagnosis() if hasattr(agent, "diagnosis") else None
+    if diag:
+        readiness = diag.get("readiness", "unknown")
+        banner = {"ready": st.success, "ready-with-gaps": st.warning}.get(readiness, st.error)
+        banner(f"Readiness: {readiness}")
+        fixes = [f for f in (diag.get("crate_findings", [])
+                             + [x for m in diag.get("methods", []) for x in m.get("findings", [])])
+                 if f.get("severity") in ("blocking", "warning")]
+        if fixes:
+            with st.expander(f"What's missing and how to fix it ({len(fixes)})"):
+                st.table(pd.DataFrame([{"severity": f["severity"],
+                                        "finding": f["message"], "fix": f.get("fix", "")} for f in fixes]))
+    counts = {"validate": f"Validate · {n_ok}/{len(agent.methods)}" if agent.methods else "Validate",
+              "reuse": "Reuse" + (f" · {len(files)} files" if files else ""),
+              "record": f"Record · {len(runs)}" if runs else "Record"}
+    if ss.get("_goto"):  # a jump requested elsewhere (e.g. "Show" in Reuse), applied before the bar is drawn
+        ss.section = ss.pop("_goto")
+    with st.container(key="sectionbar"):
+        sec = st.segmented_control("Section", list(SECTIONS), format_func=lambda k: counts[k], key="section",
+                                   label_visibility="collapsed", required=True) or "validate"
+    run_dir = None
+    with st.container(key="workscroll"):
+        if sec == "validate":
+            validate_section(agent, runs, data_dir)
+        elif sec == "reuse":
+            reuse_section(agent, runs, data_dir, files)
+        else:
+            run_dir = record_section(agent, runs)
+    with st.container(key="workfoot"):
+        if sec == "validate":
+            validate_actions(agent)
+        elif sec == "reuse":
+            reuse_actions(agent, data_dir, files)
+        else:
+            record_actions(agent, run_dir)
+
+
+def start(agent_none: bool = True) -> None:
+    with st.container(key="workscroll"):
+        st.markdown("#### Recreate a piece of research")
+        st.markdown("<span class='muted'>Start from its <b>RO-Crate</b> or its <b>paper</b>. For a paper, ReCRATE recreates "
+                    "the crate with the software as it was when the paper was published. Then validate the research on "
+                    "its own data, or reuse its methods on yours.</span>", unsafe_allow_html=True)
+        with st.form("add-source", clear_on_submit=True, border=False):
+            c1, c2 = st.columns([5, 1.2], vertical_alignment="bottom")
+            text = c1.text_input("A DOI or link", placeholder="DOI or link: WorkflowHub, Zenodo, a paper DOI, arXiv, GitHub",
+                                 label_visibility="collapsed")
+            add = c2.form_submit_button("Recreate", width="stretch", type="primary", icon=":material/arrow_forward:")
+            files = st.file_uploader("Or upload a paper (PDF, text) or an RO-Crate (zip, ro-crate-metadata.json)",
+                                     accept_multiple_files=True)
+            if add and (text or files):
+                add_and_build(text, files or [])
+                st.rerun()
+        if ss.ro.get("repo") and not (ss.ro.get("crate") or ss.ro.get("paper")):
+            st.caption("Code added. Add the paper or crate it belongs to.")
+        st.markdown("<div class='eyebrow' style='margin-top:1.2rem'>Or start from an example</div>", unsafe_allow_html=True)
+        for key, ex in EXAMPLES.items():
+            with st.container(border=True):
+                c1, c2 = st.columns([4, 1], vertical_alignment="center")
+                c1.markdown(f"**{ex['title']}**  \n<span class='muted'>{ex['about']}</span>  \n"
+                            + " ".join(f"<span class='chip'>{t}</span>" for t in ex["tags"]), unsafe_allow_html=True)
+                if c2.button("Open", key=f"ex-{key}", width="stretch"):
+                    open_example(key)
+                    st.rerun()
+        st.markdown("<div class='eyebrow' style='margin-top:1.2rem'>What you'll get</div>", unsafe_allow_html=True)
+        c = st.columns(3)
+        for col, (t, d) in zip(c, [("Validate", "Each method run on the research's own data, compared with the "
+                                    "published result."),
+                                   ("Reuse", "Your data checked against what each method expects; parameters adjusted "
+                                    "and recorded."),
+                                   ("Record", "Every run as a Workflow Run RO-Crate, with an export for your paper.")]):
+            col.markdown(f"**{t}**  \n<span class='muted'>{d}</span>", unsafe_allow_html=True)
+
+
+# ---- the top bar: connect, who, reset -------------------------------------------------------------------
+def connect_box() -> None:
+    kind, label = engine_plan()
+    st.markdown(f"**Chat:** {label}")
+    choice = st.radio("Who answers in the chat", ["auto", "local", "claude", "commands"], key="engine_choice",
+                      format_func={"auto": "Automatic: a free local model if one is running, else Claude if a key is set",
+                                   "local": "An open model on this computer (free, no key)",
+                                   "claude": "Claude (API key)", "commands": "Simple commands only"}.get)
+    if choice in ("auto", "local"):
+        models = available_models(ss.local_url)
+        if models:
+            current = ss.get("local_model") if ss.get("local_model") in models else pick_model(models)
+            ss.local_model = st.selectbox("Model", models, index=models.index(current))
+            st.caption("Models need tool calling: qwen2.5, llama3.1, mistral-nemo work well.")
+        else:
+            st.markdown("No local model server found. To use an open model for free:")
+            st.code("brew install ollama        # or download it from ollama.com\nollama serve\n"
+                    "ollama pull qwen2.5:7b", language="bash")
+            st.caption("LM Studio and llama.cpp work too: start their server and set the address below.")
+        url = st.text_input("Server address (OpenAI-compatible)", value=ss.local_url)
+        if url != ss.local_url:
+            ss.local_url = url
+            available_models.clear()
+            st.rerun()
+        if st.button("Check again", icon=":material/refresh:"):
+            available_models.clear()
+            st.rerun()
+    if choice == "claude":
+        key = st.text_input("Anthropic API key", type="password", placeholder="sk-ant-…",
+                            help="Used for this session only; never saved.")
+        if key and st.button("Use this key", type="primary"):
+            ss.api_key = key.strip()
+            st.rerun()
+        if ss.get("api_key") and st.button("Forget the key"):
+            ss.api_key = None
+            st.rerun()
+    st.divider()
+    st.markdown("**Or talk to it in Claude Code / Claude Desktop** (your Claude subscription, no key):")
+    if ss.get("agent_dir"):
+        exe = str(Path(sys.executable).with_name("recrate"))
+        st.code(f'claude mcp add {slug(Path(ss.agent_dir).name)[:30]} -- "{exe}" serve "{ss.agent_dir}"',
+                language="bash", wrap_lines=True)
+    else:
+        st.caption("Open a research object first; the command to copy appears here.")
+
+
+def topbar() -> None:
+    with st.container(key="topbar"):
+        c = st.columns([7, 1.2, 1.6, .8], vertical_alignment="center")
+        c[0].image(str(IMG / "logo.svg"), width=330)
+        kind, label = engine_plan()
+        with c[1].popover("Connect", width="stretch", icon=":material/hub:", help=f"Chat: {label}"):
+            connect_box()
+        with c[2].popover(ss.who, width="stretch", icon=":material/person:", help="Who runs are recorded as"):
+            st.markdown("**Recorded as**")
+            st.caption("Every run crate names who ran it (provenance). Defaults to your git user name.")
+            new = st.text_input("Name", value=ss.who, label_visibility="collapsed")
+            if new.strip() and new.strip() != ss.who and st.button("Save", type="primary"):
+                ss.who = new.strip()
+                st.rerun()
+        if c[3].button("Reset", width="stretch", help="Start over with another piece of research"):
+            for k in list(ss.keys()):
+                if k not in {"who", "api_key", "engine_choice", "local_url", "local_model"}:
+                    del ss[k]
+            st.rerun()
+
+
+# ---- page ---------------------------------------------------------------------------------------------
+topbar()
+left, right = st.columns([1, 1.25], gap="small")
+with right:
+    with st.container(key="workcard"):
+        if ss.get("agent_dir"):
+            workstation(PaperAgent.load(ss.agent_dir))
+        else:
+            start()
+with left:
+    with st.container(key="chatcard"):
+        chat_card()

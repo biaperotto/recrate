@@ -21,8 +21,12 @@ def test_agentify_with_crate_validates_every_method(agent):
 
 def test_paper_only_agent_answers_from_the_paper(demo, tmp_path):
     a = agentify(tmp_path / "paper_only", paper=demo["paper"])
-    assert a.card()["crate_source"] == "none" and a.methods == []
-    assert (a.path / "DRAFT_ME.md").exists()
+    card = a.card()
+    assert card["crate_source"] == "recreated from the paper" and card["draft"] and a.methods == []
+    assert (a.path / "DRAFT_ME.md").exists() and not a.has_methods
+    names = {s.name for s in a.environment.software}
+    assert {"Fiji", "scikit-image"} <= names  # software the paper names, recorded in the recreated crate
+    assert (a.crate_dir / "environment" / "requirements.txt").exists()
     hits = a.search("pixel size")
     assert hits and "0.65" in hits[0]["text"]
     with pytest.raises(CrateError):
