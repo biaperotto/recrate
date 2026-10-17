@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "recrate"
 version = "0.1.0"
-description = "Reuse published methods on your data, checked and recorded with RO-Crate."
+description = "Turn a paper into an agent that runs its methods on your data, checked and recorded with RO-Crate."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -21,24 +21,26 @@ dependencies = [
   "tifffile>=2023.7",
   "scikit-image>=0.21",
   "pillow>=10",
+  "pypdf>=4",
 ]
 
 [project.optional-dependencies]
 fiji = ["pyimagej>=1.5"]
+draft = ["anthropic>=0.40"]
 mcp = ["mcp>=1.2"]  # 1.x (FastMCP) and 2.x (MCPServer) both supported
 app = ["streamlit>=1.30", "pandas>=2"]
 dev = ["pytest>=7"]
-all = ["pyimagej>=1.5", "mcp>=1.2", "streamlit>=1.30", "pandas>=2", "pytest>=7"]
+all = ["pyimagej>=1.5", "anthropic>=0.40", "mcp>=1.2", "streamlit>=1.30", "pandas>=2", "pytest>=7"]
 
 [project.scripts]
 recrate = "recrate.cli:main"
-recrate-mcp = "recrate.mcp_server:main"
+recrate-mcp = "recrate.mcp_server:main"  # recrate-mcp <paper agent folder>
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-recrate = ["workflows/*.ijm"]
+recrate = ["workflows/*.ijm", "workflows/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

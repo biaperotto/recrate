@@ -1,53 +1,76 @@
 # Architecture
 
-## Inputs: paper only, or paper with a crate
+## From paper to paper agent
+
+`recrate agentify` builds a **paper agent** folder:
+
+```
+agents/my_paper/
+  agent.json      manifest: title, DOI, crate source (supplied / drafted / none), methods and validation
+  paper/          paper.md (text), paper.json (title, DOI, code and data links)
+  crate/          input RO-Crate: one ComputationalWorkflow per method
+  code/           the paper's repository, if cloned
+  runs/           validation runs and every later run, as Workflow Run Crates
+```
 
 | Input | What happens |
 | --- | --- |
-| Paper only (as in Paper2Agent) | A chat agent reads the paper and repo and calls the MCP `draft_crate` tool with a description of the method (workflow, inputs, calibration, parameters, reported results). ReCRATE writes a Workflow RO-Crate marked `draft`. The user confirms it. |
-| Paper with a crate | The crate's declared spec is used directly, so checks are stricter and nothing is guessed. |
+| Paper + RO-Crate | The crate is copied; every method with example data and reported results is validated. |
+| Paper only, `--draft claude` | Claude reads the paper (and the cloned code) and writes a JSON description; ReCRATE builds the crate (marked `draft`) and validates it. |
+| Paper only, Claude Code | `/agentify <folder>` reads, drafts, validates and repairs interactively (up to 6 attempts per method, as Paper2Agent's test loop). |
+| Paper only, no draft | The agent answers questions from the paper (like Paper2Agent's resource layer); `DRAFT_ME.md` explains how to add methods. |
 
-Either way the outputs are the same run crates, so a paper published without a crate leaves with one.
+**Validation** reruns each method on the paper's own data and compares with the reported results using per-measurement tolerances from the crate. Statuses: `validated`, `differs`, `failed` (with the error), `not validated` (no example data or no reported results). `--strict` exposes only validated methods.
 
-## Flow
+## Serving
 
-1. **Load** the input crate (`crate.py`) into a `MethodSpec`.
-2. **Check** the data with the crate's domain profile (`profiles/`). Each check is `ok`, `warn` or `fail`. A failure stops the run. A warning can carry an adjustment (for example rescaling a size parameter).
-3. **Run** the workflow with a runner (`runners/`). Fiji runs headless through PyImageJ; the Python reference runner mirrors the demo macro for development and tests.
-4. **Compare** with the reported results when reproducing (`compare.py`), with per-measurement tolerances from the crate.
-5. **Record** the run as a Workflow Run RO-Crate (`runcrate.py`): workflow, software versions, inputs with SHA-256, parameter values with adjustments and reasons, outputs, overlays, the input check and the comparison as `AssessAction`s, and `isBasedOn` the paper's crate.
-6. **Approve**: a person's visual check of the overlays is added as another `AssessAction` with that person as agent.
-7. **Publish back** (`record.py`): the run is added to the paper's reproducibility record and zipped for deposit.
+`recrate serve <agent>` exposes the paper agent over MCP, mirroring Paper2Agent's three parts:
+
+| MCP part | ReCRATE |
+| --- | --- |
+| Resources | `paper://text`, `paper://info`, `paper://crate` |
+| Tools | `about_paper`, `search_paper`, `describe_method`, one `run_<method>` per method, `check_my_data`, `reproduce`, `run_on_my_data`, `approve_run`, `methods_text`, `publish_run`, `reproducibility_record`, `draft_crate` |
+| Prompts | `reproduce_paper`, `apply_to_my_data` |
+
+The server's instructions tell the agent to check data before running, explain every adjustment, and never invent numbers.
+
+## Running a method on your data
+
+1. **Check** with the crate's domain profile (`profiles/`): each check is `ok`, `warn` or `fail`. A failure stops the run; a warning can carry an adjustment.
+2. **Run** with the runner chosen from the workflow's language (`runners/`): Fiji headless for ImageJ macros, the paper's own script for Python.
+3. **Record** a Workflow Run Crate (`runcrate.py`): workflow, software versions, inputs with SHA-256, parameter values with adjustments and reasons, outputs, overlays, the input check and (when reproducing) the comparison, `isBasedOn` the paper's crate.
+4. **Approve**: a person's visual check of the overlays is stored as an `AssessAction`.
+5. **Publish back** (`record.py`): the run joins the paper's reproducibility record and is zipped for deposit.
 
 ## Where things live
 
 | Thing | Where | Why |
 | --- | --- | --- |
-| The method (recipe) | Workflow RO-Crate on WorkflowHub, with a DOI the paper cites | WorkflowHub registers workflows, not individual runs |
-| Each run | Run crate next to the results; deposit on Zenodo with `isBasedOn` → paper crate | Runs are data products |
-| The reproducibility record | Collected from run crates that point at the paper's crate | Anyone can rebuild it from the deposits |
+| The methods (recipe) | Workflow RO-Crate on WorkflowHub, with a DOI the paper cites | WorkflowHub registers workflows |
+| Each run | Run crate with the results; deposit on Zenodo with `isBasedOn` → paper crate | Runs are data products |
+| The reproducibility record | Collected from run crates pointing at the paper's crate | Anyone can rebuild it |
 
-In this proof of concept the record is a local `reproducibility-record.json` beside the paper crate, and deposits are zip files. Automating Zenodo upload and a WorkflowHub collection per paper is future work.
+In the proof of concept the record is a local `reproducibility-record.json` and deposits are zips.
 
-## How ReCRATE differs from related tools
+## Compared with related tools
 
 Based on their public descriptions; check their repositories for current features.
 
-| | FlowProof | lightcone-cli (ASTRA) | ECAA-workflow | Paper2Agent | ReCRATE |
+| | Paper2Agent | FlowProof | lightcone-cli (ASTRA) | ECAA-workflow | ReCRATE |
 | --- | --- | --- | --- | --- | --- |
-| Starts from | Registered pipelines | Paper, code or question | Description of a new analysis | Paper + repo | Paper, or paper + crate |
-| Spec format | Own manifest | Own `astra.yaml` | Own typed RO-Crate | Tutorials as ground truth | Standard Workflow RO-Crate |
-| RO-Crate role | Output | Export | Package | None | Input and output |
-| Checks data fits the method | Not described | Not described | Not described | LLM judgment via prompts | Declared spec + domain profile |
-| GUI tools (Fiji) | No | No | No | No (needs runnable tutorials) | Yes |
+| Starts from | Paper + repo | Registered pipelines | Paper, code or question | Description of a new analysis | Paper, or paper + crate |
+| Spec | Tutorials as ground truth | Own manifest | Own `astra.yaml` | Own typed RO-Crate | Standard Workflow RO-Crate |
+| RO-Crate | None | Output | Export | Package | Input and output |
+| Your data fits the method? | LLM judgment | Not described | Not described | Not described | Declared spec + domain profile |
+| GUI-derived workflows (Fiji) | No | No | No | No | Yes |
 | Results back to the paper | No | No | No | No | Reproducibility record |
 
-What we deliberately do not compete on: run provenance itself. We emit the same Workflow Run Crate profiles as FlowProof and lightcone-cli so records are interoperable.
+We do not compete on run provenance itself: run crates follow the same Process / Workflow Run Crate profiles as FlowProof and lightcone-cli.
 
 ## Design choices
 
-* **Deterministic numbers.** The workflow computes results; the agent only orchestrates and explains.
-* **Per-measurement tolerances** instead of one global threshold (Paper2Agent uses 3 % and perceptual hashes for figures).
-* **Calibration from metadata**, not from the image content: an LLM cannot tell 0.65 µm from 1.3 µm per pixel by looking.
-* **Human check recorded**, not just "human in the loop" in principle.
+* **Deterministic numbers.** Methods compute results; the agent orchestrates and explains.
+* **Per-measurement tolerances** rather than one global threshold.
+* **Calibration from metadata**, not image content: an LLM cannot tell 0.65 µm from 1.3 µm per pixel by looking.
+* **Drafts are labelled.** A crate drafted from a paper stays `draft` until a person confirms it.
 * **Standards first**: schema.org, Bioschemas `FormalParameter`, Workflow RO-Crate, Workflow Run Crate.

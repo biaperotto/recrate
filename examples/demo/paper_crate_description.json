@@ -1,72 +1,147 @@
 {
-  "name": "Nuclei counting in 2D fluorescence images (Fiji)",
-  "description": "Counts nuclei per field and their mean area. Otsu threshold, particles of at least 50 pixels kept to exclude debris. Synthetic demo standing in for a paper.",
-  "identifier": "https://example.org/recrate-demo/nuclei-counting/v1",
+  "name": "Counting and sizing nuclei in 2D fluorescence images with Fiji",
+  "description": "Synthetic demo paper: two methods for 2D fluorescence images of nuclei.",
+  "identifier": "https://doi.org/10.0000/recrate-demo-paper#crate",
   "citation": "https://doi.org/10.0000/recrate-demo-paper",
   "license": "https://spdx.org/licenses/CC-BY-4.0",
   "authors": [
-    "ReCRATE demo"
+    "ReCRATE demo authors"
   ],
   "profile": "bioimaging",
-  "workflow": {
-    "file": "paper_crate/count_nuclei.ijm",
-    "language": "ImageJ Macro Language",
-    "software": [
-      {
-        "name": "Fiji",
-        "version": "2.16.0"
-      }
-    ]
-  },
-  "inputs": [
+  "methods": [
     {
-      "id": "in-images",
-      "name": "input_dir",
-      "type": "File",
-      "format": "image/tiff",
-      "description": "2D single-channel fluorescence images of nuclei, calibrated",
-      "properties": {
-        "pixel size": {
-          "value": 0.65,
-          "unit": "µm"
+      "name": "count_nuclei",
+      "description": "Counts nuclei per field and their mean area (Otsu threshold, debris filter).",
+      "workflow": {
+        "file": "paper_crate/workflows/count_nuclei.ijm",
+        "language": "ImageJ Macro Language",
+        "software": [
+          {
+            "name": "Fiji",
+            "version": "2.16.0"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "id": "in-images",
+          "name": "input_dir",
+          "type": "File",
+          "format": "image/tiff",
+          "description": "2D single-channel fluorescence images of nuclei, calibrated",
+          "properties": {
+            "pixel size": {
+              "value": 0.65,
+              "unit": "µm"
+            },
+            "channels": {
+              "value": 1
+            },
+            "dimensions": {
+              "value": "2D"
+            }
+          }
         },
-        "channels": {
-          "value": 1
+        {
+          "id": "in-threshold",
+          "name": "threshold_method",
+          "type": "Text",
+          "default": "Otsu",
+          "description": "ImageJ auto-threshold method"
         },
-        "dimensions": {
-          "value": "2D"
+        {
+          "id": "in-min-size",
+          "name": "min_size_px",
+          "type": "Float",
+          "default": 50,
+          "description": "Minimum object area in pixels; removes debris",
+          "scaling": "inverse_pixel_area"
         }
-      }
+      ],
+      "outputs": [
+        {
+          "id": "out-results",
+          "name": "results",
+          "type": "File",
+          "format": "text/csv",
+          "description": "Per field: count and mean area (µm²)",
+          "tolerances": {
+            "count": 0.05,
+            "mean_area": 0.1
+          }
+        }
+      ],
+      "example_data": "paper_crate/data/count-nuclei",
+      "expected": "paper_crate/expected/count-nuclei.csv"
     },
     {
-      "id": "in-threshold",
-      "name": "threshold_method",
-      "type": "Text",
-      "default": "Otsu",
-      "description": "ImageJ auto-threshold method"
-    },
-    {
-      "id": "in-min-size",
-      "name": "min_size_px",
-      "type": "Float",
-      "default": 50,
-      "description": "Minimum particle area in pixels; removes debris",
-      "scaling": "inverse_pixel_area"
+      "name": "size_distribution",
+      "description": "Median nuclear area and fraction of large nuclei per field.",
+      "workflow": {
+        "file": "paper_crate/workflows/size_distribution.py",
+        "language": "Python",
+        "software": [
+          {
+            "name": "Python",
+            "version": "3.10+"
+          },
+          {
+            "name": "scikit-image",
+            "version": "0.21+"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "id": "in-images",
+          "name": "input_dir",
+          "type": "File",
+          "format": "image/tiff",
+          "description": "2D single-channel fluorescence images of nuclei, calibrated",
+          "properties": {
+            "pixel size": {
+              "value": 0.65,
+              "unit": "µm"
+            },
+            "channels": {
+              "value": 1
+            },
+            "dimensions": {
+              "value": "2D"
+            }
+          }
+        },
+        {
+          "id": "in-min-size",
+          "name": "min_size_px",
+          "type": "Float",
+          "default": 50,
+          "description": "Minimum object area in pixels; removes debris",
+          "scaling": "inverse_pixel_area"
+        },
+        {
+          "id": "in-large",
+          "name": "large_area_um2",
+          "type": "Float",
+          "default": 150,
+          "description": "Area above which a nucleus counts as large (µm²)"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "out-results",
+          "name": "results",
+          "type": "File",
+          "format": "text/csv",
+          "description": "Per field: count, median area (µm²), fraction large",
+          "tolerances": {
+            "median_area": 0.1,
+            "fraction_large": 0.15
+          }
+        }
+      ],
+      "example_data": "paper_crate/data/size-distribution",
+      "expected": "paper_crate/expected/size-distribution.csv"
     }
-  ],
-  "outputs": [
-    {
-      "id": "out-results",
-      "name": "results",
-      "type": "File",
-      "format": "text/csv",
-      "description": "One row per image: count and mean area (µm²)",
-      "tolerances": {
-        "count": 0.05,
-        "mean_area": 0.1
-      }
-    }
-  ],
-  "example_data": "paper_crate/data",
-  "expected": "paper_crate/expected/results.csv"
+  ]
 }

@@ -76,6 +76,10 @@ class MethodSpec:
     outputs: list[Parameter] = field(default_factory=list)
     example_data: Path | None = None
     expected_results: Path | None = None
+    method_id: str = ""
+    method_name: str = ""
+    method_description: str = ""
+    draft: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
     # ---- convenience -------------------------------------------------
@@ -107,6 +111,9 @@ class MethodSpec:
         return {
             "name": self.name,
             "description": self.description,
+            "method": self.method_name,
+            "method_description": self.method_description,
+            "draft": self.draft,
             "paper": self.citation,
             "authors": self.authors,
             "license": self.license,
@@ -190,26 +197,73 @@ def _param(ref: Any, graph: dict[str, dict[str, Any]]) -> Parameter:
     )
 
 
-def load_crate(path: str | Path) -> MethodSpec:
-    """Load an input crate from a folder containing ro-crate-metadata.json."""
+def resolve_crate_dir(path: str | Path) -> Path:
+    """Accept a crate folder, its metadata file, or a paper agent folder (with crate/)."""
     path = Path(path)
-    meta_file = path / METADATA_FILE if path.is_dir() else path
-    root_dir = meta_file.parent
-    if not meta_file.exists():
-        raise CrateError(f"No {METADATA_FILE} found at {path}")
-    raw = json.loads(meta_file.read_text(encoding="utf-8"))
-    graph = {e["@id"]: e for e in raw.get("@graph", []) if "@id" in e}
+    if path.is_file():
+        return path.parent
+    if (path / METADATA_FILE).exists():
+        return path
+    if (path / "crate" / METADATA_FILE).exists():
+        return path / "crate"
+    raise CrateError(f"No {METADATA_FILE} found at {path} (or {path / 'crate'})")
 
+
+def _read(path: str | Path) -> tuple[Path, dict[str, Any], dict[str, dict[str, Any]], dict[str, Any]]:
+    root_dir = resolve_crate_dir(path)
+    raw = json.loads((root_dir / METADATA_FILE).read_text(encoding="utf-8"))
+    graph = {e["@id"]: e for e in raw.get("@graph", []) if "@id" in e}
     descriptor = graph.get(METADATA_FILE, {})
-    root_id = _ref(descriptor.get("about")) or "./"
-    root = graph.get(root_id)
+    root = graph.get(_ref(descriptor.get("about")) or "./")
     if root is None:
         raise CrateError("Crate has no root Dataset.")
+    return root_dir, raw, graph, root
 
-    wf_id = _ref(root.get("mainEntity"))
-    wf = graph.get(wf_id or "")
-    if wf is None:
-        raise CrateError("Crate root has no mainEntity (the workflow).")
+
+def _workflow_ids(graph: dict[str, dict[str, Any]], root: dict[str, Any]) -> list[str]:
+    """mainEntity first, then any other ComputationalWorkflow in the crate."""
+    ids = []
+    main = _ref(root.get("mainEntity"))
+    if main:
+        ids.append(main)
+    for eid, e in graph.items():
+        if "ComputationalWorkflow" in _types(e) and eid not in ids:
+            ids.append(eid)
+    return ids
+
+
+def list_methods(path: str | Path) -> list[dict[str, str]]:
+    """The methods (workflows) a crate declares: id, name, description, language."""
+    _, _, graph, root = _read(path)
+    out = []
+    for wid in _workflow_ids(graph, root):
+        wf = graph.get(wid, {})
+        lang = graph.get(_ref(wf.get("programmingLanguage")) or "", {})
+        out.append({"id": wid, "name": wf.get("name", Path(wid).stem),
+                    "description": wf.get("description", ""), "language": lang.get("name", "")})
+    return out
+
+
+def load_crate(path: str | Path, method: str | None = None) -> MethodSpec:
+    """Load one method from an input crate.
+
+    ``path`` is a crate folder or a paper agent folder. ``method`` selects a
+    workflow by id or name; by default the crate's mainEntity.
+    """
+    root_dir, raw, graph, root = _read(path)
+    wf_ids = _workflow_ids(graph, root)
+    if not wf_ids:
+        raise CrateError("Crate declares no workflow (mainEntity or ComputationalWorkflow).")
+    if method is None:
+        wf_id = wf_ids[0]
+    else:
+        matches = [w for w in wf_ids if w == method or graph.get(w, {}).get("name") == method
+                   or Path(w).stem == method]
+        if not matches:
+            names = ", ".join(graph.get(w, {}).get("name", w) for w in wf_ids)
+            raise CrateError(f"No method {method!r} in this crate. Methods: {names}")
+        wf_id = matches[0]
+    wf = graph[wf_id]
 
     lang = graph.get(_ref(wf.get("programmingLanguage")) or "", {})
     software = []
@@ -257,5 +311,9 @@ def load_crate(path: str | Path) -> MethodSpec:
         outputs=outputs,
         example_data=example_data,
         expected_results=expected,
+        method_id=wf_id,
+        method_name=wf.get("name", Path(wf_id).stem),
+        method_description=wf.get("description", ""),
+        draft=str(root_props["draft"].value).lower() == "true" if "draft" in root_props else False,
         raw=raw,
     )

@@ -21,6 +21,7 @@ from .crate import MethodSpec
 from .runcrate import summarise_run
 
 RECORD_FILE = "reproducibility-record.json"
+VALIDATION_AGENT = "ReCRATE validation"
 
 
 def find_runs(spec: MethodSpec, runs_dir: Path) -> list[dict[str, Any]]:
@@ -43,7 +44,9 @@ def summarise_record(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "reproduced": sum(1 for r in reproduce if r["verdict"] == "reproduced"),
         "differed": sum(1 for r in reproduce if r["verdict"] == "differs"),
         "reused_on_new_data": len(reuse),
-        "people": sorted({r["by"] for r in runs if r["by"]}),
+        "people": sorted({r["by"] for r in runs if r["by"] and r["by"] != VALIDATION_AGENT}),
+        "methods": sorted({r["method"] for r in runs if r.get("method")}),
+        "validation_runs": sum(1 for r in runs if r["by"] == VALIDATION_AGENT),
         "with_adjustments": sum(1 for r in runs if r["adjustments"]),
         "approved": sum(1 for r in runs if r["approved"] == "accepted"),
     }

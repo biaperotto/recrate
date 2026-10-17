@@ -30,8 +30,8 @@ class RunOutcome:
     params: dict[str, Any]
 
 
-def _spec(crate: MethodSpec | str | Path) -> MethodSpec:
-    return crate if isinstance(crate, MethodSpec) else load_crate(crate)
+def _spec(crate: MethodSpec | str | Path, method: str | None = None) -> MethodSpec:
+    return crate if isinstance(crate, MethodSpec) else load_crate(crate, method)
 
 
 def _new_run_dir(runs_dir: Path, mode: str) -> Path:
@@ -42,8 +42,8 @@ def _new_run_dir(runs_dir: Path, mode: str) -> Path:
 
 
 def check_inputs(crate: MethodSpec | str | Path, data: str | Path,
-                 params: dict[str, Any] | None = None) -> CheckReport:
-    spec = _spec(crate)
+                 params: dict[str, Any] | None = None, method: str | None = None) -> CheckReport:
+    spec = _spec(crate, method)
     return get_profile(spec.profile).check(spec, Path(data), params)
 
 
@@ -51,7 +51,7 @@ def _execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: st
              params: dict[str, Any], check: CheckReport | None, compare: bool, channel: int) -> RunOutcome:
     if spec.workflow_path is None or not spec.workflow_path.exists():
         raise CrateError("The crate's workflow file is missing.")
-    run = get_runner(runner)
+    run = get_runner(runner, spec.workflow_language, spec.workflow_path)
     with tempfile.TemporaryDirectory(prefix="recrate-") as tmp:
         work = Path(tmp)
         result = run.run(spec.workflow_path, data, work / "out", params, channel=channel)
@@ -65,9 +65,9 @@ def _execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: st
 
 
 def reproduce(crate: MethodSpec | str | Path, runs_dir: str | Path = "runs", runner: str = "auto",
-              agent: str = "anonymous") -> RunOutcome:
+              agent: str = "anonymous", method: str | None = None) -> RunOutcome:
     """Run on the paper's own data and compare with its reported results."""
-    spec = _spec(crate)
+    spec = _spec(crate, method)
     if spec.example_data is None or not spec.example_data.exists():
         raise CrateError("The crate has no example data to reproduce on.")
     check = check_inputs(spec, spec.example_data)
@@ -78,9 +78,9 @@ def reproduce(crate: MethodSpec | str | Path, runs_dir: str | Path = "runs", run
 def run_on_data(crate: MethodSpec | str | Path, data: str | Path, runs_dir: str | Path = "runs",
                 runner: str = "auto", agent: str = "anonymous", auto_adjust: bool = True,
                 channel: int = 0, params: dict[str, Any] | None = None,
-                allow_warnings: bool = True) -> RunOutcome:
+                allow_warnings: bool = True, method: str | None = None) -> RunOutcome:
     """Check your data against the paper's inputs, then run and record."""
-    spec = _spec(crate)
+    spec = _spec(crate, method)
     base = {**spec.default_params(), **(params or {})}
     check = check_inputs(spec, data, base)
     if not check.can_run:

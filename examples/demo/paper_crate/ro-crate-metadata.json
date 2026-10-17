@@ -14,20 +14,29 @@
     {
       "@id": "./",
       "@type": "Dataset",
-      "name": "Nuclei counting in 2D fluorescence images (Fiji)",
-      "description": "Counts nuclei per field and their mean area. Otsu threshold, particles of at least 50 pixels kept to exclude debris. Synthetic demo standing in for a paper.",
+      "name": "Counting and sizing nuclei in 2D fluorescence images with Fiji",
+      "description": "Synthetic demo paper: two methods for 2D fluorescence images of nuclei.",
       "mainEntity": {
-        "@id": "count_nuclei.ijm"
+        "@id": "workflows/count_nuclei.ijm"
       },
       "hasPart": [
         {
-          "@id": "count_nuclei.ijm"
+          "@id": "workflows/count_nuclei.ijm"
         },
         {
-          "@id": "data/"
+          "@id": "data/count-nuclei/"
         },
         {
-          "@id": "expected/results.csv"
+          "@id": "expected/count-nuclei.csv"
+        },
+        {
+          "@id": "workflows/size_distribution.py"
+        },
+        {
+          "@id": "data/size-distribution/"
+        },
+        {
+          "@id": "expected/size-distribution.csv"
         }
       ],
       "additionalProperty": [
@@ -40,7 +49,7 @@
           "@id": "https://w3id.org/workflowhub/workflow-ro-crate/1.0"
         }
       ],
-      "identifier": "https://example.org/recrate-demo/nuclei-counting/v1",
+      "identifier": "https://doi.org/10.0000/recrate-demo-paper#crate",
       "citation": {
         "@id": "https://doi.org/10.0000/recrate-demo-paper"
       },
@@ -66,31 +75,31 @@
       "softwareVersion": "2.16.0"
     },
     {
-      "@id": "#language",
+      "@id": "#language-imagej-macro-language",
       "@type": "ComputerLanguage",
       "name": "ImageJ Macro Language"
     },
     {
-      "@id": "#in-images-pixel-size",
+      "@id": "#count-nuclei-in-images-pixel-size",
       "@type": "PropertyValue",
       "name": "pixel size",
       "value": 0.65,
       "unitText": "µm"
     },
     {
-      "@id": "#in-images-channels",
+      "@id": "#count-nuclei-in-images-channels",
       "@type": "PropertyValue",
       "name": "channels",
       "value": 1
     },
     {
-      "@id": "#in-images-dimensions",
+      "@id": "#count-nuclei-in-images-dimensions",
       "@type": "PropertyValue",
       "name": "dimensions",
       "value": "2D"
     },
     {
-      "@id": "#in-images",
+      "@id": "#count-nuclei-in-images",
       "@type": "FormalParameter",
       "name": "input_dir",
       "conformsTo": {
@@ -101,18 +110,18 @@
       "description": "2D single-channel fluorescence images of nuclei, calibrated",
       "additionalProperty": [
         {
-          "@id": "#in-images-pixel-size"
+          "@id": "#count-nuclei-in-images-pixel-size"
         },
         {
-          "@id": "#in-images-channels"
+          "@id": "#count-nuclei-in-images-channels"
         },
         {
-          "@id": "#in-images-dimensions"
+          "@id": "#count-nuclei-in-images-dimensions"
         }
       ]
     },
     {
-      "@id": "#in-threshold",
+      "@id": "#count-nuclei-in-threshold",
       "@type": "FormalParameter",
       "name": "threshold_method",
       "conformsTo": {
@@ -123,41 +132,41 @@
       "defaultValue": "Otsu"
     },
     {
-      "@id": "#in-min-size-scaling",
+      "@id": "#count-nuclei-in-min-size-scaling",
       "@type": "PropertyValue",
       "name": "scaling",
       "value": "inverse_pixel_area"
     },
     {
-      "@id": "#in-min-size",
+      "@id": "#count-nuclei-in-min-size",
       "@type": "FormalParameter",
       "name": "min_size_px",
       "conformsTo": {
         "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
       },
       "additionalType": "Float",
-      "description": "Minimum particle area in pixels; removes debris",
+      "description": "Minimum object area in pixels; removes debris",
       "defaultValue": "50",
       "additionalProperty": [
         {
-          "@id": "#in-min-size-scaling"
+          "@id": "#count-nuclei-in-min-size-scaling"
         }
       ]
     },
     {
-      "@id": "#out-results-tolerance-count",
+      "@id": "#count-nuclei-out-results-tolerance-count",
       "@type": "PropertyValue",
       "name": "tolerance:count",
       "value": 0.05
     },
     {
-      "@id": "#out-results-tolerance-mean_area",
+      "@id": "#count-nuclei-out-results-tolerance-mean-area",
       "@type": "PropertyValue",
       "name": "tolerance:mean_area",
       "value": 0.1
     },
     {
-      "@id": "#out-results",
+      "@id": "#count-nuclei-out-results",
       "@type": "FormalParameter",
       "name": "results",
       "conformsTo": {
@@ -165,18 +174,18 @@
       },
       "additionalType": "File",
       "encodingFormat": "text/csv",
-      "description": "One row per image: count and mean area (µm²)",
+      "description": "Per field: count and mean area (µm²)",
       "additionalProperty": [
         {
-          "@id": "#out-results-tolerance-count"
+          "@id": "#count-nuclei-out-results-tolerance-count"
         },
         {
-          "@id": "#out-results-tolerance-mean_area"
+          "@id": "#count-nuclei-out-results-tolerance-mean-area"
         }
       ]
     },
     {
-      "@id": "count_nuclei.ijm",
+      "@id": "workflows/count_nuclei.ijm",
       "@type": [
         "File",
         "SoftwareSourceCode",
@@ -184,7 +193,7 @@
       ],
       "name": "count_nuclei",
       "programmingLanguage": {
-        "@id": "#language"
+        "@id": "#language-imagej-macro-language"
       },
       "softwareRequirements": [
         {
@@ -193,92 +202,325 @@
       ],
       "input": [
         {
-          "@id": "#in-images"
+          "@id": "#count-nuclei-in-images"
         },
         {
-          "@id": "#in-threshold"
+          "@id": "#count-nuclei-in-threshold"
         },
         {
-          "@id": "#in-min-size"
+          "@id": "#count-nuclei-in-min-size"
         }
       ],
       "output": [
         {
-          "@id": "#out-results"
+          "@id": "#count-nuclei-out-results"
         }
-      ]
+      ],
+      "description": "Counts nuclei per field and their mean area (Otsu threshold, debris filter)."
     },
     {
-      "@id": "data/",
+      "@id": "data/count-nuclei/",
       "@type": "Dataset",
-      "name": "Example data from the paper",
+      "name": "Example data from the paper (count_nuclei)",
       "hasPart": [
         {
-          "@id": "data/field_01.tif"
+          "@id": "data/count-nuclei/field_01.tif"
         },
         {
-          "@id": "data/field_02.tif"
+          "@id": "data/count-nuclei/field_02.tif"
         },
         {
-          "@id": "data/field_03.tif"
+          "@id": "data/count-nuclei/field_03.tif"
         },
         {
-          "@id": "data/field_04.tif"
+          "@id": "data/count-nuclei/field_04.tif"
         },
         {
-          "@id": "data/field_05.tif"
+          "@id": "data/count-nuclei/field_05.tif"
         },
         {
-          "@id": "data/field_06.tif"
+          "@id": "data/count-nuclei/field_06.tif"
         }
       ],
       "exampleOfWork": {
-        "@id": "#in-images"
+        "@id": "#count-nuclei-in-images"
       }
     },
     {
-      "@id": "data/field_01.tif",
+      "@id": "data/count-nuclei/field_01.tif",
       "@type": "File",
       "name": "field_01.tif",
       "encodingFormat": "image/tiff"
     },
     {
-      "@id": "data/field_02.tif",
+      "@id": "data/count-nuclei/field_02.tif",
       "@type": "File",
       "name": "field_02.tif",
       "encodingFormat": "image/tiff"
     },
     {
-      "@id": "data/field_03.tif",
+      "@id": "data/count-nuclei/field_03.tif",
       "@type": "File",
       "name": "field_03.tif",
       "encodingFormat": "image/tiff"
     },
     {
-      "@id": "data/field_04.tif",
+      "@id": "data/count-nuclei/field_04.tif",
       "@type": "File",
       "name": "field_04.tif",
       "encodingFormat": "image/tiff"
     },
     {
-      "@id": "data/field_05.tif",
+      "@id": "data/count-nuclei/field_05.tif",
       "@type": "File",
       "name": "field_05.tif",
       "encodingFormat": "image/tiff"
     },
     {
-      "@id": "data/field_06.tif",
+      "@id": "data/count-nuclei/field_06.tif",
       "@type": "File",
       "name": "field_06.tif",
       "encodingFormat": "image/tiff"
     },
     {
-      "@id": "expected/results.csv",
+      "@id": "expected/count-nuclei.csv",
       "@type": "File",
-      "name": "Results reported in the paper",
+      "name": "Results reported in the paper (count_nuclei)",
       "encodingFormat": "text/csv",
       "exampleOfWork": {
-        "@id": "#out-results"
+        "@id": "#count-nuclei-out-results"
+      }
+    },
+    {
+      "@id": "#software-1",
+      "@type": "SoftwareApplication",
+      "name": "Python",
+      "softwareVersion": "3.10+"
+    },
+    {
+      "@id": "#software-2",
+      "@type": "SoftwareApplication",
+      "name": "scikit-image",
+      "softwareVersion": "0.21+"
+    },
+    {
+      "@id": "#language-python",
+      "@type": "ComputerLanguage",
+      "name": "Python"
+    },
+    {
+      "@id": "#size-distribution-in-images-pixel-size",
+      "@type": "PropertyValue",
+      "name": "pixel size",
+      "value": 0.65,
+      "unitText": "µm"
+    },
+    {
+      "@id": "#size-distribution-in-images-channels",
+      "@type": "PropertyValue",
+      "name": "channels",
+      "value": 1
+    },
+    {
+      "@id": "#size-distribution-in-images-dimensions",
+      "@type": "PropertyValue",
+      "name": "dimensions",
+      "value": "2D"
+    },
+    {
+      "@id": "#size-distribution-in-images",
+      "@type": "FormalParameter",
+      "name": "input_dir",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "image/tiff",
+      "description": "2D single-channel fluorescence images of nuclei, calibrated",
+      "additionalProperty": [
+        {
+          "@id": "#size-distribution-in-images-pixel-size"
+        },
+        {
+          "@id": "#size-distribution-in-images-channels"
+        },
+        {
+          "@id": "#size-distribution-in-images-dimensions"
+        }
+      ]
+    },
+    {
+      "@id": "#size-distribution-in-min-size-scaling",
+      "@type": "PropertyValue",
+      "name": "scaling",
+      "value": "inverse_pixel_area"
+    },
+    {
+      "@id": "#size-distribution-in-min-size",
+      "@type": "FormalParameter",
+      "name": "min_size_px",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Float",
+      "description": "Minimum object area in pixels; removes debris",
+      "defaultValue": "50",
+      "additionalProperty": [
+        {
+          "@id": "#size-distribution-in-min-size-scaling"
+        }
+      ]
+    },
+    {
+      "@id": "#size-distribution-in-large",
+      "@type": "FormalParameter",
+      "name": "large_area_um2",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Float",
+      "description": "Area above which a nucleus counts as large (µm²)",
+      "defaultValue": "150"
+    },
+    {
+      "@id": "#size-distribution-out-results-tolerance-median-area",
+      "@type": "PropertyValue",
+      "name": "tolerance:median_area",
+      "value": 0.1
+    },
+    {
+      "@id": "#size-distribution-out-results-tolerance-fraction-large",
+      "@type": "PropertyValue",
+      "name": "tolerance:fraction_large",
+      "value": 0.15
+    },
+    {
+      "@id": "#size-distribution-out-results",
+      "@type": "FormalParameter",
+      "name": "results",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "text/csv",
+      "description": "Per field: count, median area (µm²), fraction large",
+      "additionalProperty": [
+        {
+          "@id": "#size-distribution-out-results-tolerance-median-area"
+        },
+        {
+          "@id": "#size-distribution-out-results-tolerance-fraction-large"
+        }
+      ]
+    },
+    {
+      "@id": "workflows/size_distribution.py",
+      "@type": [
+        "File",
+        "SoftwareSourceCode",
+        "ComputationalWorkflow"
+      ],
+      "name": "size_distribution",
+      "programmingLanguage": {
+        "@id": "#language-python"
+      },
+      "softwareRequirements": [
+        {
+          "@id": "#software-1"
+        },
+        {
+          "@id": "#software-2"
+        }
+      ],
+      "input": [
+        {
+          "@id": "#size-distribution-in-images"
+        },
+        {
+          "@id": "#size-distribution-in-min-size"
+        },
+        {
+          "@id": "#size-distribution-in-large"
+        }
+      ],
+      "output": [
+        {
+          "@id": "#size-distribution-out-results"
+        }
+      ],
+      "description": "Median nuclear area and fraction of large nuclei per field."
+    },
+    {
+      "@id": "data/size-distribution/",
+      "@type": "Dataset",
+      "name": "Example data from the paper (size_distribution)",
+      "hasPart": [
+        {
+          "@id": "data/size-distribution/field_01.tif"
+        },
+        {
+          "@id": "data/size-distribution/field_02.tif"
+        },
+        {
+          "@id": "data/size-distribution/field_03.tif"
+        },
+        {
+          "@id": "data/size-distribution/field_04.tif"
+        },
+        {
+          "@id": "data/size-distribution/field_05.tif"
+        },
+        {
+          "@id": "data/size-distribution/field_06.tif"
+        }
+      ],
+      "exampleOfWork": {
+        "@id": "#size-distribution-in-images"
+      }
+    },
+    {
+      "@id": "data/size-distribution/field_01.tif",
+      "@type": "File",
+      "name": "field_01.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/size-distribution/field_02.tif",
+      "@type": "File",
+      "name": "field_02.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/size-distribution/field_03.tif",
+      "@type": "File",
+      "name": "field_03.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/size-distribution/field_04.tif",
+      "@type": "File",
+      "name": "field_04.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/size-distribution/field_05.tif",
+      "@type": "File",
+      "name": "field_05.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/size-distribution/field_06.tif",
+      "@type": "File",
+      "name": "field_06.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "expected/size-distribution.csv",
+      "@type": "File",
+      "name": "Results reported in the paper (size_distribution)",
+      "encodingFormat": "text/csv",
+      "exampleOfWork": {
+        "@id": "#size-distribution-out-results"
       }
     },
     {
@@ -290,7 +532,7 @@
     {
       "@id": "#author-0",
       "@type": "Person",
-      "name": "ReCRATE demo"
+      "name": "ReCRATE demo authors"
     }
   ]
 }

@@ -9,7 +9,7 @@ An input crate is a standard [Workflow RO-Crate 1.0](https://about.workflowhub.e
 | Paper | `citation` → DOI | root Dataset |
 | Stable id for linking runs | `identifier` | root Dataset |
 | Licence, authors | `license`, `author` | root Dataset |
-| The workflow | `mainEntity` → `["File","SoftwareSourceCode","ComputationalWorkflow"]` | root Dataset |
+| The methods | `mainEntity` → the first workflow; every entity typed `ComputationalWorkflow` is one method (one agent tool) | root Dataset |
 | Language | `programmingLanguage` → `ComputerLanguage` | workflow |
 | Declared software | `softwareRequirements` → `SoftwareApplication` (`softwareVersion`) | workflow |
 | Inputs and outputs | `input`, `output` → `FormalParameter` | workflow |
@@ -30,6 +30,13 @@ An input crate is a standard [Workflow RO-Crate 1.0](https://about.workflowhub.e
 | `tolerance:<column>` | output | fraction, e.g. `0.05` | Allowed relative difference for that measurement |
 
 A better long-term option for imaging is to take expected calibration directly from the OME metadata of the paper's example images, so it comes from the OME standard rather than a new field.
+
+## Several methods per paper
+
+Each method is a `["File","SoftwareSourceCode","ComputationalWorkflow"]` with its own `input` / `output`
+parameters (ids prefixed by the method, e.g. `#count-nuclei-in-images`), its own example data
+(`data/<method>/`) and reported results (`expected/<method>.csv`). The first is the crate's `mainEntity`;
+all of them become tools of the paper agent.
 
 ## Minimal example
 

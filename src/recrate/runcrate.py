@@ -236,7 +236,7 @@ def write_run_crate(
     root = {
         "@id": "./",
         "@type": "Dataset",
-        "name": f"ReCRATE run: {mode} of {spec.name}",
+        "name": f"ReCRATE run: {mode} of {spec.method_name or 'method'} ({spec.name})",
         "description": (comparison.headline() if comparison and comparison.measures
                         else f"{mode.capitalize()} run of {spec.name} on new data."),
         "datePublished": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
@@ -245,7 +245,7 @@ def write_run_crate(
         "isBasedOn": {"@id": spec.identifier},
         "hasPart": has_part,
         "mentions": mentions,
-        "additionalProperty": [{"@id": "#prop-mode"}, {"@id": "#prop-verdict"}],
+        "additionalProperty": [{"@id": "#prop-mode"}, {"@id": "#prop-verdict"}, {"@id": "#prop-method"}],
     }
     if spec.citation:
         root["citation"] = {"@id": spec.citation}
@@ -253,6 +253,8 @@ def write_run_crate(
         root["license"] = {"@id": spec.license}
     graph.append({"@id": "#prop-mode", "@type": "PropertyValue", "name": "recrate mode", "value": mode})
     graph.append({"@id": "#prop-verdict", "@type": "PropertyValue", "name": "recrate verdict", "value": verdict})
+    graph.append({"@id": "#prop-method", "@type": "PropertyValue", "name": "recrate method",
+                  "value": spec.method_name or (spec.workflow_path.stem if spec.workflow_path else "")})
 
     metadata = {
         "@context": "https://w3id.org/ro/crate/1.1/context",
@@ -329,6 +331,7 @@ def summarise_run(run_dir: Path) -> dict[str, Any]:
         "path": str(run_dir),
         "based_on": root.get("isBasedOn", {}).get("@id"),
         "mode": props.get("recrate mode"),
+        "method": props.get("recrate method"),
         "verdict": props.get("recrate verdict"),
         "headline": root.get("description"),
         "when": run.get("endTime"),
