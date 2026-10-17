@@ -29,7 +29,7 @@ from typing import Any
 import tifffile
 
 from ..crate import MethodSpec
-from .base import FAIL, OK, WARN, Adjustment, CheckItem, CheckReport, DomainProfile
+from .base import FAIL, OK, WARN, Adjustment, CheckItem, CheckReport, DomainProfile, rescale
 
 IMAGE_SUFFIXES = {".tif", ".tiff"}
 PIXEL_SIZE_REL_TOL = 0.05
@@ -239,14 +239,13 @@ class BioimagingProfile(DomainProfile):
                                "No scalable parameters declared; results may not be comparable."
                         report.items.append(CheckItem("Pixel size", exp_txt, f"{obs:g} µm", WARN, note))
         elif pixel_ratio is not None or data_path.resolve() != (spec.example_data or Path("/-")).resolve():
-            scaled = [p.name for p in spec.value_inputs if p.prop("scaling")]
+            scaled = [p.name for p in spec.value_inputs if (p.scaling_rule or ("",))[0] == "pixel size"]
             if scaled and pixel_ratio is not None and abs(float(pixel_ratio) - 1) <= PIXEL_SIZE_REL_TOL:
                 report.items.append(CheckItem("Pixel size", "not stated", "same as the research's (stated by you)", OK))
             elif scaled and pixel_ratio:
-                adj = self._rescale(spec, params, 1.0, float(pixel_ratio))
-                for a in adj:
-                    a.reason = (f"your pixels are {float(pixel_ratio):g}× the research's (stated by you; the research "
-                                f"states no pixel size); {a.parameter} is in pixels")
+                adj = rescale(spec, params, "pixel size", float(pixel_ratio),
+                              f"your pixels are {float(pixel_ratio):g}× the research's (stated by you; the research "
+                              "states no pixel size)")
                 report.adjustments.extend(adj)
                 report.items.append(CheckItem("Pixel size", "not stated", f"{float(pixel_ratio):g}× the research's",
                                               WARN, "; ".join(f"{a.parameter} {a.old:g} → {a.new:g}" for a in adj)))
@@ -268,7 +267,7 @@ class BioimagingProfile(DomainProfile):
 
     def diagnose_inputs(self, spec: MethodSpec) -> list[str]:
         d = spec.data_input
-        scaled = [p.name for p in spec.value_inputs if p.prop("scaling")]
+        scaled = [p.name for p in spec.value_inputs if (p.scaling_rule or ("",))[0] == "pixel size"]
         if scaled and "pixel size" not in d.properties:
             return [f"The research states no pixel size, so {', '.join(scaled)} (in pixels) can only be rescaled for "
                     "other data when you state how your pixel size compares."]
@@ -357,23 +356,5 @@ class BioimagingProfile(DomainProfile):
 
     @staticmethod
     def _rescale(spec: MethodSpec, params: dict[str, Any], exp_um: float, obs_um: float) -> list[Adjustment]:
-        out = []
-        ratio = exp_um / obs_um
-        for p in spec.value_inputs:
-            scaling = p.prop("scaling")
-            old = params.get(p.name)
-            if scaling is None or old is None:
-                continue
-            if scaling == "inverse_pixel_area":
-                new = float(old) * ratio ** 2
-            elif scaling == "inverse_pixel_size":
-                new = float(old) * ratio
-            else:
-                continue
-            new = round(new, 4)
-            out.append(Adjustment(
-                parameter=p.name, old=old, new=new,
-                reason=(f"pixel size {obs_um:g} µm vs {exp_um:g} µm in the paper; "
-                        f"{p.name} is in pixels and scales as {scaling.replace('_', ' ')}"),
-            ))
-        return out
+        return rescale(spec, params, "pixel size", obs_um / exp_um,
+                       f"pixel size {obs_um:g} µm vs {exp_um:g} µm in the paper")

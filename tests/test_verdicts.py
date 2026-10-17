@@ -112,3 +112,17 @@ def test_reuse_says_what_ran_and_flags_a_missed_rescaling(nuclei):
     unadjusted = run_on_data(nuclei.spec(), half, nuclei.runs_dir, agent="test")  # no pixel ratio given
     size = next(i for i in unadjusted.check.items if i.name == "Object size")
     assert size.status == "warn" and "pixel sizes unknown" in size.observed
+
+
+def test_a_new_question_is_labelled_as_such(penguins):
+    from recrate.model import parameter_plan
+    from recrate.runcrate import summarise_run
+
+    plan = parameter_plan(penguins.spec())
+    group = next(p for p in plan["decide"] if p["name"] == "group_column")
+    assert "different question" in group["why"] and group["quote"]  # with the paper's sentence
+    out = run_on_data(penguins.spec(), PENGUINS / "research-data", penguins.runs_dir, agent="test",
+                      overrides={"group_column": ("Island", "compare colonies")})
+    s = summarise_run(out.run_dir)
+    assert s["mode"] == "reuse" and s["purpose"].startswith("Method reused for a different question: group_column "
+                                                            "Species → Island (compare colonies)")

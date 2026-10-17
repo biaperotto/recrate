@@ -18,6 +18,7 @@ Use it:
     recrate write-methods RUN
     recrate publish agents/my_paper RUN
     recrate record  agents/my_paper
+    recrate report  agents/my_paper                      # one HTML page a reviewer can open
 
 TARGET can be a paper agent folder or a bare crate folder.
 """
@@ -157,7 +158,7 @@ def cmd_reproduce(a) -> int:
 
 
 def cmd_followup(a) -> int:
-    from .followup import followups_of, propose, run_followup
+    from .followup import followups_for, propose, run_followup
 
     agent = _agent(a.target)
     spec = agent.spec(a.method)
@@ -172,8 +173,7 @@ def cmd_followup(a) -> int:
         print(f"  {f.id:<28} [{f.kind}] {f.title}" + ("" if f.runnable else f"  (needs {f.needs})"))
         if f.why:
             print(f"      {f.why}")
-    m = next((x for x in agent.methods if (a.method or x.name) in (x.id, x.name)), None)
-    for r in followups_of(_runs(agent, a.runs_dir), m.run_crate) if m and m.run_crate else []:
+    for r in followups_for(_runs(agent, a.runs_dir), spec):
         print(f"  ran {r['when']}: {r['followup']}: {r['headline']}")
     return 0
 
@@ -188,11 +188,31 @@ def cmd_review(a) -> int:
     return 0
 
 
+def cmd_report(a) -> int:
+    from .report import build_report
+
+    print(f"Report: {build_report(a.target, a.out)}")
+    return 0
+
+
 def cmd_check(a) -> int:
     from .pipeline import check_inputs
 
-    report = check_inputs(_agent(a.target).spec(a.method), a.data)
+    from .model import parameter_plan
+
+    spec = _agent(a.target).spec(a.method)
+    report = check_inputs(spec, a.data, pixel_ratio=a.pixel_ratio)
     _print_check(report)
+    plan = parameter_plan(spec, report)
+    for group, title in (("adjusted", "Adjusted automatically"), ("decide", "Needs your decision"),
+                         ("as_published", "As published")):
+        if plan[group]:
+            print(f"{title}:")
+            for p in plan[group]:
+                value = f"{p['published']} → {p['value']}" if "value" in p else f"{p['published']}"
+                print(f"  {p['name']} = {value}" + (f"  ({p['why']})" if p.get("why") else ""))
+                if p.get("quote") and group != "as_published":
+                    print(f"      the paper: \"{p['quote']}\"")
     return {"ok": 0, "warn": 0, "fail": 1}[report.status]
 
 
@@ -200,10 +220,12 @@ def cmd_run(a) -> int:
     from .pipeline import run_on_data
 
     agent = _agent(a.target)
-    params = dict(kv.split("=", 1) for kv in a.param or [])
+    changes = dict(kv.split("=", 1) for kv in a.param or [])
+    if changes and not a.reason:
+        raise ValueError("Changing a parameter needs a reason: add --reason \"...\" (it is recorded in the run crate).")
     out = run_on_data(agent.spec(a.method), a.data, _runs(agent, a.runs_dir), runner=a.runner, agent=a.who,
-                      auto_adjust=not a.no_adjust, channel=a.channel, params=params or None,
-                      pixel_ratio=a.pixel_ratio)
+                      auto_adjust=not a.no_adjust, channel=a.channel, pixel_ratio=a.pixel_ratio,
+                      overrides={k: (v, a.reason) for k, v in changes.items()} or None)
     _print_check(out.check)
     print(f"Parameters used: {out.params}")
     print(f"Run crate: {out.run_dir}")
@@ -398,6 +420,11 @@ def build_parser() -> argparse.ArgumentParser:
     runner_opts(s)
     s.set_defaults(func=cmd_followup)
 
+    s = sub.add_parser("report", help="Write one static HTML page for the research object (no install needed)")
+    s.add_argument("target")
+    s.add_argument("--out", help="Default: <agent>/report.html")
+    s.set_defaults(func=cmd_report)
+
     s = sub.add_parser("review", help="Record a person's review: does the reproduction support the conclusion?")
     s.add_argument("target")
     s.add_argument("--method")
@@ -406,10 +433,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--note")
     s.set_defaults(func=cmd_review)
 
-    s = sub.add_parser("check", help="Check whether your data fits a method")
+    s = sub.add_parser("check", help="Check whether your data fits a method, and what that means for its parameters")
     s.add_argument("target")
     s.add_argument("data")
     s.add_argument("--method")
+    s.add_argument("--pixel-ratio", type=float, help="Your pixel size / the research's, when the research states none")
     s.set_defaults(func=cmd_check)
 
     s = sub.add_parser("run", help="Run a method on your data, with checks and a run crate")
@@ -419,7 +447,8 @@ def build_parser() -> argparse.ArgumentParser:
     runner_opts(s)
     s.add_argument("--no-adjust", action="store_true", help="Do not rescale parameters")
     s.add_argument("--channel", type=int, default=0, help="Channel index to analyse (0-based)")
-    s.add_argument("--param", action="append", metavar="NAME=VALUE", help="Override a parameter")
+    s.add_argument("--param", action="append", metavar="NAME=VALUE", help="Change a parameter (needs --reason)")
+    s.add_argument("--reason", help="Why you changed the parameters (recorded in the run crate)")
     s.add_argument("--pixel-ratio", type=float, help="Your pixel size / the research's, when the research states "
                                                      "none (e.g. 2 for 2×2-binned images)")
     s.set_defaults(func=cmd_run)

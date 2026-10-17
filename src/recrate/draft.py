@@ -24,10 +24,16 @@ Description format (JSON / dict). Each method becomes one tool of the paper agen
             {"id": "in-images", "name": "input_dir", "type": "File", "format": "image/tiff",
              "description": "...", "properties": {"pixel size": {"value": 0.65, "unit": "µm"},
                                                   "channels": {"value": 1}, "dimensions": {"value": "2D"}}},
-            {"id": "in-min-size", "name": "min_size_px", "type": "Float", "default": 50,
-             "description": "...", "scaling": "inverse_pixel_area"}
+            {"id": "in-min-size", "name": "min_size_px", "type": "Float", "default": 50, "unit": "pixel^2",
+             "description": "...", "scaling": "inverse_pixel_area",   # or "scales_with:<data property>^<exponent>"
+             "quote": "the paper's sentence that states it"},
+            {"id": "in-group", "name": "group_column", "type": "Text", "default": "Species",
+             "role": "free", "changes_question": true},  # free: the user may change it; recorded as a new question
+            {"id": "in-offset", "name": "threshold_offset", "type": "Float", "default": 0,
+             "sensitive_to": "Bit depth / intensity"}   # needs your decision when that check warns
           ],
           "outputs": [{"id": "out-results", "name": "results", "type": "File", "format": "text/csv",
+                       "kind": "table",                       # recrate.model.OUTPUT_KINDS
                        "tolerances": {"count": {"value": 0.05, "source": "paper-stated",
                                                 "quote": "counts agreed within 5% between observers"}},
                        "abs_tolerances": {}}],   # optional: per-item absolute margins, for rounded values
@@ -165,9 +171,10 @@ def build_crate(desc: dict[str, Any], out_dir: str | Path, base_dir: str | Path 
                 ppid = f"{pid}-{_slug(name)}"
                 props.append({"@id": ppid})
                 graph.append(_pv(ppid, name, v.get("value"), v.get("unit")))
-            if p.get("scaling"):
-                props.append({"@id": f"{pid}-scaling"})
-                graph.append(_pv(f"{pid}-scaling", "scaling", p["scaling"]))
+            for key in ("scaling", "role", "unit", "quote", "sensitive_to", "changes_question", "kind"):
+                if p.get(key) not in (None, ""):  # meaning: how it scales, who may change it, the paper's sentence
+                    props.append({"@id": f"{pid}-{_slug(key)}"})
+                    graph.append(_pv(f"{pid}-{_slug(key)}", key, p[key]))
             for key, kind in (("tolerances", "tolerance"), ("abs_tolerances", "tolerance_abs")):
                 for col, tol in (p.get(key) or {}).items():
                     t = tolerance_entry(tol)

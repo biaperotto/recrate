@@ -127,6 +127,16 @@ EXPOSED = {
 }
 
 
+# What each exposed parameter means for reuse: its unit, and which check of your data makes it your decision
+MEANING = {
+    "filter_size": {"unit": "pixel"},
+    "filter_type": {"role": "fixed"},
+    "equalization": {"role": "fixed"},
+    "threshold_method": {"role": "fixed", "sensitive_to": "Bit depth / intensity"},
+    "threshold_offset": {"unit": "intensity", "sensitive_to": "Bit depth / intensity"},
+}
+
+
 def tool_key(tool_id: str | None) -> str | None:
     if not tool_id:
         return None
@@ -384,7 +394,8 @@ def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
                         "description": "Fluorescence image of cell nuclei, a single 2D channel (as the workflow's tools require)",
                         "properties": {"channels": {"value": 1}, "dimensions": {"value": "2D"}}}]
                       + [{"id": f"in-{p['name']}", "name": p["name"], "type": p["type"], "default": p["default"],
-                          "description": p["description"], **({"scaling": p["scaling"]} if p.get("scaling") else {})}
+                          "description": p["description"], **({"scaling": p["scaling"]} if p.get("scaling") else {}),
+                          **MEANING.get(p["name"], {})}
                          for p in params],
             "outputs": [{"id": "out-results", "name": "objects_count", "type": "File", "format": "text/csv",
                          "tolerances": {"count": tolerance}}],

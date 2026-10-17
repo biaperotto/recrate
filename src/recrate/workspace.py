@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import json
+
 import csv
 import re
 import shutil
@@ -198,6 +200,35 @@ def references_bib(agent: PaperAgent, spec: MethodSpec, run_dir: Path) -> str:
     return "\n".join(out)
 
 
+def references_csl(agent: PaperAgent, spec: MethodSpec, run_dir: Path) -> list[dict[str, Any]]:
+    """The same references as CSL-JSON (for Zotero, Pandoc, most reference managers), plus the run crate itself."""
+    def person(name: str) -> dict[str, str]:
+        family, _, given = name.partition(", ") if ", " in name else (name.rsplit(" ", 1)[-1], "", name.rsplit(" ", 1)[0])
+        return {"family": family, "given": given}
+
+    doi = (spec.citation or agent.manifest.get("doi") or "").removeprefix("https://doi.org/")
+    items = [{"id": "paper", "type": "article-journal", "title": agent.manifest.get("title") or spec.name,
+              "author": [person(a) for a in spec.authors], **({"DOI": doi} if doi and "/" in doi else {}),
+              "note": "The paper whose method was checked or reused"}]
+    story = run_story(run_dir)
+    seen = set()
+    for sw in story["software"]:
+        k = next((k for k in KNOWN_SOFTWARE if sw.lower().startswith(k)), None)
+        if k and k not in seen:
+            seen.add(k)
+            key, author, title, journal, year, d = KNOWN_SOFTWARE[k]
+            items.append({"id": key, "type": "article-journal", "title": title, "container-title": journal,
+                          "author": [{"literal": author}], "issued": {"date-parts": [[int(year)]]}, "DOI": d})
+    items.append({"id": "recrate", "type": "software", "title": "ReCRATE", "version": __version__,
+                  "author": [{"literal": "The ReCRATE contributors"}]})
+    items.append({"id": "run", "type": "dataset", "title": story["title"], "note": "Workflow Run RO-Crate: "
+                  + Path(run_dir).name, "issued": {"date-parts": [[int((story["ended"] or "2026")[:4])]]}})
+    for key, author, title, journal, year, d in STANDARDS:
+        items.append({"id": key, "type": "article-journal", "title": title, "container-title": journal,
+                      "author": [{"literal": author}], "issued": {"date-parts": [[int(year)]]}, "DOI": d})
+    return items
+
+
 def methods_markdown(run_dir: Path) -> str:
     story = run_story(run_dir)
     params = "\n".join(f"- `{p['name']}` = {p['value']}" + (f" (paper: {p['paper_default']})"
@@ -231,7 +262,9 @@ def export_bundle(agent: PaperAgent, spec: MethodSpec, run_dir: Path, figures: d
             contents.append("methods.md   methods paragraph, parameters with reasons, software")
         if "references" in include:
             z.writestr("references.bib", references_bib(agent, spec, run_dir))
-            contents.append("references.bib  the paper, the software and the standards used")
+            z.writestr("references.json", json.dumps(references_csl(agent, spec, run_dir), indent=2, ensure_ascii=False))
+            contents.append("references.bib, references.json  the paper, the software, the standards and the run "
+                            "crate (BibTeX and CSL-JSON)")
         if "figures" in include and figures:
             for name, data in figures.items():
                 z.writestr(f"figures/{name}", data)

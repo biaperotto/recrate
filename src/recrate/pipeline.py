@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .compare import Comparison, compare_results
-from .crate import CrateError, MethodSpec, load_crate
+from .crate import CrateError, MethodSpec, _coerce, load_crate
 from .model import build_ladder
 from .overlay import make_overlays
 from .profiles import CheckReport, get_profile
@@ -70,7 +70,8 @@ def latest_run(runs_dir: Path, spec: MethodSpec, mode: str = "reproduce") -> Pat
 def execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: str, agent: str,
             params: dict[str, Any], check: CheckReport | None, compare: bool, channel: int = 0,
             progress=None, param_notes: dict[str, str] | None = None, rounded: bool = False,
-            followup: dict[str, Any] | None = None, pixel_ratio: float | None = None) -> RunOutcome:
+            followup: dict[str, Any] | None = None, pixel_ratio: float | None = None,
+            purpose: str | None = None) -> RunOutcome:
     """Run, compare or check the results, and write the run crate. ``followup``: the follow-up check this run is."""
     if spec.workflow_path is None or not spec.workflow_path.exists():
         raise CrateError("The crate's workflow file is missing.")
@@ -83,7 +84,9 @@ def execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: str
         figures = sorted(f for f in (work / "out" / "figures").glob("*")  # made by the paper's own plotting code
                          if f.suffix.lower() in {".png", ".svg", ".pdf", ".jpg"}) if (work / "out" / "figures").is_dir() else []
         comparison = None
-        if compare and spec.expected_results and spec.expected_results.exists():
+        from .model import COMPARED_KINDS
+
+        if compare and spec.expected_results and spec.expected_results.exists() and spec.output_kind in COMPARED_KINDS:
             comparison = compare_results(result.results_csv, spec.expected_results, spec.tolerances(),
                                          spec.abs_tolerances(), {t.column: t.source for t in spec.tolerance_specs()},
                                          rounded=rounded)
@@ -94,7 +97,8 @@ def execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: str
         ladder = build_ladder(spec, comparison, ran=True) if compare else None
         run_dir = _new_run_dir(runs_dir, mode)
         write_run_crate(run_dir, spec, mode, data, result, check, comparison, agent=agent, overlays=overlays,
-                        param_notes=param_notes, ladder=ladder, figures=figures, followup=followup)
+                        param_notes=param_notes, ladder=ladder, figures=figures, followup=followup,
+                        purpose=purpose)
     return RunOutcome(run_dir=run_dir, check=check, comparison=comparison, params=result.params, ladder=ladder)
 
 
@@ -137,12 +141,20 @@ def run_on_data(crate: MethodSpec | str | Path, data: str | Path, runs_dir: str 
                 item.note += " (proposed, not applied: results may not be comparable)"
         check.adjustments = []
     notes: dict[str, str] = {}
+    types = {p.name: p.type for p in spec.value_inputs}
     for name, (value, reason) in (overrides or {}).items():
+        if name not in types:
+            raise CrateError(f"{spec.method_name} has no parameter {name!r}. Parameters: {', '.join(types)}")
+        value = _coerce(value, types[name])
         auto = next((a for a in check.adjustments if a.parameter == name), None)
         if auto is not None:
             check.adjustments.remove(auto)
         used[name] = value
         notes[name] = (f"Set to {value} by {agent} (paper: {spec.default_params().get(name)}"
                        + (f"; automatic adjustment: {auto.new}" if auto else "") + f"). Reason: {reason}")
+    question = [f"{n} {spec.default_params().get(n)} → {used[n]} ({r})" for n, (v, r) in (overrides or {}).items()
+                if any(p.name == n and str(p.prop("changes_question")).lower() == "true" for p in spec.value_inputs)]
+    purpose = ("Method reused for a different question: " + "; ".join(question)) if question else None
     return execute(spec, Path(data), "reuse", Path(runs_dir), runner, agent, used, check,
-                   compare=False, channel=channel, progress=progress, param_notes=notes, pixel_ratio=pixel_ratio)
+                   compare=False, channel=channel, progress=progress, param_notes=notes, pixel_ratio=pixel_ratio,
+                   purpose=purpose)

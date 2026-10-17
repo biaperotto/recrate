@@ -45,7 +45,10 @@
           "name": "group_column",
           "type": "Text",
           "default": "Species",
-          "description": "Column that defines the groups compared (the paper: species)"
+          "description": "Column that defines the groups compared (the paper: species)",
+          "role": "free",
+          "changes_question": true,
+          "quote": "An SDI was calculated for all structural parameters considered as best predictors of adult penguin sex for each species"
         },
         {
           "id": "in-sex",
@@ -73,7 +76,8 @@
           "name": "keep_rows",
           "type": "Text",
           "default": "",
-          "description": "Inclusion rule: rows to keep, as 'Column=Value' conditions separated by ';' (empty: every row)"
+          "description": "Inclusion rule: rows to keep, as 'Column=Value' conditions separated by ';' (empty: every row)",
+          "role": "free"
         }
       ],
       "outputs": [

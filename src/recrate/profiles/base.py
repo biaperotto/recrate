@@ -76,6 +76,22 @@ class CheckReport:
 FAR = 10.0  # a mean this many times larger or smaller than the paper's is flagged
 
 
+def rescale(spec: MethodSpec, params: dict[str, Any], prop: str, ratio: float, why: str) -> list[Adjustment]:
+    """Adjust every parameter whose scaling rule names data property ``prop``, so it keeps its meaning on data
+    where that property is ``ratio`` times the paper's: ``new = old × ratio ** exponent``. Parameters without a
+    rule are never changed. Any field uses this: pixel size for images, sampling rate for signals..."""
+    out = []
+    for p in spec.value_inputs:
+        rule, old = p.scaling_rule, params.get(p.name)
+        if rule is None or rule[0] != prop or old is None:
+            continue
+        exp = rule[1]
+        new = round(float(old) * ratio ** exp, 4)
+        out.append(Adjustment(p.name, old, new,
+                              f"{why}; {p.name} scales as {prop}^{exp:g}: {float(old):g} × {ratio:g}^{exp:g} = {new:g}"))
+    return out
+
+
 def _means(path: Path | None) -> dict[str, float]:
     from ..compare import _num, read_results
 

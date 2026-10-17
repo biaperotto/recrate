@@ -46,6 +46,16 @@ The older single status (`validated`, `differs`, `failed`, `not validated`) is d
 A tolerance without a source gives no verdict on those numbers. `recrate check-description` rejects a drafted
 tolerance without one, checks quotes against the paper, and compares `paper-rounding` with the decimals printed.
 
+**Output kinds.** Each output declares a `kind`; `scalar` and `table` are compared, any other kind leaves "same
+numbers" at "not checked", with the reason.
+
+**Parameters with meaning.** Each parameter may declare a `unit`, a `scaling` rule (`scales_with:<property>^<exp>`,
+or the older `inverse_pixel_size` / `inverse_pixel_area`), a `role` (`free`, `fixed`), `sensitive_to` (a check whose
+warning makes it the user's decision), `changes_question` (changing it asks a different question; the run is
+labelled so) and the paper's `quote`. `model.parameter_plan` sorts them into adjusted, needs your decision, and as
+published; the app, `recrate check` and the MCP `check_my_data` tool all show the same plan. Changing a value
+always needs a reason.
+
 **Follow-up checks** (`followup.py`). When the numbers differ, ReCRATE proposes checks: those declared in the
 crate (e.g. an exclusion the paper states in words), the rounding convention, and the software and data versions
 (listed with what they need until they can run). Each is its own run crate, linked to the reproduction by
@@ -83,7 +93,7 @@ The MCP server mirrors Paper2Agent's three parts:
 | Tools: read the paper | `about_paper` (with the verdict and ladders), `search_paper`, `describe_method`, `list_tables`, `get_table`, `list_figures`, `get_figure` |
 | Tools: check and run | `check_my_data`, `reproduce`, `run_on_my_data`, one `run_<method>` per method, `followup_checks`, `run_followup_check` |
 | Tools: figures | `make_figure` |
-| Tools: record | `review_conclusion`, `approve_run`, `methods_text`, `publish_run`, `reproducibility_record`, `draft_crate` |
+| Tools: record | `review_conclusion`, `approve_run`, `methods_text`, `publish_run`, `reproducibility_record`, `report_page`, `draft_crate` |
 | Prompts | `reproduce_paper`, `apply_to_my_data` |
 
 Tools that produce files return `{"message", "artifacts": [{"description", "path"}]}` with absolute paths, as
@@ -115,7 +125,8 @@ marked *not runnable here*, with what is missing. Restricted data is never fetch
 
 ```
 src/recrate/
-  model.py         the verdict ladder, tolerance sources, the verdict sentence
+  model.py         the field-independent core: verdict ladder, tolerance sources, output kinds, parameter roles
+                   and the three-group parameter plan, what the paper doesn't say
   sources.py       identifiers and uploads → paper, crate, code, data (WorkflowHub, Zenodo, DOI, arXiv)
   crate_search.py  a published RO-Crate for a paper: its links, WorkflowHub, Zenodo, DataCite, its code repository
   reading.py       the paper's reading package: text by section, tables as CSV, figures, supplement (Europe PMC)
@@ -124,13 +135,15 @@ src/recrate/
   agent.py         sources → agent; readiness, reproduction and the ladder per method; conclusion reviews
   galaxy.py        Galaxy Workflow RO-Crates: derive a ReCRATE crate; run ported Galaxy imaging tools
   crate.py         read an input crate (one method per workflow); draft.py builds one from a description
-  profiles/        how data is checked: generic (any workflow), bioimaging (calibration, intensity, object size)
+  profiles/        how data is checked: generic, bioimaging (calibration, intensity, object size), timeseries
+                   (sampling rate, channels); base.rescale applies every field's scaling rules
   runners/         Galaxy (ported tools), ImageJ macros, Python, R and shell scripts; readiness()
   pipeline.py      reproduce / check / run on your data
   followup.py      follow-up checks when the numbers differ, each its own recorded run
   compare.py       published vs reproduced, with tolerances and their sources
   runcrate.py      Workflow Run Crates, figures, reviews, readable summaries; record.py: the record
   figures.py       figures plotted from run outputs: published vs reproduced, image panels, comparison charts
+  report.py        one self-contained HTML report page per research object
   workspace.py     comparison runs, parameter sources, flags, export bundle
   chat.py          the chat: tools; open models (OpenAI-compatible), Claude, or simple commands
   mcp_server.py    the agent over MCP; server_check.py checks it over stdio; package.py zips it with USAGE.md
@@ -138,7 +151,7 @@ src/recrate/
   hardware.py      CPUs, memory, GPU, interpreters; whether a method's needs fit this computer
   workflow_state.py  the /recrate skill's stages, checksums and independence check (work/state.json)
   skill/           the /recrate Claude Code skill and its specialist subagents
-app/app.py         the web app: Validate, Reuse, Record, and the chat
+app/app.py         the web app: Reproduce, Reuse, Record, and the chat
 ```
 
 Downloaded workflows never run without your say: ReCRATE's own ports run straight away, a crate's own script or

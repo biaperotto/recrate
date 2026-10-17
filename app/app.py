@@ -8,7 +8,7 @@ Two cards, side by side, with a divider you can drag:
 * the chat: give it a research RO-Crate or a paper (DOI, link or file), then talk to the research object. It
   works with an open model on your machine (Ollama, LM Studio: free, no key), with Claude (an API key), or
   with simple commands;
-* the workstation: Validate the research on its own data, Reuse its methods on yours, and the Record of every
+* the workstation: Reproduce the research on its own data, Reuse its methods on yours, and the Record of every
   run (Workflow Run RO-Crates) with an export bundle.
 """
 
@@ -39,11 +39,11 @@ from recrate.record import find_runs, headline, publish_back, summarise_record
 from recrate.runcrate import approve, image_reviews, review_image, run_story, summarise_run
 from recrate.sources import fetch, from_upload, identify
 from recrate.workspace import (comparable_with_paper, export_bundle, flag_images, methods_markdown, numeric_columns,
-                               parameter_sources, read_rows, references_bib, whatif)
+                               parameter_sources, read_rows, references_bib, references_csl, whatif)
 
 ROOT = Path(__file__).resolve().parent.parent
 IMG = ROOT / "docs" / "img"
-st.set_page_config(page_title="ReCRATE", page_icon=str(IMG / "mark.svg"), layout="wide",
+st.set_page_config(page_title="ReCRATE", page_icon=str(IMG / "favicon.svg"), layout="wide",
                    initial_sidebar_state="collapsed")
 
 WH = ROOT / "examples" / "workflowhub-nuclei-segmentation"
@@ -84,11 +84,11 @@ def chip(name: str, args: dict | None) -> str:
     """A tool call as the chat shows it: what it does, and the call itself, e.g. reproduce(size_dimorphism_index)."""
     arg = next((str(v) for k, v in (args or {}).items() if k in ("method", "query", "check", "table", "figure")), "")
     return f"↳ {TOOL_LABEL.get(name, name)} · `{name}({arg})`"
-SECTIONS = {"validate": "Validate", "reuse": "Reuse", "record": "Record"}
+SECTIONS = {"validate": "Reproduce", "reuse": "Reuse", "record": "Record"}
 
 st.html("""<style>
-:root {--bg:#f1efea; --card:#ffffff; --line:#e6e3da; --ink:#1d2b2a; --muted:#6b7472; --accent:#1f7a6b;
-       --accent-soft:#e8f2ef; --bubble:#f3f1ec; --dark:#1d2b2a;}
+:root {--bg:#f1efea; --card:#ffffff; --line:#e6e3da; --ink:#14181F; --muted:#6b7472; --accent:#2A78D6;
+       --accent-soft:#e7f0fb; --bubble:#f3f1ec; --dark:#14181F;}
 .stApp {background: var(--bg);}
 header[data-testid="stHeader"] {height: 0; background: transparent;}
 .block-container {padding: .9rem 1.4rem .6rem; max-width: 100%;}
@@ -347,7 +347,7 @@ def build(trusted: bool) -> None:
                                                       if known else "") + ".")
     ss._goto = "validate"
     say(f"{'Ready' if a.has_methods else 'Recreated the RO-Crate'}: **{a.card()['title']}**." + search_line + env_line
-        + ("\n\n" + "\n".join(lines) if lines else "\n\nNo runnable method yet: see **Validate** for what's needed.")
+        + ("\n\n" + "\n".join(lines) if lines else "\n\nNo runnable method yet: see **Reproduce** for what's needed.")
         + "\n\nAsk me anything about it.")
 
 
@@ -508,7 +508,7 @@ def context_card(agent: PaperAgent) -> None:
 
 def chat_card() -> None:
     kind, label = engine_plan()
-    color = {"claude": "#d97757", "local": "#1f7a6b", "commands": "#b8b3a7"}[kind]
+    color = {"claude": "#d97757", "local": "#2A78D6", "commands": "#b8b3a7"}[kind]
     h1, h2 = st.columns([1, 1.4], vertical_alignment="center")
     h1.markdown("**Chat**")
     h2.markdown(f"<div style='text-align:right'><span class='chip'><span class='dot' style='background:{color}'></span>"
@@ -592,15 +592,18 @@ def data_signature(files: list[Path]) -> tuple:
 
 @st.cache_data(show_spinner=False)
 def cached_check(agent_dir: str, method: str, data: str, sig: tuple) -> dict:
+    from recrate.model import parameter_plan
+
     a = PaperAgent.load(agent_dir)
     try:
-        r = check_inputs(a.spec(method), Path(data))
+        spec = a.spec(method)
+        r = check_inputs(spec, Path(data))
     except CrateError as e:
-        return {"status": "fail", "can_run": False, "adjustments": [],
+        return {"status": "fail", "can_run": False, "adjustments": [], "plan": None,
                 "rows": [{"check": "Method inputs", "paper": "not declared", "your data": "-", "status": "fail",
                           "note": f"{e} The crate doesn't say what data this method expects."}]}
     return {"status": r.status, "can_run": r.can_run, "rows": r.as_rows(),
-            "adjustments": [a.__dict__ for a in r.adjustments]}
+            "adjustments": [a.__dict__ for a in r.adjustments], "plan": parameter_plan(spec, r)}
 
 
 def note_for_chat(text: str) -> None:
@@ -701,7 +704,7 @@ def environment_table(agent: PaperAgent) -> None:
                            icon=":material/download:")
 
 
-# ---- results, review and figures (shared by Validate and Reuse) ----------------------------
+# ---- results, review and figures (shared by Reproduce and Reuse) ----------------------------
 def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None:
     if run_dir is None:
         st.caption("No runs yet: reproduce a method or run it on your data.")
@@ -877,7 +880,7 @@ def figure_builder(agent: PaperAgent, run_dir: Path, data_dir: Path) -> None:
         st.toast(f"{name} added to the export bundle.")
 
 
-# ---- Validate: does the research reproduce on its own data? ------------------------------------------
+# ---- Reproduce: does the research reproduce on its own data? ------------------------------------------
 def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> None:
     env = agent.environment
     report = agent.path / "REPORT.md"
@@ -905,6 +908,14 @@ def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> Non
             run = latest(runs, m.name, "reproduce")
             if run and st.toggle("Show the latest reproduction's outputs", key=f"showrep-{m.id}"):
                 results_tab(agent, run, data_dir)
+    if agent.methods:
+        from recrate.model import assumptions
+
+        said = list(dict.fromkeys(a for m in agent.methods for a in assumptions(agent.spec(m.id), env)))
+        if said:
+            with st.expander(f"What the paper doesn't say ({len(said)})", icon=":material/help:"):
+                st.caption("Each is an assumption ReCRATE, or whoever drafted the crate, had to make.")
+                st.markdown("\n".join(f"- {html.escape(a)}" for a in said))
     with st.expander("Software environment" + (f" · as of {env.published}" if env and env.published else "")):
         if env and env.published:
             st.caption(f"Publication date from {env.published_source}.")
@@ -967,11 +978,11 @@ def results_by_value(run_dir: Path) -> None:
 
 def followups_view(agent: PaperAgent, m, spec) -> None:
     """When numbers differ: the follow-up checks, each its own recorded run. All of them stay visible."""
-    from recrate.followup import followups_of, propose, run_followup
+    from recrate.followup import followups_for, propose, run_followup
 
     st.markdown("**Where could the difference come from?** Each check is its own run, linked to this one; the "
                 "result above is never replaced.")
-    done = followups_of(agent.runs_dir, m.run_crate)
+    done = followups_for(agent.runs_dir, spec)
     for d in done:
         st.caption(f"✔ {d['followup']}: {d['headline']}")
     for f in propose(spec):
@@ -1067,11 +1078,11 @@ def validate_actions(agent: PaperAgent) -> None:
 def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: list[Path]) -> None:
     tools: ChatTools = ss.tools
     if not agent.methods:
-        st.info("No runnable method yet: see **Validate**.")
+        st.info("No runnable method yet: see **Reproduce**.")
         return
     unproven = [m.name for m in agent.methods if m.status != "validated"]
     if unproven:
-        st.warning(f"**{', '.join(unproven)}** did not reproduce the paper's results (see **Validate**). You can "
+        st.warning(f"**{', '.join(unproven)}** did not reproduce the paper's results (see **Reproduce**). You can "
                    "still reuse it, but use its results with care.")
     st.markdown("<div class='eyebrow'>1 · Your data</div>", unsafe_allow_html=True)
     with st.container(border=True):
@@ -1110,41 +1121,56 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
                 "fail": "doesn't fit yet"}[fit["status"]]
             st.markdown(f"**{m.name}** &nbsp; {verdict}", unsafe_allow_html=True)
             if fit:
-                for a in fit["adjustments"]:
-                    st.caption(f"↳ {a['parameter']} {a['old']:g} → {a['new']:g}: {a['reason']}")
+                st.dataframe(pd.DataFrame([{"Property": x["check"], "Paper's data": str(x["paper"]),
+                                            "Your data": str(x["your data"]),
+                                            "Check": f"{ICON[x['status']]} {x['status']}", "Note": x["note"]}
+                                           for x in fit["rows"]]), hide_index=True, width="stretch")
                 for row in fit["rows"]:
                     if row["status"] == "fail":
                         st.caption(f"❌ {row['check']}: {row['note']}")
                         missing_px |= row["check"] == "Pixel size" and row["your data"] == "missing"
             overrides = {}
-            with st.expander("Parameters, and where they come from"):
-                for s in parameter_sources(agent, spec):
-                    st.markdown(f"`{s['name']}` = **{s['default']}**" +
-                                (f" &nbsp; <span class='muted'>scales with {s['scaling'].replace('_', ' ')}</span>"
-                                 if s["scaling"] else ""), unsafe_allow_html=True)
-                    if s["quote"]:
-                        c1, c2 = st.columns([6, 1])
-                        c1.markdown(f"<div class='quote'>{html.escape(s['quote'])}</div>", unsafe_allow_html=True)
-                        if c2.button("Show", key=f"show-{m.id}-{s['name']}", help="Highlight it in the source (Validate)"):
-                            ss.highlight, ss._goto = s["quote"], "validate"
-                            st.rerun()
-                    elif s["description"]:
-                        st.caption(s["description"])
-                    if s["name"] in adj:
-                        st.caption(f"↳ for your data: **{adj[s['name']]['new']:g}** ({adj[s['name']]['reason']})")
-                    if st.toggle("Use my own value", key=f"own-{m.id}-{s['name']}"):
-                        c1, c2 = st.columns([1, 2])
-                        num = isinstance(s["default"], (int, float))
-                        start = float(adj[s["name"]]["new"]) if s["name"] in adj else (float(s["default"]) if num else 0.0)
-                        v = (c1.number_input("Value", value=start, key=f"val-{m.id}-{s['name']}") if num else
-                             c1.text_input("Value", value=str(s["default"]), key=f"val-{m.id}-{s['name']}"))
-                        why = c2.text_input("Why? (recorded)", key=f"why-{m.id}-{s['name']}")
-                        overrides[s["name"]] = (v, why)
-                if fit:
-                    st.markdown("**All input checks**")
-                    st.dataframe(pd.DataFrame([{**x, "status": f"{ICON[x['status']]} {x['status']}",
-                                                "paper": str(x["paper"]), "your data": str(x["your data"])}
-                                               for x in fit["rows"]]), hide_index=True, width="stretch")
+            from recrate.model import parameter_plan
+
+            plan = (fit or {}).get("plan") or parameter_plan(spec)
+            quotes = {q["name"]: q["quote"] for q in parameter_sources(agent, spec)}
+
+            def param_row(p: dict, group: str) -> None:
+                shown = p["published"] if p["published"] not in ("", None) else "(empty)"
+                value = f"{shown} → **{p['value']:g}**" if group == "adjusted" else f"**{shown}**"
+                unit = f" {p['unit']}" if p.get("unit") else ""
+                st.markdown(f"`{p['name']}` = {value}{unit}")
+                if p.get("why"):
+                    st.caption(p["why"])
+                q = p.get("quote") or quotes.get(p["name"])
+                if q:
+                    c1, c2 = st.columns([6, 1])
+                    c1.markdown(f"<div class='quote'>{html.escape(q)}</div>", unsafe_allow_html=True)
+                    if c2.button("Show", key=f"show-{m.id}-{p['name']}", help="Highlight it in the source (Reproduce)"):
+                        ss.highlight, ss._goto = q, "validate"
+                        st.rerun()
+                if st.toggle("Use my own value", key=f"own-{m.id}-{p['name']}"):
+                    c1, c2 = st.columns([1, 2])
+                    num = isinstance(p["published"], (int, float))
+                    start = float(p.get("value", p["published"])) if num else 0.0
+                    v = (c1.number_input("Value", value=start, key=f"val-{m.id}-{p['name']}") if num else
+                         c1.text_input("Value", value=str(p["published"]), key=f"val-{m.id}-{p['name']}"))
+                    why = c2.text_input("Why? (recorded)", key=f"why-{m.id}-{p['name']}")
+                    overrides[p["name"]] = (v, why)
+
+            if plan["adjusted"]:
+                st.markdown("**Adjusted automatically** <span class='muted'>(each has a scaling rule)</span>",
+                            unsafe_allow_html=True)
+                for p in plan["adjusted"]:
+                    param_row(p, "adjusted")
+            if plan["decide"]:
+                st.markdown("**Needs your decision** <span class='muted'>(as published unless you change it, with "
+                            "a reason)</span>", unsafe_allow_html=True)
+                for p in plan["decide"]:
+                    param_row(p, "decide")
+            with st.expander(f"As published ({len(plan['as_published'])})"):
+                for p in plan["as_published"]:
+                    param_row(p, "as_published")
             ss[f"ov-{m.id}"] = overrides
             missing = [k for k, (_, why) in overrides.items() if not why.strip()]
             if missing:
@@ -1269,11 +1295,23 @@ def record_section(agent: PaperAgent, runs: list[dict]) -> Path | None:
                 "RO-Crate: what ran, on which data, with which settings, checked by whom.")
     else:
         st.markdown(f"**{headline(summarise_record(runs))}**")
-        rows = [{"when": (r["when"] or "")[:16].replace("T", " "), "what": r["mode"].replace("reuse", "your data")
-                 .replace("reproduce", "validation"), "method": r["method"],
-                 "result": r["verdict"] if r["mode"] == "reproduce" else "",
-                 "by": r["by"], "reviewed": r["approved"] or ""} for r in reversed(runs)]
-        names = [r["run"] for r in reversed(runs)]
+        kinds = {"reproduce": "reproduction", "follow-up": "follow-up check", "reuse": "your data"}
+        c1, c2 = st.columns(2)
+        show_kinds = c1.multiselect("Kind", list(kinds.values()), default=list(kinds.values()), key="rec-kinds",
+                                    label_visibility="collapsed", placeholder="Kind")
+        methods_ = sorted({r["method"] for r in runs if r["method"]})
+        show_methods = c2.multiselect("Method", methods_, default=methods_, key="rec-methods",
+                                      label_visibility="collapsed", placeholder="Method") if len(methods_) > 1 else methods_
+        shown = [r for r in reversed(runs) if kinds.get(r["mode"], r["mode"]) in show_kinds
+                 and (r["method"] in show_methods or not r["method"])]
+        if not shown:
+            st.caption("No run matches these filters.")
+            return None
+        rows = [{"when": (r["when"] or "")[:16].replace("T", " "), "kind": kinds.get(r["mode"], r["mode"]),
+                 "method": r["method"], "result": short((r.get("purpose") or "") + " " + (r["verdict"] if r["mode"] != "reuse"
+                                                       else r["headline"] or ""), 120),
+                 "by": r["by"], "review": r.get("conclusion") or r["approved"] or ""} for r in shown]
+        names = [r["run"] for r in shown]
         sel = st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", height=min(38 * len(rows) + 40, 260),
                            on_select="rerun", selection_mode="single-row", key="runs-table")
         picked = (sel.selection.rows or [None])[0] if sel and hasattr(sel, "selection") else None
@@ -1303,10 +1341,27 @@ def record_section(agent: PaperAgent, runs: list[dict]) -> Path | None:
                             st.markdown(f"**{title}**")
                             st.dataframe(pd.DataFrame([{k: str(v) for k, v in x.items()} for x in rows_]),
                                          hide_index=True, width="stretch")
+            if r["figures"]:
+                with st.expander(f"Figures ({len(r['figures'])}), each with its crate entry"):
+                    for f in r["figures"]:
+                        st.image(str(run_dir / f["file"]), caption=f"{f['name']}: {f['description']}  ·  `{f['file']}`")
             with st.expander("Methods paragraph and references"):
                 spec = agent.spec(summarise_run(run_dir)["method"])
                 st.code(methods_markdown(run_dir), language="markdown", wrap_lines=True)
-                st.code(references_bib(agent, spec, run_dir), language="bibtex")
+                t1, t2 = st.tabs(["BibTeX", "CSL-JSON"])
+                t1.code(references_bib(agent, spec, run_dir), language="bibtex")
+                t2.code(json.dumps(references_csl(agent, spec, run_dir), indent=2, ensure_ascii=False), language="json")
+            if st.toggle("View as RO-Crate", key=f"asjson-{run_dir.name}"):
+                st.markdown(f"<div class='tree'>{tree_html(run_dir, run_dir)}</div>", unsafe_allow_html=True)
+                st.json(json.loads((run_dir / "ro-crate-metadata.json").read_text(encoding="utf-8")), expanded=1)
+    with st.expander("Connect from Claude or any MCP client"):
+        st.markdown("Run this research object as an agent: ask about the paper, check your data, reproduce, "
+                    "reuse and record, from a chat.")
+        st.code(f'claude mcp add {agent.name[:40]} -- recrate serve "{agent.path}"', language="bash")
+        st.markdown("- **Read the paper**: about_paper, search_paper, describe_method, tables and figures\n"
+                    "- **Check and run**: check_my_data, reproduce, run_on_my_data, follow-up checks\n"
+                    "- **Figures**: make_figure\n"
+                    "- **Record**: review_conclusion, approve_run, methods_text, publish_run, report_page")
     with st.expander("Files of this research object"):
         root = agent.path
         st.markdown(f"<div class='tree'>{tree_html(root, root)}</div>", unsafe_allow_html=True)
@@ -1332,6 +1387,12 @@ def record_actions(agent: PaperAgent, run_dir: Path | None) -> None:
             "figures": st.checkbox(f"Figures ({len(ss.figures)})", value=bool(ss.figures), disabled=not ss.figures),
         }.items() if on}
     ss.export_include = inc
+    from recrate.report import build_report
+
+    st.download_button("Report page (HTML, opens anywhere)", build_report(agent.path).read_bytes(),
+                       file_name=f"{agent.name[:40]}-report.html", mime="text/html", width="stretch",
+                       icon=":material/description:",
+                       help="One page with the verdict, every compared value, figures, follow-ups and every run")
     if c2.button("Add to the record", width="stretch", icon=":material/bookmark_add:",
                  help="Register this run in the research object's reproducibility record"):
         st.toast(headline(publish_back(spec, run_dir)["summary"]))
@@ -1358,7 +1419,7 @@ def workstation(agent: PaperAgent) -> None:
                         "crate " + str(card.get("crate_source")) + (" (draft)" if card.get("draft") else "")] if x]
     st.markdown(f"#### {card['title']}")
     st.markdown("<span class='muted'>" + " · ".join(meta) + "</span>", unsafe_allow_html=True)
-    counts = {"validate": f"Validate · {n_ok}/{len(agent.methods)}" if agent.methods else "Validate",
+    counts = {"validate": f"Reproduce · {n_ok}/{len(agent.methods)}" if agent.methods else "Reproduce",
               "reuse": "Reuse" + (f" · {len(files)} files" if files else ""),
               "record": f"Record · {len(runs)}" if runs else "Record"}
     if ss.get("_goto"):  # a jump requested elsewhere (e.g. "Show" in Reuse), applied before the bar is drawn
@@ -1412,7 +1473,7 @@ def start(agent_none: bool = True) -> None:
                     st.rerun()
         st.markdown("<div class='eyebrow' style='margin-top:1.2rem'>What you'll get</div>", unsafe_allow_html=True)
         c = st.columns(3)
-        for col, (t, d) in zip(c, [("Validate", "Each method run on the research's own data, compared with the "
+        for col, (t, d) in zip(c, [("Reproduce", "Each method run on the research's own data, compared with the "
                                     "published result."),
                                    ("Reuse", "Your data checked against what each method expects; parameters adjusted "
                                     "and recorded."),
@@ -1469,7 +1530,7 @@ def connect_box() -> None:
 def topbar() -> None:
     with st.container(key="topbar"):
         c = st.columns([7, 1.2, 1.6, .8], vertical_alignment="center")
-        c[0].image(str(IMG / "logo.svg"), width=330)
+        c[0].image(str(IMG / "logo.svg"), width=180)
         kind, label = engine_plan()
         with c[1].popover("Connect", width="stretch", icon=":material/hub:", help=f"Chat: {label}"):
             connect_box()

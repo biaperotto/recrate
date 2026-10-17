@@ -42,7 +42,7 @@ recrate-mcp = "recrate.mcp_server:main"  # recrate-mcp <paper agent folder>
 where = ["src"]
 
 [tool.setuptools.package-data]
-recrate = ["workflows/*.ijm", "workflows/*.py", "skill/*.md", "skill/agents/*.md"]
+recrate = ["workflows/*.ijm", "workflows/*.py", "skill/*.md", "skill/agents/*.md", "favicon.svg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

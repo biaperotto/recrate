@@ -17,7 +17,7 @@ What the agent gets, mirroring Paper2Agent's tools / resources / prompts:
   ``followup_checks``, ``run_followup_check``);
   figures (``make_figure``);
   record (``review_conclusion``, ``approve_run``, ``methods_text``, ``publish_run``, ``reproducibility_record``,
-  ``draft_crate``).
+  ``report_page``, ``draft_crate``).
 
 Tools that produce files return ``{"message", "artifacts": [{"description", "path"}]}`` with absolute paths (the
 Paper2Agent convention), so a client can show outputs and figures. Each run writes a fresh run crate folder.
@@ -54,6 +54,12 @@ RUNNER = os.environ.get("RECRATE_RUNNER", "auto")
 
 def _artifacts(*items: tuple[str, Path]) -> list[dict[str, str]]:
     return [{"description": d, "path": str(Path(p).resolve())} for d, p in items if Path(p).exists()]
+
+
+def _stamp() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
 
 
 def _run_artifacts(run_dir: Path) -> list[dict[str, str]]:
@@ -120,16 +126,25 @@ def build_server(agent_dir: str | Path) -> FastMCP:
     @mcp.tool(description="Describe one method: what it expects as input (format, pixel size, channels), "
                           "its parameters and defaults, the software, and the tolerances used for checking.")
     def describe_method(method: str) -> dict[str, Any]:
-        return agent.spec(method).summary()
+        from .model import assumptions
+
+        spec = agent.spec(method)
+        return {**spec.summary(), "what_the_paper_does_not_say": assumptions(spec, agent.environment)}
 
     # ---- running the paper's methods ------------------------------------------------
     @mcp.tool(description="Check whether the user's data fits a method, using the crate's domain profile. "
-                          "Returns ok / warn / fail per check and any parameter adjustments.")
+                          "Returns ok / warn / fail per check, and the parameters in three groups: adjusted "
+                          "automatically (with the computation), needing the user's decision (with why), and as "
+                          "published. Explain the second group to the user before running.")
     def check_my_data(method: str, data_path: str, pixel_ratio: float | None = None) -> dict[str, Any]:
         """pixel_ratio: the user's pixel size / the research's, only when the research states none."""
-        r = check_inputs(agent.spec(method), data_path, pixel_ratio=pixel_ratio)
+        from .model import parameter_plan
+
+        spec = agent.spec(method)
+        r = check_inputs(spec, data_path, pixel_ratio=pixel_ratio)
         return {"status": r.status, "can_run": r.can_run, "checks": r.as_rows(),
-                "adjustments": [a.__dict__ for a in r.adjustments]}
+                "adjustments": [a.__dict__ for a in r.adjustments],
+                "parameters": parameter_plan(spec, r)}
 
     @mcp.tool(name="reproduce", description="Run a method on the paper's own data and compare with the "
                                            "paper's reported results. Returns the verdict ladder (materials found, "
@@ -210,10 +225,9 @@ def build_server(agent_dir: str | Path) -> FastMCP:
                           "rounding convention, software and data versions), and those already run. Each check "
                           "is its own recorded run; the original result is never replaced.")
     def followup_checks(method: str) -> dict[str, Any]:
-        from .followup import followups_of, propose
+        from .followup import followups_for, propose
 
-        m = next((x for x in agent.methods if method in (x.id, x.name)), None)
-        done = followups_of(_runs(), m.run_crate) if m and m.run_crate else []
+        done = followups_for(_runs(), agent.spec(method))
         return {"proposed": [f.as_dict() for f in propose(agent.spec(method))],
                 "already_run": [{k: r[k] for k in ("run", "followup", "headline", "when", "by")} for r in done]}
 
@@ -271,6 +285,15 @@ def build_server(agent_dir: str | Path) -> FastMCP:
         archive = next(r["archive"] for r in record["runs"] if r["run"] == Path(run_crate).name)
         return {"message": headline(record["summary"]), "summary": record["summary"],
                 "artifacts": _artifacts(("Run crate, zipped for deposit", Path(archive)))}
+
+    @mcp.tool(description="Write one static HTML report for this research object: verdict, ladder, every value "
+                          "compared with its tolerance source, figures, follow-up checks, assumptions, every run. "
+                          "A reviewer can open it without installing anything.")
+    def report_page() -> dict[str, Any]:
+        from .report import build_report
+
+        path = build_report(agent.path, agent.path / "reports" / f"report-{_stamp()}.html")
+        return {"message": "Report written from the run crates.", "artifacts": _artifacts(("Report page (HTML)", path))}
 
     @mcp.tool(description="The paper's reproducibility record: every run based on its crate, by whom, "
                           "on what data, with which adjustments and verdicts.")

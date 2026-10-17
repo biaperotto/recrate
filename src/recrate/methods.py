@@ -30,7 +30,7 @@ def methods_paragraph(run_dir: Path) -> str:
             n_images += 1
         elif e.get("@type") == "PropertyValue":
             params.append(f"{e['name']} = {e['value']}")
-            if "description" in e:
+            if e.get("description", "As published.") != "As published.":
                 d = e["description"]
                 adjusted.append(f"{e['name']} was {d[0].lower()}{d[1:]}")
 

@@ -92,3 +92,10 @@ def followups_of(runs_dir: str | Path, original: str | Path) -> list[dict[str, A
     name = Path(original).name
     return [s for s in (summarise_run(m.parent) for m in sorted(Path(runs_dir).glob("*/ro-crate-metadata.json")))
             if s.get("followup_of") == name]
+
+
+def followups_for(runs_dir: str | Path, spec: MethodSpec) -> list[dict[str, Any]]:
+    """Every follow-up run of this method, whichever reproduction it followed, oldest first."""
+    method = spec.method_name or (spec.workflow_path.stem if spec.workflow_path else "")
+    return [s for s in (summarise_run(m.parent) for m in sorted(Path(runs_dir).glob("*/ro-crate-metadata.json")))
+            if s.get("followup_of") and s["method"] == method and s["based_on"] == spec.identifier]

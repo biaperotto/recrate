@@ -95,6 +95,10 @@ def build_ladder(spec, comparison=None, error: str | None = None, blocked: str |
             numbers = step(status, f"{ok}/{n} values within tolerance ({', '.join(sources)}){missing_items}.")
     elif comparison is not None:
         numbers = step(NOT_CHECKED, "Nothing to compare: no published results.")
+    kind = getattr(spec, "output_kind", "table")
+    if kind not in COMPARED_KINDS:
+        numbers = step(NOT_CHECKED, f"ReCRATE does not compare '{kind}' outputs yet "
+                                    f"({OUTPUT_KINDS.get(kind, 'unknown kind')}).")
 
     if review:
         status = {"yes": PASSED, "partly": PARTIAL, "no": FAILED}.get(review.get("agrees", ""), NOT_CHECKED)
@@ -135,3 +139,90 @@ def verdict_sentence(ladders: dict[str, dict[str, dict[str, str]]]) -> str:
         others = f" {len(passed)} of {len(names)} method(s) match." if len(names) > 1 else ""
         return f"Partly reproduced: {m} has {ladders[m]['numbers']['reason']}{others}"
     return f"Not checked yet: {len(passed)} of {len(names)} method(s) reproduced so far."
+
+
+# ---- output kinds ---------------------------------------------------------------------------------------------
+# Every method output declares a kind (``kind`` on the output parameter; ``table`` by default). Each kind has its
+# own comparison. ReCRATE compares the kinds in COMPARED_KINDS today; for any other kind the "same numbers" step
+# says so ("not checked"), rather than comparing it the wrong way.
+OUTPUT_KINDS = {
+    "scalar": "a count, a p-value: relative or absolute tolerance",
+    "table": "per cell, keyed by row id; a tolerance per column",
+    "array": "labels exact (or IoU / Dice above a threshold); intensities by RMSE or max abs difference",
+    "image": "as array",
+    "distribution": "summary statistics within tolerance, or a two-sample test with its threshold stated",
+    "categorical": "agreement (adjusted Rand, accuracy) above a threshold",
+    "metric": "within the paper's reported CI, or a stated tolerance",
+    "figure": "never compared as pixels: compare the data behind it",
+    "text": "exact match or set overlap",
+}
+COMPARED_KINDS = {"scalar", "table"}
+
+# ---- parameters with meaning ------------------------------------------------------------------------------------
+PARAMETER_ROLES = {
+    "scales_with": "has a scaling rule: adjusted automatically when the data differs, with the computation shown",
+    "free": "a choice the user may change, with a reason",
+    "fixed": "as published unless the user changes it, with a reason",
+}
+
+
+def parameter_plan(spec, check=None, used: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
+    """The parameters in three groups, for any field:
+
+    * ``adjusted``: changed automatically by a scaling rule (with the computation);
+    * ``decide``: no rule, but your data differs in a way that may matter (a check it is sensitive to warned or
+      failed, or a scaling rule that couldn't be applied because a property is unknown), or a free choice;
+    * ``as_published``: the rest.
+    """
+    adjusted = {a.parameter: a for a in (check.adjustments if check else [])}
+    status = {i.name: i for i in (check.items if check else [])}
+    out: dict[str, list[dict[str, Any]]] = {"adjusted": [], "decide": [], "as_published": []}
+    for p in spec.value_inputs:
+        row = {"name": p.name, "published": p.default, "unit": p.prop("unit"), "role": p.role,
+               "quote": p.prop("quote") or "", "description": p.description or ""}
+        if used is not None and p.name in used:
+            row["value"] = used[p.name]
+        rule = p.scaling_rule
+        sensitive = status.get(str(p.prop("sensitive_to") or ""))
+        rule_check = status.get(rule[0].capitalize()) if rule else None
+        if p.name in adjusted:
+            a = adjusted[p.name]
+            out["adjusted"].append({**row, "value": a.new, "why": a.reason})
+        elif rule and rule_check is not None and rule_check.status != "ok":
+            out["decide"].append({**row, "why": f"Scales with {rule[0]}, which could not be compared: "
+                                               f"{rule_check.note or rule_check.observed}"})
+        elif sensitive is not None and sensitive.status != "ok":
+            out["decide"].append({**row, "why": f"Depends on {sensitive.name.lower()}, which differs from the "
+                                               f"paper's data ({sensitive.observed} vs {sensitive.expected})."})
+        elif p.role == "free":
+            out["decide"].append({**row, "why": "A choice you may change"
+                                               + (": changing it asks a different question than the paper's."
+                                                  if str(p.prop("changes_question")).lower() == "true" else ".")})
+        else:
+            out["as_published"].append(row)
+    return out
+
+
+def assumptions(spec, environment=None) -> list[str]:
+    """What the paper doesn't say, so ReCRATE (or whoever drafted the crate) had to assume it."""
+    out = []
+    if spec.draft:
+        out.append("The crate is a draft, made from the paper: a named person must confirm it.")
+    for p in spec.value_inputs:
+        if spec.draft and not p.prop("quote"):
+            out.append(f"Parameter {p.name} = {p.default}: no sentence of the paper states it.")
+    for t in spec.tolerance_specs():
+        if not t.source:
+            out.append(f"Tolerance for {t.column}: no stated source.")
+        elif "wider" in t.evidence:
+            out.append(f"Tolerance for {t.column} (±{t.value:g}): {t.evidence}.")
+    if "pixel size" not in spec.data_input.properties and any(
+            (p.scaling_rule or ("",))[0] == "pixel size" for p in spec.value_inputs):
+        out.append("The pixel size of the paper's images is not stated.")
+    for name, version in spec.software:
+        if not version:
+            out.append(f"{name}: version not stated.")
+    for s in (environment.software if environment else []):
+        if s.how in {"as of publication", "later", "history", "unknown"}:
+            out.append(f"{s.name}{' ' + s.version if s.version else ''}: {s.note}.")
+    return out

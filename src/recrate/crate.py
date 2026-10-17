@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 METADATA_FILE = "ro-crate-metadata.json"
+LEGACY_SCALING = {"inverse_pixel_size": ("pixel size", -1.0), "inverse_pixel_area": ("pixel size", -2.0)}
 
 
 class CrateError(ValueError):
@@ -56,6 +57,24 @@ class Parameter:
     @property
     def is_file(self) -> bool:
         return (self.type or "").lower() in {"file", "dataset", "directory"}
+
+    @property
+    def scaling_rule(self) -> tuple[str, float] | None:
+        """``(data property, exponent)``: the parameter is multiplied by (yours / the paper's) ** exponent of that
+        property. ``scales_with:sampling rate^1``; the older ``inverse_pixel_size`` and ``inverse_pixel_area`` mean
+        pixel size to the power -1 and -2."""
+        rule = str(self.prop("scaling") or "")
+        if rule in LEGACY_SCALING:
+            return LEGACY_SCALING[rule]
+        if rule.startswith("scales_with:"):
+            prop, _, exp = rule.split(":", 1)[1].partition("^")
+            return prop.strip(), float(exp or 1)
+        return None
+
+    @property
+    def role(self) -> str:
+        """``scales_with`` (has a rule), ``free`` (a choice the user may change) or ``fixed`` (as published)."""
+        return "scales_with" if self.scaling_rule else str(self.prop("role") or "fixed")
 
 
 @dataclass
@@ -116,6 +135,11 @@ class MethodSpec:
                     tol[name.split(":", 1)[1]] = float(prop.value)
         return tol
 
+    @property
+    def output_kind(self) -> str:
+        """The kind of the main output (model.OUTPUT_KINDS); a results table unless the crate says otherwise."""
+        return str(self.outputs[0].prop("kind") or "table") if self.outputs else "table"
+
     def tolerance_specs(self) -> list["Tolerance"]:
         """Every tolerance with its source (``tolerance_source:<column>``): see model.TOLERANCE_SOURCES."""
         from .model import Tolerance
@@ -152,10 +176,13 @@ class MethodSpec:
                 **{k: (f"{p.value} {p.unit}" if p.unit else p.value) for k, p in d.properties.items()},
             },
             "parameters": {
-                p.name: {"default": p.default, "description": p.description,
-                         **({"scaling": p.prop("scaling")} if p.prop("scaling") else {})}
+                p.name: {"default": p.default, "description": p.description, "role": p.role,
+                         **({"scaling": p.prop("scaling")} if p.prop("scaling") else {}),
+                         **({"unit": p.prop("unit")} if p.prop("unit") else {}),
+                         **({"quote": p.prop("quote")} if p.prop("quote") else {})}
                 for p in self.value_inputs
             },
+            "output_kind": self.output_kind,
             "tolerances": {t.column: {"value": t.value, "absolute": t.absolute, "source": t.source,
                                       "evidence": t.evidence} for t in self.tolerance_specs()},
             "has_example_data": bool(self.example_data and self.example_data.exists()),

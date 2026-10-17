@@ -106,6 +106,24 @@
       ]
     },
     {
+      "@id": "#size-dimorphism-index-in-group-role",
+      "@type": "PropertyValue",
+      "name": "role",
+      "value": "free"
+    },
+    {
+      "@id": "#size-dimorphism-index-in-group-quote",
+      "@type": "PropertyValue",
+      "name": "quote",
+      "value": "An SDI was calculated for all structural parameters considered as best predictors of adult penguin sex for each species"
+    },
+    {
+      "@id": "#size-dimorphism-index-in-group-changes-question",
+      "@type": "PropertyValue",
+      "name": "changes_question",
+      "value": true
+    },
+    {
       "@id": "#size-dimorphism-index-in-group",
       "@type": "FormalParameter",
       "name": "group_column",
@@ -114,7 +132,18 @@
       },
       "additionalType": "Text",
       "description": "Column that defines the groups compared (the paper: species)",
-      "defaultValue": "Species"
+      "defaultValue": "Species",
+      "additionalProperty": [
+        {
+          "@id": "#size-dimorphism-index-in-group-role"
+        },
+        {
+          "@id": "#size-dimorphism-index-in-group-quote"
+        },
+        {
+          "@id": "#size-dimorphism-index-in-group-changes-question"
+        }
+      ]
     },
     {
       "@id": "#size-dimorphism-index-in-sex",
@@ -150,6 +179,12 @@
       "defaultValue": "FEMALE"
     },
     {
+      "@id": "#size-dimorphism-index-in-keep-role",
+      "@type": "PropertyValue",
+      "name": "role",
+      "value": "free"
+    },
+    {
       "@id": "#size-dimorphism-index-in-keep",
       "@type": "FormalParameter",
       "name": "keep_rows",
@@ -158,7 +193,12 @@
       },
       "additionalType": "Text",
       "description": "Inclusion rule: rows to keep, as 'Column=Value' conditions separated by ';' (empty: every row)",
-      "defaultValue": ""
+      "defaultValue": "",
+      "additionalProperty": [
+        {
+          "@id": "#size-dimorphism-index-in-keep-role"
+        }
+      ]
     },
     {
       "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-length",

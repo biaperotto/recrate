@@ -58,6 +58,8 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "x"
 
 
+_FAVICON = __import__("base64").b64encode((Path(__file__).parent / "favicon.svg").read_bytes()).decode() \
+    if (Path(__file__).parent / "favicon.svg").exists() else ""
 _MEDIA = {".png": "image/png", ".svg": "image/svg+xml", ".pdf": "application/pdf", ".jpg": "image/jpeg"}
 
 
@@ -102,6 +104,7 @@ def write_run_crate(
     ladder: dict[str, dict[str, str]] | None = None,
     figures: list[Path] | None = None,
     followup: dict[str, Any] | None = None,
+    purpose: str | None = None,
 ) -> Path:
     """Create a run crate folder from a finished run. Returns its path."""
     out_dir = Path(out_dir)
@@ -185,6 +188,10 @@ def write_run_crate(
             e["description"] = f"Adjusted from {a.old} to {a.new}: {a.reason}."
         if param_notes and name in param_notes:
             e["description"] = param_notes[name]
+        if "description" not in e:
+            default = params_by_name[name].default if name in params_by_name else None
+            e["description"] = "As published." if default is None or str(default) == str(value) else \
+                f"Set to {value} (published: {default})."
         pv_refs.append(add(e))
 
     # Outputs
@@ -252,6 +259,8 @@ def write_run_crate(
     verdict = "not compared"
     if comparison is not None and comparison.measures:
         verdict = "reproduced" if comparison.reproduced else "differs"
+        if followup:  # evidence about a difference, not a reproduction
+            verdict = f"follow-up: {comparison.count} within tolerance"
         reported_refs = []
         if spec.expected_results and spec.expected_results.exists():
             (out_dir / "reported").mkdir(exist_ok=True)
@@ -324,8 +333,12 @@ def write_run_crate(
         "hasPart": has_part,
         "mentions": mentions,
         "additionalProperty": [{"@id": "#prop-mode"}, {"@id": "#prop-verdict"}, {"@id": "#prop-method"}]
-                              + ([{"@id": "#prop-followup-of"}, {"@id": "#prop-followup"}] if followup else []),
+                              + ([{"@id": "#prop-followup-of"}, {"@id": "#prop-followup"}] if followup else [])
+                              + ([{"@id": "#prop-purpose"}] if purpose else []),
     }
+    if purpose:
+        graph.append({"@id": "#prop-purpose", "@type": "PropertyValue", "name": "recrate purpose", "value": purpose})
+        root["description"] = purpose + ". " + root["description"]
     if followup:
         graph.append({"@id": "#prop-followup-of", "@type": "PropertyValue", "name": "recrate follow-up of",
                       "value": followup["of"]})
@@ -575,7 +588,7 @@ def summarise_run(run_dir: Path) -> dict[str, Any]:
     agent = idx.get(run.get("agent", {}).get("@id", ""), {}).get("name")
     n_inputs = sum(1 for o in run.get("object", []) if idx.get(o["@id"], {}).get("@type") == "File")
     adjustments = [idx[o["@id"]]["description"] for o in run.get("object", [])
-                   if "description" in idx.get(o["@id"], {})]
+                   if idx.get(o["@id"], {}).get("description", "As published.") != "As published."]
     return {
         "run": Path(run_dir).name,
         "path": str(run_dir),
@@ -590,6 +603,7 @@ def summarise_run(run_dir: Path) -> dict[str, Any]:
         "adjustments": adjustments,
         "approved": approvals[-1] if approvals else None,
         "followup_of": props.get("recrate follow-up of"),
+        "purpose": props.get("recrate purpose"),
         "followup": props.get("recrate follow-up check"),
         "conclusion": next((idx[e["result"]["@id"]]["value"] for e in reversed(meta["@graph"])
                             if str(e["@id"]).startswith("#conclusion-review-") and e.get("@type") == "AssessAction"),
@@ -625,9 +639,10 @@ def render_preview(metadata: dict[str, Any]) -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(str(root.get('name', 'RO-Crate')))}</title>
+<link rel="icon" href="data:image/svg+xml;base64,{_FAVICON}">
 <style>
-:root{{--bg:#fbfaf7;--fg:#1d1d1b;--muted:#6b6a65;--line:#e4e1d8;--accent:#2f6f5e}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#171715;--fg:#ecebe6;--muted:#a3a29b;--line:#34332f;--accent:#7cc4ad}}}}
+:root{{--bg:#F4F4F0;--fg:#14181F;--muted:#6b6a65;--line:#e4e1d8;--accent:#2A78D6}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#171715;--fg:#F4F4F0;--muted:#a3a29b;--line:#34332f;--accent:#7FB0F0}}}}
 body{{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;max-width:900px;margin:0 auto;padding:24px 16px}}
 h1{{font-size:1.5rem;margin:0 0 .25rem}} h3{{margin:0;font-size:1rem}}
 .verdict{{display:inline-block;padding:2px 10px;border:1px solid var(--accent);color:var(--accent);border-radius:99px}}

@@ -4,11 +4,11 @@ A domain profile lists, for one field, the properties data must share with a met
 
 | Field | What must match | Typical silent error | Status |
 | --- | --- | --- | --- |
-| Bioimaging | Pixel size and unit, channels, 2D/3D, consistent calibration across files | Size thresholds off by the scaling factor | Implemented |
+| Bioimaging | Pixel size and unit, channels, 2D/3D, bit depth, consistent calibration; object size after the run | Size thresholds off by the scaling factor | Implemented |
 | Genomics | Reference genome build, coordinate convention (0/1-based) | GRCh37 positions run against GRCh38 | Sketch |
 | Single-cell | Raw vs normalised counts, species, gene ID type | Normalising data that is already normalised | Sketch |
 | Spatial omics | Coordinate units, spot vs cell resolution | Neighbourhood radius at the wrong scale | Sketch |
-| Time series | Sampling rate, units | Filters tuned to a different frequency | Sketch |
+| Time series | Sampling rate, channels, time column | Windows in samples on data at another rate | Implemented (synthetic test) |
 
 ## Writing a profile
 
@@ -30,6 +30,9 @@ class GenomicsProfile(DomainProfile):
                                       "" if observed == expected else "Lift over first."))
         return report
 ```
+
+Scaling is shared: a parameter declares `"scaling": "scales_with:<property>^<exponent>"`, and the profile calls
+`base.rescale(spec, params, "<property>", yours / paper's, why)` once it has read that property from your files.
 
 Two optional methods complete a profile:
 
