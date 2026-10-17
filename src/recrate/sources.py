@@ -35,6 +35,8 @@ WFH_DOI = re.compile(r"10\.48546/workflowhub\.workflow\.(\d+)(?:\.(\d+))?", re.I
 ZEN = re.compile(r"(?:zenodo\.org/(?:records?|deposit)/|10\.5281/zenodo\.)(\d+)", re.I)
 ARXIV = re.compile(r"(?:arxiv\.org/(?:abs|pdf)/|arXiv:\s*)(\d{4}\.\d{4,5}(?:v\d+)?)", re.I)
 DOI = re.compile(r"\b(10\.\d{4,9}/[^\s\"'<>]+[^\s\"'<>.,;)\]])", re.I)
+# bioRxiv/medRxiv DOIs read off a URL carry a version suffix (…26350296v2); the registered DOI has no vN.
+BIORXIV_DOI_VERSION = re.compile(r"(10\.\d{4,9}/\d{4}\.\d{2}\.\d{2}\.\d+)v\d+$", re.I)
 REPO = re.compile(r"https?://(?:github\.com|gitlab\.com|codeberg\.org)/[\w.-]+/[\w.-]+", re.I)
 
 
@@ -82,10 +84,14 @@ def identify(text: str) -> list[Ref]:
     for m in ARXIV.finditer(text):
         add(m, Ref("arxiv", m.group(1), None, m.group(0)))
     for m in DOI.finditer(text):
-        if m.group(1).lower().startswith("10.48550/arxiv."):
-            add(m, Ref("arxiv", m.group(1).split("arXiv.", 1)[-1].split("arxiv.", 1)[-1], None, m.group(0)))
+        doi_id = m.group(1)
+        vm = BIORXIV_DOI_VERSION.match(doi_id)
+        if vm:
+            doi_id = vm.group(1)  # bioRxiv/medRxiv: drop the URL version suffix (vN), not part of the DOI
+        if doi_id.lower().startswith("10.48550/arxiv."):
+            add(m, Ref("arxiv", doi_id.split("arXiv.", 1)[-1].split("arxiv.", 1)[-1], None, m.group(0)))
         else:
-            add(m, Ref("doi", m.group(1), None, m.group(0)))
+            add(m, Ref("doi", doi_id, None, m.group(0)))
     for m in REPO.finditer(text):
         add(m, Ref("repo", m.group(0).rstrip(".,;:").removesuffix(".git"), None, m.group(0)))
     return refs
