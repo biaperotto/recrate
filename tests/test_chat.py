@@ -42,7 +42,7 @@ def test_reproduce_reports_the_verdict(agent, demo, tmp_path):
 def test_errors_come_back_as_results(agent, demo, tmp_path):
     t = _tools(agent, demo, tmp_path, with_files=False)
     r = t.call("check_my_data", {"method": "count_nuclei"})
-    assert r.error and "No data yet" in r.text
+    assert r.error and "No data yet" in r.text and "ValueError" not in r.text
     assert t.call("create_output_crate", {}).error  # no run yet
 
 
@@ -77,3 +77,11 @@ def test_echo_drops_declined_calls_before_fallback():
             self.type = type
     blocks = [B("thinking"), B("text"), B("tool_use"), B("fallback"), B("thinking"), B("tool_use")]
     assert [b.type for b in _echo_content(blocks)] == ["text", "thinking", "tool_use"]
+
+
+def test_local_chat_ignores_the_apps_notes_and_gives_an_overview(agent, demo, tmp_path):
+    chat = LocalChat(agent, _tools(agent, demo, tmp_path))
+    note = "[Done in the workstation since my last message: Running with the published values unchanged]\n\n"
+    events = list(chat.send(note + "what is this research about?"))
+    assert not [e for e in events if e[0] == "tool"]  # no command triggered by the note
+    assert "count_nuclei" in events[0][1] and "Counting and sizing nuclei" in events[0][1]

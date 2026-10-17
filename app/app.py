@@ -95,7 +95,7 @@ mark.cite {background: rgba(232,163,61,.3); color: inherit; padding: 0 .1em; bor
 [data-testid="stHorizontalBlock"]:has(.st-key-chatcard) {flex-wrap: nowrap !important; align-items: stretch;}
 [data-testid="stHorizontalBlock"]:has(.st-key-chatcard) > [data-testid="stColumn"] {min-width: 0;}
 .st-key-chatcard, .st-key-workcard {background: var(--card); border: 1px solid var(--line); border-radius: 18px;
-  height: calc(100vh - 7.2rem) !important; max-height: calc(100vh - 7.2rem); overflow: hidden;
+  height: calc(100vh - 8.4rem) !important; max-height: calc(100vh - 8.4rem); overflow: hidden;
   padding: 1rem 1.1rem .8rem; flex-wrap: nowrap !important; flex: 0 0 auto !important;}
 .st-key-chatcard > *, .st-key-workcard > * {flex: 0 0 auto;}
 .st-key-chatcard > *:has(.st-key-chatscroll), .st-key-workcard > *:has(.st-key-workscroll) {flex: 1 1 0 !important;
@@ -1301,7 +1301,7 @@ def connect_box() -> None:
 def topbar() -> None:
     with st.container(key="topbar"):
         c = st.columns([7, 1.2, 1.6, .8], vertical_alignment="center")
-        c[0].image(str(IMG / "logo.svg"), width=190)
+        c[0].image(str(IMG / "logo.svg"), width=330)
         kind, label = engine_plan()
         with c[1].popover("Connect", width="stretch", icon=":material/hub:", help=f"Chat: {label}"):
             connect_box()

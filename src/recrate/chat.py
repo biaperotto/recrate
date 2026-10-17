@@ -158,7 +158,10 @@ class ChatTools:
         try:
             return fn(**args)
         except Exception as e:  # noqa: BLE001 - every failure goes back to the chat, not a crash
-            msg = f"{type(e).__name__}: {e}"
+            from .crate import CrateError
+
+            expected = isinstance(e, (ValueError, FileNotFoundError, CrateError))  # a situation, not a bug
+            msg = str(e) if expected else f"{type(e).__name__}: {e}"
             return ToolResult(json.dumps({"error": msg}), [{"type": "error", "text": msg}], error=True)
 
     # ---- tools -----------------------------------------------------------------------
@@ -445,8 +448,8 @@ class OpenAICompatChat:
 class LocalChat:
     """No API key: route a message to tools by keywords. Enough to drive the demo end to end."""
 
-    HELP = ("I'm running without Claude (no `ANTHROPIC_API_KEY`), so I understand simple requests:\n"
-            "- a question about the paper (I'll show the most relevant passages)\n"
+    HELP = ("I'm answering with simple commands (no language model is connected: see **Connect**). I understand:\n"
+            "- **what is this about?** and other questions about the paper (I'll show the most relevant passages)\n"
             "- **reproduce** [method]\n"
             "- **check** my images [for method]\n"
             "- **run** [method] on my images\n"
@@ -468,7 +471,32 @@ class LocalChat:
         yield ("tool", name, args)
         yield ("result", name, self.tools.call(name, args))
 
+    def overview(self) -> str:
+        """What the research is, from its crate and paper: title, what it does, its methods and their status."""
+        c = self.agent.card()
+        lines = [f"**{c['title']}**"]
+        meta = [x for x in [c.get("published") and f"published {c['published']}", c.get("doi")] if x]
+        if meta:
+            lines.append(" · ".join(meta))
+        desc = next((m.description for m in self.agent.methods if m.description), "")
+        if not desc and self.agent.paper:  # no method described: the paper's abstract, or its opening
+            text = self.agent.paper.text
+            m = re.search(r"(?is)abstract\W{0,5}(.{80,900}?)(?:\n\s*\n|introduction)", text)
+            desc = " ".join((m.group(1) if m else text[:700]).split())
+        if desc:
+            lines.append(desc[:900])
+        if self.agent.methods:
+            lines.append("**Methods**\n" + "\n".join(
+                f"- **{m.name}** ({m.language}): {m.status}" + (f". {m.detail}" if m.detail else "")
+                for m in self.agent.methods))
+        else:
+            lines.append("No runnable method yet: see **Validate** for how to add one.")
+        return "\n\n".join(lines)
+
     def send(self, text: str) -> Iterator[tuple]:
+        # Only the person's words: notes the app adds for language models ("[Done in the workstation: ...]",
+        # "[The user attached: ...]") must not trigger commands.
+        text = re.sub(r"\[(?:Done in the|The user attached)[^\]]*\]", " ", text).strip() or text
         low = text.lower().strip()
         has = lambda *w: any(re.search(rf"\b{x}", low) for x in w)  # noqa: E731
         method = self._method(text)
@@ -508,8 +536,8 @@ class LocalChat:
             yield from self._do("reproducibility_record")
         elif has("files", "uploads", "my images"):
             yield from self._do("list_my_files")
-        elif has("about", "methods", "what can you"):
-            yield from self._do("about_paper")
+        elif has("about", "what is this", "overview", "summar", "methods", "what can you", "what does"):
+            yield ("text", self.overview())
         elif has("describe"):
             yield from self._do("describe_method", method=method)
         else:

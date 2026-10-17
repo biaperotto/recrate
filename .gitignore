@@ -11,3 +11,4 @@ examples/demo/paper_crate/reproducibility-record.json
 agents/
 examples/demo/paper_agent/
 examples/workflowhub-nuclei-segmentation/paper_agent/
+.mcp.json
