@@ -62,6 +62,25 @@ What the demo shows: the paper's images were taken at 0.65 µm per pixel, yours 
 
 *Left: `min_size_px` rescaled to 12.5 for 1.3 µm pixels. Right: the paper's 50 applied unchanged.*
 
+## Diagnose a paper from a link
+
+Before agentifying, you can point ReCRATE at a paper by DOI, URL, arXiv/bioRxiv link or local file. It fetches the paper, **locates its RO-Crate** and reports whether the methods are ready to validate and reuse — without running anything.
+
+```bash
+recrate diagnose https://doi.org/10.xxxx/yyyy --out diag/
+```
+
+1. **Fetch** (`fetch.py`): resolve the link to a DOI and landing page, download the open-access full text (the page's `citation_pdf_url`, or the HTML) and collect FAIR Signposting links. Paywalled? It says so and continues with metadata only; add the text with `--pdf <file>`.
+2. **Locate** (`locate.py`): search Signposting, then Crossref/DataCite related identifiers, then the paper's own code links, and download the first good crate (Zenodo/Figshare `ro-crate-metadata.json` or `*.crate.zip`, a GitHub repo, or a WorkflowHub RO-Crate). Every candidate tried is recorded in `locate.json`. No crate found? Upload one with `--crate <folder|zip|url>` or draft it (`--draft claude`).
+3. **Diagnose** (`diagnose.py`): deterministic checks against [docs/crate-spec.md](docs/crate-spec.md) — does the crate parse, cite this paper, declare a workflow, a runner for its language, inputs/outputs, example data, reported results, tolerances and the profile's input properties? Each method is reported as **runnable / validatable / reusable**, with an overall readiness of **ready**, **ready-with-gaps** or **blocked**. Written as `diagnosis.json` and `diagnosis.md`. "Ready" means ready to validate — never "reproduced". No LLM decides a finding.
+
+```bash
+recrate diagnose paper.pdf --crate my_crate/ --out diag/      # diagnose a crate you already have
+recrate agentify --paper https://doi.org/10.xxxx/yyyy --locate --out agents/my_paper   # fetch + locate, then agentify
+```
+
+`agentify` runs Diagnose first and stores the readiness, findings and crate source (found + URL, uploaded, drafted, or none) in `agent.json`; the paper agent exposes it over MCP (the `diagnosis` tool and `paper://diagnosis` resource) so Claude can explain what is missing and how to fix it.
+
 ## A paper without a crate
 
 ```bash
@@ -115,6 +134,10 @@ The paper (title, methods and their validation, ask the paper), pick a method an
 ```
 src/recrate/
   agent.py            agentify: paper (+ crate) → paper agent; validation of each method
+  fetch.py            get a paper from a DOI / URL / arXiv / bioRxiv / file (Diagnose M0)
+  locate.py           find and download the paper's RO-Crate (Signposting, Crossref/DataCite) (M1)
+  diagnose.py         is the crate ready to validate and reuse? readiness + findings (M2)
+  http.py             the one cached network seam (stdlib urllib), patched in tests
   paper.py            paper text, DOI and code links, passage search
   drafter.py          draft a crate from the paper with Claude (optional)
   draft.py            build an input crate from a JSON description (one or more methods)

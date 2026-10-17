@@ -58,7 +58,10 @@ def _print_agent(agent) -> None:
     print(f"{card['title']}")
     if card.get("doi"):
         print(f"  {card['doi']}")
-    print(f"  crate: {card['crate_source']}{' (draft, needs confirming)' if card.get('draft') else ''}")
+    print(f"  crate: {card['crate_source']}{' ' + card['crate_url'] if card.get('crate_url') else ''}"
+          f"{' (draft, needs confirming)' if card.get('draft') else ''}")
+    if card.get("readiness"):
+        print(f"  readiness: {card['readiness']}")
     if card.get("code"):
         print(f"  code: {card['code']}")
     if not card["methods"]:
@@ -118,7 +121,7 @@ def cmd_agentify(a) -> int:
     from .agent import agentify
 
     agent = agentify(a.out, paper=a.paper, crate=a.crate, repo=a.repo, fetch_code=a.fetch_code,
-                     draft=a.draft, runner=a.runner, strict=a.strict)
+                     draft=a.draft, runner=a.runner, strict=a.strict, locate=a.locate, pdf=a.pdf)
     _print_agent(agent)
     print(f"\nPaper agent: {agent.path}\nServe it:    recrate serve {agent.path}")
     return 0
@@ -261,8 +264,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_diagnose)
 
     s = sub.add_parser("agentify", help="Turn a paper (and its RO-Crate, if any) into a paper agent")
-    s.add_argument("--paper", help="Paper as PDF, Markdown or text")
+    s.add_argument("--paper", help="Paper as a PDF/Markdown/text file, or a DOI/URL/arXiv link to fetch")
     s.add_argument("--crate", help="The paper's input RO-Crate, if available")
+    s.add_argument("--locate", action="store_true",
+                   help="Without --crate: find the paper's RO-Crate online (Diagnose)")
+    s.add_argument("--pdf", help="Full-text PDF to use when a fetched paper is paywalled")
     s.add_argument("--repo", help="Code repository URL to clone")
     s.add_argument("--fetch-code", action="store_true", help="Clone the code repository linked in the paper")
     s.add_argument("--draft", default="none", choices=["none", "claude"],

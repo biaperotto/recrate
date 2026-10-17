@@ -50,7 +50,23 @@ card = agent.card()
 st.subheader(card["title"])
 if card.get("doi"):
     st.markdown(f"[{card['doi']}]({card['doi']})")
-st.caption(f"Crate: {card['crate_source']}" + (" · draft, needs confirming" if card.get("draft") else ""))
+st.caption(f"Crate: {card['crate_source']}"
+           + (f" · {card['crate_url']}" if card.get("crate_url") else "")
+           + (" · draft, needs confirming" if card.get("draft") else ""))
+
+diag = agent.diagnosis() if hasattr(agent, "diagnosis") else None
+if diag:
+    readiness = diag.get("readiness", "unknown")
+    banner = {"ready": st.success, "ready-with-gaps": st.warning}.get(readiness, st.error)
+    banner(f"Readiness: {readiness}")
+    fixes = [f for f in (diag.get("crate_findings", [])
+                         + [x for m in diag.get("methods", []) for x in m.get("findings", [])])
+             if f.get("severity") in ("blocking", "warning")]
+    if fixes:
+        with st.expander(f"What's missing and how to fix it ({len(fixes)})"):
+            st.table(pd.DataFrame([{"severity": f["severity"],
+                                    "finding": f["message"], "fix": f.get("fix", "")} for f in fixes]))
+
 if card["methods"]:
     st.table(pd.DataFrame([{"method": m["name"], "language": m["language"], "validation": BADGE.get(m["status"],
                             m["status"]), "detail": m["detail"]} for m in card["methods"]]))

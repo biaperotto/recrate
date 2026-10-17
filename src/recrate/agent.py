@@ -96,9 +96,13 @@ class PaperAgent:
         return search(self.paper.text, query, k) if self.paper else []
 
     def card(self) -> dict[str, Any]:
-        return {**{k: self.manifest.get(k) for k in ("name", "title", "doi", "crate_source", "code", "draft")},
+        return {**{k: self.manifest.get(k) for k in
+                   ("name", "title", "doi", "crate_source", "crate_url", "code", "draft", "readiness")},
                 "methods": [m.__dict__ for m in self.methods],
                 "code_and_data_links": self.paper.repos if self.paper else []}
+
+    def diagnosis(self) -> dict[str, Any] | None:
+        return self.manifest.get("diagnosis")
 
     @classmethod
     def load(cls, path: str | Path) -> "PaperAgent":
@@ -154,18 +158,36 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
 
 def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path | None = None,
              repo: str | None = None, fetch_code: bool = False, draft: str = "none",
-             runner: str = "auto", strict: bool = False) -> PaperAgent:
-    """Build a paper agent folder. See the module docstring."""
+             runner: str = "auto", strict: bool = False, locate: bool = False,
+             pdf: str | None = None) -> PaperAgent:
+    """Build a paper agent folder. See the module docstring.
+
+    ``paper`` may be a local file or a link (DOI / URL / arXiv / bioRxiv). With
+    ``locate`` and no supplied ``crate``, the Diagnose step finds the paper's
+    RO-Crate; whatever crate results is diagnosed and the diagnosis and crate
+    source are stored in the manifest before methods are validated as before.
+    """
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, Any] = {"recrate_version": __version__,
                                 "created": datetime.now(timezone.utc).replace(microsecond=0).isoformat()}
 
-    # 1. The paper
+    # 1. The paper: a local file, or a link to fetch (M0).
     p: Paper | None = None
+    fetched = None
     if paper:
-        p = read_paper(paper)
-        save_paper(p, out / "paper")
+        if Path(str(paper)).expanduser().is_file():
+            p = read_paper(paper)
+        else:
+            from .fetch import fetch_paper
+
+            fetched = fetch_paper(str(paper), out / "work", pdf=pdf)
+            p = fetched.paper
+            manifest["landing_url"] = fetched.landing_url
+            if not fetched.full_text:
+                manifest["paper_note"] = fetched.message
+        if p is not None:
+            save_paper(p, out / "paper")
 
     # 2. The code
     code_dir = None
@@ -184,15 +206,25 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
                 shutil.rmtree(crate_out)
             shutil.copytree(src, crate_out)
         manifest["crate_source"] = "supplied"
+    elif locate and p is not None:
+        from .locate import locate_crate
+
+        signposting = fetched.signposting if fetched else []
+        res = locate_crate(p, signposting, crate_out)
+        res.write_json(out / "locate.json")
+        if res.found:
+            manifest["crate_source"] = "found"
+            manifest["crate_url"] = res.source_url
+        elif draft == "claude":
+            _draft_crate(p, out, crate_out, code_dir)
+            manifest["crate_source"] = "drafted"
+        else:
+            manifest["crate_source"] = "none"
+            (out / "DRAFT_ME.md").write_text(_draft_instructions(p, code_dir, out), encoding="utf-8")
     elif draft == "claude":
         if p is None:
             raise ValueError("Drafting a crate needs the paper (--paper).")
-        from .draft import build_crate
-        from .drafter import draft_description
-
-        desc = draft_description(p.text, base=out, code_dir=code_dir)
-        (out / "crate_description.json").write_text(json.dumps(desc, indent=2, ensure_ascii=False), encoding="utf-8")
-        build_crate(desc, crate_out, base_dir=out)
+        _draft_crate(p, out, crate_out, code_dir)
         manifest["crate_source"] = "drafted"
     else:
         manifest["crate_source"] = "none"
@@ -207,6 +239,16 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     manifest["draft"] = bool(spec0.draft) if spec0 else False
     manifest["paper"] = str(paper) if paper else None
 
+    # 4b. Diagnose the crate (M2): store readiness and findings for the agent to explain.
+    if spec0 is not None:
+        from .diagnose import diagnose_crate
+
+        diag = diagnose_crate(crate_out, paper_doi=(p.doi if p else None),
+                              crate_source=manifest["crate_source"],
+                              source_url=manifest.get("crate_url"))
+        manifest["diagnosis"] = diag.to_json()
+        manifest["readiness"] = diag.readiness
+
     # 5. Validate each method against the paper's reported results
     methods: list[MethodStatus] = []
     if spec0 is not None:
@@ -216,6 +258,15 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     manifest["methods"] = [m.__dict__ for m in methods]
     (out / MANIFEST).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return PaperAgent.load(out)
+
+
+def _draft_crate(p: Paper, out: Path, crate_out: Path, code_dir: Path | None) -> None:
+    from .draft import build_crate
+    from .drafter import draft_description
+
+    desc = draft_description(p.text, base=out, code_dir=code_dir)
+    (out / "crate_description.json").write_text(json.dumps(desc, indent=2, ensure_ascii=False), encoding="utf-8")
+    build_crate(desc, crate_out, base_dir=out)
 
 
 def _draft_instructions(p: Paper, code_dir: Path | None, out: Path) -> str:

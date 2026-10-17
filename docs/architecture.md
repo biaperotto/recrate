@@ -1,12 +1,26 @@
 # Architecture
 
+## Diagnose: from a paper link to a readiness verdict
+
+Before a paper becomes an agent, `recrate diagnose <link> --out <folder>` answers one question with plain code (no LLM): is everything needed to **validate and reuse** this paper's methods present?
+
+```
+paper link (DOI / URL / arXiv / bioRxiv / file)
+  ├─ fetch.py   resolve → landing page → open full text (citation_pdf_url / HTML); collect Signposting
+  ├─ locate.py  Signposting → Crossref/DataCite relations → paper code links; download the first good crate
+  │             (Zenodo/Figshare file, GitHub repo, WorkflowHub RO-Crate); every candidate logged in locate.json
+  └─ diagnose.py  checks against docs/crate-spec.md → diagnosis.json + diagnosis.md
+```
+
+Each method is reported as **runnable** (workflow file, a runner for its language, parameters), **validatable** (runnable + example data + reported results) and **reusable** (validatable + a known profile and its input properties). Overall readiness is **ready** (every method validatable and reusable), **ready-with-gaps** (at least one validatable) or **blocked** (none). "Ready" means ready to validate, never "reproduced". Profile-specific input-property checks come from a declare-only `DomainProfile.diagnose_inputs` hook, so each domain owns them. When no crate is found, the user uploads one (`--crate folder|zip|url`) or drafts it (`--draft claude`), and the same checks run on the result. Exit codes: 0 diagnosed, 3 no crate found and no fallback, 2 error.
+
 ## From paper to paper agent
 
 `recrate agentify` builds a **paper agent** folder:
 
 ```
 agents/my_paper/
-  agent.json      manifest: title, DOI, crate source (supplied / drafted / none), methods and validation
+  agent.json      manifest: title, DOI, crate source (found+URL / uploaded / supplied / drafted / none), readiness, diagnosis, methods and validation
   paper/          paper.md (text), paper.json (title, DOI, code and data links)
   crate/          input RO-Crate: one ComputationalWorkflow per method
   code/           the paper's repository, if cloned
@@ -28,8 +42,8 @@ agents/my_paper/
 
 | MCP part | ReCRATE |
 | --- | --- |
-| Resources | `paper://text`, `paper://info`, `paper://crate` |
-| Tools | `about_paper`, `search_paper`, `describe_method`, one `run_<method>` per method, `check_my_data`, `reproduce`, `run_on_my_data`, `approve_run`, `methods_text`, `publish_run`, `reproducibility_record`, `draft_crate` |
+| Resources | `paper://text`, `paper://info`, `paper://crate`, `paper://diagnosis` |
+| Tools | `about_paper`, `diagnosis`, `search_paper`, `describe_method`, one `run_<method>` per method, `check_my_data`, `reproduce`, `run_on_my_data`, `approve_run`, `methods_text`, `publish_run`, `reproducibility_record`, `draft_crate` |
 | Prompts | `reproduce_paper`, `apply_to_my_data` |
 
 The server's instructions tell the agent to check data before running, explain every adjustment, and never invent numbers.

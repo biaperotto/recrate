@@ -84,11 +84,29 @@ def build_server(agent_dir: str | Path) -> FastMCP:
             return "{}"
         return (agent.crate_dir / "ro-crate-metadata.json").read_text(encoding="utf-8")
 
+    @mcp.resource("paper://diagnosis", name="diagnosis",
+                  description="Readiness diagnosis of the crate (what is ready to validate and reuse)",
+                  mime_type="application/json")
+    def diagnosis_json() -> str:
+        d = agent.diagnosis()
+        return json.dumps(d, indent=2, ensure_ascii=False) if d else "{}"
+
     # ---- asking the paper -----------------------------------------------------
     @mcp.tool(description="Overview of the paper agent: title, DOI, crate source, methods and whether each "
                           "was validated against the paper's reported results.")
     def about_paper() -> dict[str, Any]:
         return agent.card()
+
+    @mcp.tool(description="Explain what is missing to validate or reuse this paper's methods, and how to fix "
+                          "it: the readiness (ready | ready-with-gaps | blocked), per-method "
+                          "runnable/validatable/reusable flags, and findings with their fixes. Diagnose only "
+                          "reports what the crate declares; it never runs a method.")
+    def diagnosis() -> dict[str, Any]:
+        d = agent.diagnosis()
+        if not d:
+            return {"readiness": "unknown",
+                    "note": "This agent has no diagnosis yet (no crate). Draft one with draft_crate."}
+        return d
 
     @mcp.tool(description="Search the paper's text and return the most relevant passages (for questions about "
                           "methods, parameters, data and reported results).")
