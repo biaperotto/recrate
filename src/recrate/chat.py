@@ -50,7 +50,7 @@ _RATIO = {"type": "number", "description": "The user's pixel size divided by the
           "research states no pixel size and the user knows how theirs compares (e.g. 2 for 2×2 binning)"}
 TOOLS: list[dict[str, Any]] = [
     {"name": "about_paper", "description": "Title, DOI, crate source, and the paper's methods with their "
-                                           "validation status against the paper's reported results.",
+                                           "reproduction status (the verdict ladder) against the paper's reported results.",
      "input_schema": _schema({})},
     {"name": "search_paper", "description": "Search the paper's text; returns the most relevant passages. Use it "
                                             "to quote the paper when answering.",
@@ -401,7 +401,7 @@ def system_prompt(agent: PaperAgent, max_paper_chars: int = MAX_PAPER_CHARS) -> 
         f"You are the paper agent for '{title}'{f' ({doi})' if doi else ''}, inside the ReCRATE app. "
         "The user talks to the paper: they ask about it, reproduce its results, upload their own images "
         "and run its methods on them, and export run records as RO-Crates.\n\n"
-        f"Methods (each is a tool-backed workflow, validated against the paper's reported results):\n{methods}\n\n"
+        f"Methods (each is a tool-backed workflow, reproduced against the paper's reported results):\n{methods}\n\n"
         "How to work:\n"
         "- Answer questions from the paper and quote the relevant sentence. Say so when the paper does not say.\n"
         "- Never invent numbers. Every result comes from a tool; report what the tools return.\n"
@@ -413,7 +413,7 @@ def system_prompt(agent: PaperAgent, max_paper_chars: int = MAX_PAPER_CHARS) -> 
         "create the output RO-Crate (create_output_crate) and a methods paragraph.\n"
         "- After a run with adjustments, offer compare_paper_parameters to show what the paper's values "
         "unchanged would give.\n"
-        "- A validation that differs is a finding about the published result, not a failure: name each "
+        "- A reproduction that differs is a finding about the published result, not a failure: name each "
         "value that differs (published vs recomputed, and the tolerance) and say how many reproduce.\n"
         "- If the research states no pixel size and a parameter is in pixels, ask the user how their pixel size "
         "compares with the research's and pass pixel_ratio; never guess it.\n"
@@ -489,6 +489,65 @@ class ClaudeChat:
                                 **({"is_error": True} if r.error else {})})
             self.messages.append({"role": "user", "content": results})
         yield ("text", "_(Stopped after many steps; tell me how to continue.)_")
+
+
+def suggested_questions(agent: PaperAgent, limit: int = 6) -> list[str]:
+    """Questions worth asking this research object, chosen from what it contains: its methods and their verdicts, the
+    follow-up checks for a difference, what data a method takes, its tables, what the paper leaves unsaid. Written
+    from the content, never by a model, so every suggestion has something real behind it."""
+    from .followup import propose
+    from .model import assumptions
+
+    out = ["What is this research about, and what did the authors find?"]
+    if not agent.methods:
+        out += ["Which code and data does the paper link to?",
+                "Which software did it use, and in which versions?",
+                "What would it take to make its methods runnable?"]
+    for m in agent.methods[:3]:
+        try:
+            spec = agent.spec(m.id)
+        except Exception:  # noqa: BLE001 - a method the crate can't describe gets no suggestions
+            continue
+        name = m.name.replace("_", " ")
+        if m.status == "differs":
+            out.append(f"Why do the {name} results differ from the paper?")
+            if any(f.runnable for f in propose(spec)):
+                out.append(f"Run the follow-up checks for {name}: do they explain the difference?")
+        elif m.status == "validated":
+            out.append(f"How was {name} checked against the paper's published results?")
+        elif m.status == "failed":
+            out.append(f"Why did {name} fail to run?")
+        else:
+            out.append(f"Reproduce {name} on the paper's own data.")
+        if not spec.needs_data:
+            out.append(f"Run {name} with my own values: which can I change?")
+        elif spec.profile == "bioimaging":
+            out.append(f"Will {name} work on my images? What should I check first?")
+        elif spec.profile == "timeseries":
+            out.append(f"Will {name} work on my recordings if the sampling rate differs?")
+        else:
+            out.append(f"Can I use {name} on my own data? What must it look like?")
+        if any(p.prop("quote") for p in spec.value_inputs):
+            out.append(f"Which parameters does {name} use, and where does the paper state them?")
+    tables = agent.tables()
+    if tables:  # the table a method reproduces, when its description names one
+        said = " ".join(m.description for m in agent.methods).lower()
+        t = next((t for t in tables if t["label"] and t["label"].lower() in said), tables[0])
+        out.append(f"Show {t['label']} and explain what it reports.")
+    if agent.methods:
+        try:
+            if assumptions(agent.spec(), agent.environment):
+                out.append("What does the paper not say, that had to be assumed?")
+        except Exception:  # noqa: BLE001
+            pass
+        if any(m.run_crate for m in agent.methods):
+            out.append("Make the report page for this research.")
+    seen, picked = set(), []
+    for q in out:  # one per kind of question first, so a long list of methods doesn't crowd out the rest
+        if q not in seen:
+            seen.add(q)
+            picked.append(q)
+    return picked[:limit]
 
 
 def claude_code_binary() -> str | None:

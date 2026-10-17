@@ -121,3 +121,18 @@ def test_claude_code_engine_streams_tools_and_keeps_the_session(tmp_path):
     list(chat.send("And then?"))
     args = (tmp_path / "args.txt").read_text().splitlines()
     assert "--strict-mcp-config" in args[0] and "--resume abc" in args[1]  # only ReCRATE's tools; one conversation
+
+
+def test_suggested_questions_follow_the_content(tmp_path):
+    """Suggestions come from what the research object holds: a differing method gets 'why', and its follow-ups."""
+    from pathlib import Path
+
+    from recrate.agent import agentify
+    from recrate.chat import suggested_questions
+
+    ex = Path(__file__).resolve().parent.parent / "examples" / "penguins-dimorphism"
+    a = agentify(tmp_path / "p", paper=ex / "paper.pdf", crate=ex / "crate", search_crate=False, online=False)
+    qs = suggested_questions(a)
+    assert qs[0].startswith("What is this research about")
+    assert "Why do the size dimorphism index results differ from the paper?" in qs
+    assert any(q.startswith("Run the follow-up checks") for q in qs) and len(qs) <= 6

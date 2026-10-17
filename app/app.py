@@ -29,7 +29,7 @@ import streamlit as st
 
 from recrate.agent import PaperAgent, agentify, revalidate, review_conclusion, runs_own_code
 from recrate.chat import (LOCAL_URL, ChatTools, ClaudeChat, ClaudeCodeChat, LocalChat, OpenAICompatChat,
-                          claude_available, claude_code_binary, local_models)
+                          claude_available, claude_code_binary, local_models, suggested_questions)
 from recrate.crate import CrateError
 from recrate.figures import Panel, comparison_chart, panel_figure, pixel_size_um
 from recrate.paper import passages
@@ -167,10 +167,16 @@ mark.cite {background: rgba(232,163,61,.3); color: inherit; padding: 0 .1em; bor
 .st-key-landing {padding-top: 7vh;}
 .st-key-landing [data-testid="stImage"] {margin-bottom: 1.4rem;}
 h1.hero {font-size: 2.3rem; line-height: 1.15; margin: 0 0 .7rem; font-weight: 700; letter-spacing: -.02em;}
+.logo svg {max-width: 100%;}
 .lede {font-size: 1.08rem; color: var(--muted); max-width: 38rem; margin: 0 0 1.6rem;}
 .st-key-landing [class*="st-key-get-"] {background: var(--card); border-radius: 14px; min-height: 8.5rem;}
 .st-key-landing .foot {margin-top: 2rem;}
 .st-key-landing a {color: var(--accent);}
+.st-key-suggest {margin: .4rem 0 .2rem;}
+.st-key-suggest button {width: 100%; justify-content: flex-start; text-align: left; border-radius: 12px;
+  background: var(--card); border: 1px solid var(--line); padding: .35rem .7rem; min-height: 0; font-size: .86rem;}
+.st-key-suggest button:hover {border-color: var(--accent); color: var(--accent);}
+.st-key-suggest button p {text-align: left;}
 </style>""")
 
 # The divider between the chat and the workstation: drag to resize, double-click to reset.
@@ -496,7 +502,7 @@ def after_tool(name: str, result) -> None:
         ss.run_name = ss.tools.last_run.name
 
 
-INTRO = ("Hi! Give me a piece of research and I'll recreate it, so you can **validate** it on its own data or "
+INTRO = ("Hi! Give me a piece of research and I'll recreate it, so you can **reproduce** it on its own data or "
          "**reuse** its methods on yours.\n\n"
          "- a research **RO-Crate**: a zip, a WorkflowHub link or DOI, a Zenodo DOI\n"
          "- or a **paper**: a PDF, a DOI or an arXiv link. I'll recreate its RO-Crate with the software as it was "
@@ -518,6 +524,20 @@ def context_card(agent: PaperAgent) -> None:
                 + "</div>", unsafe_allow_html=True)
 
 
+def suggestions(agent: PaperAgent) -> None:
+    """Questions to start from, chosen from what this research object contains; one click sends one."""
+    asked = {m["parts"][0]["text"] for m in ss.history if m["role"] == "user" and m.get("parts")}
+    qs = [q for q in suggested_questions(agent, limit=8) if q not in asked][:4]
+    if not qs:
+        return
+    with st.container(key="suggest"):
+        st.markdown("<div class='eyebrow'>Try asking</div>", unsafe_allow_html=True)
+        for i, q in enumerate(qs):
+            if st.button(q, key=f"suggest-{i}-{abs(hash(q)) % 10**6}", icon=":material/chat_bubble:"):
+                ss.picked_question = q
+                st.rerun()
+
+
 def chat_card() -> None:
     kind, label = engine_plan()
     color = {"subscription": "#d97757", "claude": "#d97757", "local": "#2A78D6", "commands": "#b8b3a7"}[kind]
@@ -537,13 +557,16 @@ def chat_card() -> None:
             render_message({"role": "assistant", "parts": [{"kind": "text", "text": INTRO}]}, "intro")
         for i, msg in enumerate(ss.history):
             render_message(msg, i)
+        if has_agent:
+            suggestions(PaperAgent.load(ss.agent_dir))
     entry = st.chat_input("Ask about the research, or attach your data…" if has_agent else
                           "Paste a DOI or link, or attach a paper or crate…", accept_file="multiple")
     st.markdown("<div class='muted' style='font-size:.72rem;margin-top:-.2rem'>Enter to send · Shift+Enter for a new "
                 "line</div>", unsafe_allow_html=True)
-    if not entry:
+    picked = ss.pop("picked_question", None)
+    if not entry and not picked:
         return
-    text, files = entry.text or "", list(entry.files or [])
+    text, files = (entry.text or "", list(entry.files or [])) if entry else (picked, [])
     ss.last_prompt = text
     shown = text + (("\n\n📎 " + ", ".join(f.name for f in files)) if files else "")
     ss.history.append({"role": "user", "parts": [{"kind": "text", "text": shown or "(files)"}]})
@@ -1428,7 +1451,7 @@ def record_section(agent: PaperAgent, runs: list[dict]) -> Path | None:
 
 def record_actions(agent: PaperAgent, run_dir: Path | None) -> None:
     if run_dir is None:
-        st.caption("Runs appear here as you validate or reuse.")
+        st.caption("Runs appear here as you reproduce or reuse.")
         return
     spec = agent.spec(summarise_run(run_dir)["method"])
     c1, c2, c3 = st.columns([1, 1.3, 1.3], vertical_alignment="center")
@@ -1500,7 +1523,7 @@ def start(agent_none: bool = True) -> None:
     with st.container(key="workscroll"):
         st.markdown("#### Recreate a piece of research")
         st.markdown("<span class='muted'>Start from its <b>RO-Crate</b> or its <b>paper</b>. For a paper, ReCRATE recreates "
-                    "the crate with the software as it was when the paper was published. Then validate the research on "
+                    "the crate with the software as it was when the paper was published. Then reproduce it on "
                     "its own data, or reuse its methods on yours.</span>", unsafe_allow_html=True)
         with st.form("add-source", clear_on_submit=True, border=False):
             c1, c2 = st.columns([5, 1.2], vertical_alignment="bottom")
@@ -1529,6 +1552,13 @@ def start(agent_none: bool = True) -> None:
 GET = [("Reproduce", "Each method run on the research's own data, compared with the published result.", "replay"),
        ("Reuse", "Your data checked against what each method expects; parameters adjusted and recorded.", "tune"),
        ("Record", "Every run as a Workflow Run RO-Crate, with an export for your paper.", "inventory_2")]
+
+
+def logo_html(width: int) -> str:
+    """The logo inline (not st.image), so Streamlit doesn't put its image toolbar on it."""
+    svg = (IMG / "logo.svg").read_text(encoding="utf-8")
+    svg = re.sub(r'width="\d+" height="\d+"', f'width="{width}" style="height:auto;display:block"', svg, count=1)
+    return f"<div class='logo'>{svg}</div>"
 
 
 def landing() -> None:
@@ -1640,7 +1670,7 @@ def mcp_install(agent_dir: Path, key: str) -> None:
 def topbar() -> None:
     with st.container(key="topbar"):
         c = st.columns([7, 1.2, 1.6, .8], vertical_alignment="center")
-        c[0].image(str(IMG / "logo.svg"), width=180)
+        c[0].markdown(logo_html(180), unsafe_allow_html=True)
         kind, label = engine_plan()
         with c[1].popover("Connect", width="stretch", icon=":material/hub:", help=f"Chat: {label}"):
             connect_box()
