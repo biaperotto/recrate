@@ -46,7 +46,6 @@ st.set_page_config(page_title="ReCRATE", page_icon=str(IMG / "mark.svg"), layout
                    initial_sidebar_state="collapsed")
 
 WH = ROOT / "examples" / "workflowhub-nuclei-segmentation"
-DEMO = ROOT / "examples" / "demo"
 EXAMPLES = {
     "workflowhub": {"title": "Nuclei segmentation · WorkflowHub #771",
                     "about": "A published Galaxy workflow crate, with public microscopy images from Zenodo.",
@@ -59,11 +58,6 @@ EXAMPLES = {
                  "build": {"paper": ROOT / "examples" / "penguins-dimorphism" / "paper.pdf",
                            "crate": ROOT / "examples" / "penguins-dimorphism" / "crate"},
                  "data": ROOT / "examples" / "penguins-dimorphism" / "research-data"},
-    "demo": {"title": "Counting and sizing nuclei · synthetic paper",
-             "about": "Two methods (a Fiji macro, a Python script); your images have a different pixel size.",
-             "tags": ["paper + crate", "Fiji", "Python"],
-             "agent": DEMO / "paper_agent", "build": {"paper": DEMO / "paper.md", "crate": DEMO / "paper_crate"},
-             "data": DEMO / "my_images"},
 }
 BADGE = {"validated": ":green-badge[reproduced]", "differs": ":orange-badge[differs]",
          "failed": ":red-badge[failed]", "not validated": ":gray-badge[not run yet]"}
