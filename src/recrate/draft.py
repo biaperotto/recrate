@@ -28,7 +28,8 @@ Description format (JSON / dict). Each method becomes one tool of the paper agen
              "description": "...", "scaling": "inverse_pixel_area"}
           ],
           "outputs": [{"id": "out-results", "name": "results", "type": "File", "format": "text/csv",
-                       "tolerances": {"count": 0.05, "mean_area": 0.10}}],
+                       "tolerances": {"count": 0.05, "mean_area": 0.10},
+                       "abs_tolerances": {}}],   # optional: per-item absolute margins, for rounded values
           "example_data": "data/images/",      # optional: the paper's own data
           "expected": "results/table1.csv"     # optional: the paper's reported results
         }
@@ -148,6 +149,10 @@ def build_crate(desc: dict[str, Any], out_dir: str | Path, base_dir: str | Path 
                 ppid = f"{pid}-tolerance-{_slug(col)}"
                 props.append({"@id": ppid})
                 graph.append(_pv(ppid, f"tolerance:{col}", tol))
+            for col, tol in (p.get("abs_tolerances") or {}).items():
+                ppid = f"{pid}-tolerance-abs-{_slug(col)}"
+                props.append({"@id": ppid})
+                graph.append(_pv(ppid, f"tolerance_abs:{col}", tol))
             if props:
                 e["additionalProperty"] = props
             graph.append(e)

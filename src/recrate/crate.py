@@ -105,6 +105,15 @@ class MethodSpec:
                     tol[name.split(":", 1)[1]] = float(prop.value)
         return tol
 
+    def abs_tolerances(self) -> dict[str, float]:
+        """Absolute margins per column (``tolerance_abs:<column>``), checked for every item."""
+        tol: dict[str, float] = {}
+        for out in self.outputs:
+            for name, prop in out.properties.items():
+                if name.startswith("tolerance_abs:"):
+                    tol[name.split(":", 1)[1]] = float(prop.value)
+        return tol
+
     def summary(self) -> dict[str, Any]:
         """A plain dict for display (the 'method card')."""
         d = self.data_input

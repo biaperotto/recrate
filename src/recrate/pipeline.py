@@ -63,7 +63,8 @@ def _execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: st
                     if result.masks_dir else [])
         comparison = None
         if compare and spec.expected_results and spec.expected_results.exists():
-            comparison = compare_results(result.results_csv, spec.expected_results, spec.tolerances())
+            comparison = compare_results(result.results_csv, spec.expected_results, spec.tolerances(),
+                                         spec.abs_tolerances())
         run_dir = _new_run_dir(runs_dir, mode)
         write_run_crate(run_dir, spec, mode, data, result, check, comparison, agent=agent, overlays=overlays,
                         param_notes=param_notes)

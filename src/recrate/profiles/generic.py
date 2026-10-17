@@ -53,4 +53,18 @@ class GenericProfile(DomainProfile):
             note = "" if status == OK else (f"{len(files) - len(ok)} file(s) are not {fmt}; they may be ignored."
                                             if ok else f"No {fmt} files found.")
             report.items.append(CheckItem("Format", fmt, f"{len(ok)} of {len(files)} match", status, note))
+        need = spec.data_input.prop("columns") if spec.data_input else None
+        tables = [f for f in files if f.suffix.lower() in {".csv", ".tsv", ".txt"}]
+        if need and tables:
+            import csv
+
+            want = [c.strip() for c in str(need).split(",") if c.strip()]
+            have = set()
+            for f in tables:
+                with f.open(newline="", encoding="utf-8", errors="replace") as fh:
+                    have |= set(next(csv.reader(fh, delimiter="\t" if f.suffix.lower() == ".tsv" else ","), []))
+            missing = [c for c in want if c not in have]
+            report.items.append(CheckItem("Columns", ", ".join(want), "all present" if not missing else
+                                          f"missing: {', '.join(missing)}", FAIL if missing else OK,
+                                          "" if not missing else "Rename your columns, or set the column parameters."))
         return report
