@@ -20,13 +20,15 @@ Overall readiness: **ready** (every method validatable and reusable),
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import http
 from .compare import DEFAULT_TOLERANCE, _num, read_results
 from .crate import METADATA_FILE, CrateError, list_methods, load_crate, resolve_crate_dir
-from .locate import norm_doi
+from .locate import LocateResult, _resolve, _safe_unzip, locate_crate, norm_doi
 from .profiles import PROFILES, get_profile
 
 BLOCKING, WARNING, INFO = "blocking", "warning", "info"
@@ -313,3 +315,94 @@ def diagnose_crate(crate: str | Path, paper_doi: str | None = None, crate_source
 
     return Diagnosis(readiness=readiness, crate_source=crate_source, source_url=source_url,
                      crate_findings=crate_findings, methods=methods)
+
+
+# ---- M3: the full Diagnose step (fetch -> locate -> diagnose) --------------
+
+NO_CRATE_MESSAGE = (
+    "No RO-Crate found for {doi}. Upload one with --crate <folder|zip|url>, or continue without one "
+    "to draft it from the paper and its code (--draft claude, or /agentify in Claude Code)."
+)
+
+
+@dataclass
+class DiagnoseOutcome:
+    out_dir: Path
+    fetch: Any                       # FetchResult
+    locate: LocateResult | None
+    diagnosis: Diagnosis | None
+    crate_dir: Path | None
+    crate_source: str | None
+    source_url: str | None
+    exit_code: int
+    message: str = ""
+
+
+def _materialise_crate(crate_arg: str, dest: Path, cache_dir) -> None:
+    """Put an uploaded crate (folder, zip, or URL) into ``dest``."""
+    p = Path(crate_arg).expanduser()
+    if p.exists():
+        if p.is_dir():
+            src = resolve_crate_dir(p)
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(src, dest)
+            return
+        if p.suffix.lower() == ".zip":
+            _safe_unzip(p.read_bytes(), dest)
+            return
+        if p.name == METADATA_FILE:
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, dest / METADATA_FILE)
+            return
+        raise ValueError(f"--crate {crate_arg}: expected a crate folder, a .zip, or a URL.")
+    _resolve(crate_arg, dest, cache_dir)  # treat as a URL
+
+
+def run_diagnose(link: str, out: str | Path, crate: str | None = None, pdf: str | None = None,
+                 draft: str = "none", cache_dir: str | Path | None = http.CACHE_DIR) -> DiagnoseOutcome:
+    """Diagnose a paper from a link: M0 fetch → M1 locate (or uploaded/drafted) → M2 diagnose."""
+    from .fetch import fetch_paper
+    from .paper import save_paper
+
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    fr = fetch_paper(link, out / "work", pdf=pdf, cache_dir=cache_dir)
+    if fr.paper is not None:
+        save_paper(fr.paper, out / "paper")
+
+    crate_out = out / "crate"
+    locate_res: LocateResult | None = None
+    crate_dir: Path | None = None
+    source: str | None = None
+    source_url: str | None = None
+
+    if crate:
+        _materialise_crate(crate, crate_out, cache_dir)
+        crate_dir, source = crate_out, "uploaded"
+    else:
+        locate_res = locate_crate(fr.paper, fr.signposting, crate_out, cache_dir)
+        locate_res.write_json(out / "locate.json")
+        if locate_res.found:
+            crate_dir, source, source_url = crate_out, "found", locate_res.source_url
+        elif draft == "claude":
+            from .draft import build_crate
+            from .drafter import draft_description
+
+            desc = draft_description(fr.paper.text, base=out, code_dir=(out / "code")
+                                     if (out / "code").exists() else None)
+            (out / "crate_description.json").write_text(json.dumps(desc, indent=2, ensure_ascii=False),
+                                                        encoding="utf-8")
+            build_crate(desc, crate_out, base_dir=out)
+            crate_dir, source = crate_out, "drafted"
+        else:
+            msg = NO_CRATE_MESSAGE.format(doi=fr.doi or link)
+            return DiagnoseOutcome(out_dir=out, fetch=fr, locate=locate_res, diagnosis=None,
+                                   crate_dir=None, crate_source=None, source_url=None,
+                                   exit_code=3, message=msg)
+
+    diagnosis = diagnose_crate(crate_dir, paper_doi=fr.doi, crate_source=source, source_url=source_url)
+    diagnosis.write(out)
+    return DiagnoseOutcome(out_dir=out, fetch=fr, locate=locate_res, diagnosis=diagnosis,
+                           crate_dir=crate_dir, crate_source=source, source_url=source_url,
+                           exit_code=0)

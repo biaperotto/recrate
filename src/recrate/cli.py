@@ -76,6 +76,44 @@ def cmd_demo(a) -> int:
     return 0
 
 
+def _print_diagnosis(outcome) -> None:
+    fr = outcome.fetch
+    where = fr.landing_url or fr.paper.source if fr.paper else outcome.out_dir
+    print(f"Paper: {fr.paper.title if fr.paper else '(unknown)'}")
+    print(f"  DOI: {fr.doi or 'not found'}   source: {where}")
+    if not fr.full_text:
+        print(f"  note: {fr.message}")
+    if outcome.exit_code == 3:
+        print("\n" + outcome.message)
+        return
+    d = outcome.diagnosis
+    src = outcome.crate_source + (f" ({outcome.source_url})" if outcome.source_url else "")
+    print(f"  crate: {src}")
+    print(f"\nReadiness: {d.readiness.upper()}")
+    for m in d.methods:
+        flags = ", ".join(k for k, v in (("runnable", m.runnable), ("validatable", m.validatable),
+                                         ("reusable", m.reusable)) if v) or "nothing yet"
+        print(f"  - {m.name} [{m.language or '?'}]: {flags}")
+    fixes = d.top_fixes(3)
+    if fixes:
+        print("\nTop fixes:")
+        for f in fixes:
+            print(f"  [{f.severity}] {f.message}" + (f"  → {f.fix}" if f.fix else ""))
+    print(f"\nWrote {outcome.out_dir / 'diagnosis.json'} and {outcome.out_dir / 'diagnosis.md'}")
+
+
+def cmd_diagnose(a) -> int:
+    from .diagnose import run_diagnose
+
+    try:
+        outcome = run_diagnose(a.link, a.out, crate=a.crate, pdf=a.pdf, draft=a.draft)
+    except (CrateError, ValueError, RuntimeError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    _print_diagnosis(outcome)
+    return outcome.exit_code
+
+
 def cmd_agentify(a) -> int:
     from .agent import agentify
 
@@ -211,6 +249,16 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("demo-data", help="Generate a demo paper, its crate, and 'your images'")
     s.add_argument("out")
     s.set_defaults(func=cmd_demo)
+
+    s = sub.add_parser("diagnose", help="From a paper link: fetch it, locate its RO-Crate, and report "
+                                        "whether its methods are ready to validate and reuse")
+    s.add_argument("link", help="A DOI, URL, arXiv/bioRxiv link, or local paper file")
+    s.add_argument("--crate", help="Skip locate: use this crate (folder, .zip, or URL)")
+    s.add_argument("--pdf", help="Full-text PDF to use when the paper is paywalled")
+    s.add_argument("--draft", default="none", choices=["none", "claude"],
+                   help="If no crate is found, draft one with Claude (needs ANTHROPIC_API_KEY)")
+    s.add_argument("--out", required=True, help="Folder to write the paper, crate, locate.json and diagnosis")
+    s.set_defaults(func=cmd_diagnose)
 
     s = sub.add_parser("agentify", help="Turn a paper (and its RO-Crate, if any) into a paper agent")
     s.add_argument("--paper", help="Paper as PDF, Markdown or text")
