@@ -37,7 +37,7 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import __version__
 from .crate import CrateError, MethodSpec, list_methods, load_crate, resolve_crate_dir
@@ -185,14 +185,26 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
 def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path | None = None,
              repo: str | None = None, fetch_code: bool = False, draft: str = "none",
              runner: str = "auto", strict: bool = False, locate: bool = False,
-             pdf: str | None = None, validate: str = "all", online: bool = True) -> PaperAgent:
+             pdf: str | None = None, validate: str = "all", online: bool = True,
+             on_progress: Callable[[str, str], None] | None = None) -> PaperAgent:
     """Build a paper agent folder. See the module docstring.
 
     ``paper`` may be a local file or a link (DOI / URL / arXiv / bioRxiv). With
     ``locate`` and no supplied ``crate``, the Diagnose step finds the paper's
     RO-Crate; whatever crate results is diagnosed and the diagnosis and crate
     source are stored in the manifest before methods are validated as before.
+
+    ``on_progress(key, label)``, if given, is called at the start of each build stage
+    (paper, code, crate, environment, diagnose, validate) and finally with ``done``.
+    A failing callback is ignored.
     """
+    def _tick(key: str, label: str) -> None:
+        if on_progress is not None:
+            try:
+                on_progress(key, label)
+            except Exception:
+                pass
+
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     online = online and not os.environ.get("RECRATE_OFFLINE")  # registries and DOI metadata need the network
@@ -213,6 +225,7 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     p: Paper | None = None
     fetched = None
     if paper:
+        _tick("paper", "Reading the paper")
         if Path(str(paper)).expanduser().is_file():
             p = read_paper(paper)
         else:
@@ -231,10 +244,12 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     if repo is None and fetch_code and p is not None:
         repo = next((r for r in p.repos if any(h in r for h in ("github.com", "gitlab.com", "codeberg.org"))), None)
     if repo:
+        _tick("code", "Fetching the code repository")
         manifest["code"] = _clone(repo, out / "code")
         code_dir = out / "code"
 
     # 3. The crate: supplied, drafted, or none yet
+    _tick("crate", "Assembling the RO-Crate")
     crate_out = out / "crate"
     if galaxy_src is not None:
         from .galaxy import import_galaxy_crate
@@ -283,6 +298,7 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
 
     env = None
     if p is not None and manifest["crate_source"] in {"none", "drafted"}:
+        _tick("environment", "Resolving the software environment")
         fetch_json = None
         if online:
             from .sources import get_json as fetch_json
@@ -321,6 +337,7 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
 
     # 4b. Diagnose the crate (M2): store readiness and findings for the agent to explain.
     if spec0 is not None:
+        _tick("diagnose", "Diagnosing the crate")
         from .diagnose import diagnose_crate
 
         diag = diagnose_crate(crate_out, paper_doi=(p.doi if p else None),
@@ -332,11 +349,13 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     # 5. Validate each method against the paper's reported results
     methods: list[MethodStatus] = []
     if spec0 is not None:
+        _tick("validate", "Validating each method")
         methods = validate_methods(crate_out, out / "recrate", runner=runner, validate=validate)
         if strict:
             methods = [m for m in methods if m.status == "validated"]
     manifest["methods"] = [m.__dict__ for m in methods]
     (out / MANIFEST).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    _tick("done", "Done")
     return PaperAgent.load(out)
 
 
