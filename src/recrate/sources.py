@@ -17,6 +17,7 @@ with path checks.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import urllib.parse
@@ -192,6 +193,38 @@ def fetch_arxiv(aid: str, dest: Path) -> Found:
     return Found("paper", f"arXiv {aid}", p, f"https://arxiv.org/abs/{aid}")
 
 
+def _download_pdf(url: str | None) -> bytes | None:
+    if not url:
+        return None
+    try:
+        data, _ = _get(url)
+    except Exception:  # noqa: BLE001 - a dead or blocked link is just "no PDF here"
+        return None
+    return data if data[:4] == b"%PDF" else None
+
+
+def _pdf_from_landing(url: str) -> bytes | None:
+    """Follow a landing page's citation_pdf_url meta tag to the PDF, if open."""
+    try:
+        html_bytes, _ = _get(url, "text/html")
+    except Exception:  # noqa: BLE001 - publishers often 403 a non-browser request
+        return None
+    m = (re.search(rb'name=["\']citation_pdf_url["\'][^>]+content=["\']([^"\']+)', html_bytes, re.I)
+         or re.search(rb'content=["\']([^"\']+)["\'][^>]+name=["\']citation_pdf_url["\']', html_bytes, re.I))
+    return _download_pdf(m.group(1).decode("utf-8", "replace")) if m else None
+
+
+def _unpaywall_oa(doi: str) -> dict | None:
+    """Unpaywall's best open-access location for a DOI, or None. Needs a contact
+    email (RECRATE_UNPAYWALL_EMAIL); a neutral default is used otherwise."""
+    email = os.environ.get("RECRATE_UNPAYWALL_EMAIL", "recrate@users.noreply.github.com")
+    try:
+        d = get_json(f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?email={urllib.parse.quote(email)}")
+    except Exception:  # noqa: BLE001
+        return None
+    return (d.get("best_oa_location") or None) if d.get("is_oa") else None
+
+
 def fetch_doi(doi: str, dest: Path) -> Found:
     """A paper DOI: its metadata and abstract, and the full text when the publisher links an open PDF."""
     meta = json.loads(_get(f"https://doi.org/{urllib.parse.quote(doi)}", "application/vnd.citationstyles.csl+json")[0])
@@ -207,21 +240,22 @@ def fetch_doi(doi: str, dest: Path) -> Found:
                     return Found("paper", title, p, f"https://doi.org/{doi}", ["Full text (open access PDF)."])
             except Exception:  # noqa: BLE001 - fall back to the abstract
                 pass
-    # Crossref often omits the open PDF; the landing page advertises it as a
-    # `citation_pdf_url` meta tag (PLOS and most publishers). Follow that.
-    try:
-        html_bytes, _ = _get(f"https://doi.org/{urllib.parse.quote(doi)}", "text/html")
-        m = (re.search(rb'<meta[^>]+name=["\']citation_pdf_url["\'][^>]+content=["\']([^"\']+)', html_bytes, re.I)
-             or re.search(rb'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']citation_pdf_url["\']',
-                          html_bytes, re.I))
-        if m:
-            data, _ = _get(m.group(1).decode("utf-8", "replace"))
-            if data[:4] == b"%PDF":
-                p = dest / "paper.pdf"
-                p.write_bytes(data)
-                return Found("paper", title, p, f"https://doi.org/{doi}", ["Full text (open access PDF)."])
-    except Exception:  # noqa: BLE001 - fall back to the abstract
-        pass
+    # Crossref often omits the open PDF. Try the publisher's landing page
+    # (citation_pdf_url, as PLOS and most publishers expose), then Unpaywall for a
+    # legal open-access copy in a repository when the publisher blocks us (403).
+    pdf = _pdf_from_landing(f"https://doi.org/{urllib.parse.quote(doi)}")
+    note = "Full text (open access PDF)."
+    if pdf is None:
+        loc = _unpaywall_oa(doi)
+        if loc:
+            pdf = (_download_pdf(loc["url_for_pdf"]) if loc.get("url_for_pdf") else None) \
+                or (_pdf_from_landing(loc["url"]) if loc.get("url") else None)
+            if pdf is not None:
+                note = f"Full text (open access via Unpaywall: {loc.get('host_type', 'repository')})."
+    if pdf is not None:
+        p = dest / "paper.pdf"
+        p.write_bytes(pdf)
+        return Found("paper", title, p, f"https://doi.org/{doi}", [note])
     authors = ", ".join(f"{a.get('given', '')} {a.get('family', '')}".strip() for a in meta.get("author", []))
     abstract = re.sub(r"<[^>]+>", "", meta.get("abstract") or "").strip()
     year = ((meta.get("issued") or {}).get("date-parts") or [[None]])[0][0]
