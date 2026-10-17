@@ -150,6 +150,12 @@ mark.cite {background: rgba(232,163,61,.3); color: inherit; padding: 0 .1em; bor
   margin-left: .3rem;}
 .tree .n {color: #8a8985; font-size: .78rem;}
 .st-key-sourcebox p, .st-key-sourcebox li {font-size: .86rem; line-height: 1.5;}
+.onramp {max-width: 640px; margin: 2.5rem auto 1rem; text-align: center;}
+.onramp h1 {font-size: 2.2rem; margin: .6rem 0 .3rem;}
+.onramp .sub {color: var(--muted); margin-bottom: 1.2rem;}
+.flowbar {display: flex; justify-content: center; gap: .5rem; font-size: .8rem; color: var(--muted);}
+.flowbar .s {padding: .15rem .6rem; border-radius: 999px; border: 1px solid var(--line); background: var(--card);}
+.flowbar .s.on {color: #fff; background: var(--accent); border-color: var(--accent);}
 .st-key-sourcebox h1, .st-key-sourcebox h2, .st-key-sourcebox h3 {font-size: 1rem !important;}
 </style>""")
 
@@ -245,6 +251,7 @@ ss.setdefault("uploads", Path(tempfile.mkdtemp(prefix="recrate-")))
 ss.setdefault("engine_choice", "auto")
 ss.setdefault("local_url", LOCAL_URL)
 ss.setdefault("section", "validate")
+ss.setdefault("stage", "welcome")  # welcome -> review -> workstation
 who = ss.who
 runner = "auto"  # each workflow's language picks its runner (Galaxy, Fiji, Python)
 
@@ -325,6 +332,7 @@ def build(trusted: bool) -> None:
                     "software versions determined" + (": " + ", ".join(f"{s.name} {s.version}" for s in known[:5])
                                                       if known else "") + ".")
     ss._goto = "validate"
+    ss.stage = "review"
     say(f"{'Ready' if a.has_methods else 'Recreated the RO-Crate'}: **{a.card()['title']}**." + env_line
         + ("\n\n" + "\n".join(lines) if lines else "\n\nNo runnable method yet: see **Validate** for what's needed.")
         + "\n\nAsk me anything about it.")
@@ -338,6 +346,7 @@ def open_example(key: str) -> None:
     load_agent(ex["agent"], ex["data"])
     ss.ro = {"example": key}
     ss._goto = "validate"
+    ss.stage = "review"
     a = PaperAgent.load(ex["agent"])
     n_ok = sum(1 for m in a.methods if m.status == "validated")
     say(f"Opened **{a.card()['title']}**. {n_ok} of {len(a.methods)} method(s) reproduce the published result. "
@@ -1227,21 +1236,24 @@ def workstation(agent: PaperAgent) -> None:
             record_actions(agent, run_dir)
 
 
-def start(agent_none: bool = True) -> None:
-    with st.container(key="workscroll"):
-        st.markdown("#### Recreate a piece of research")
-        st.markdown("<span class='muted'>Start from its <b>RO-Crate</b> or its <b>paper</b>. For a paper, ReCRATE recreates "
-                    "the crate with the software as it was when the paper was published. Then validate the research on "
-                    "its own data, or reuse its methods on yours.</span>", unsafe_allow_html=True)
-        with st.form("add-source", clear_on_submit=True, border=False):
-            c1, c2 = st.columns([5, 1.2], vertical_alignment="bottom")
-            text = c1.text_input("A DOI or link", placeholder="DOI or link: WorkflowHub, Zenodo, a paper DOI, arXiv, GitHub",
-                                 label_visibility="collapsed")
-            add = c2.form_submit_button("Recreate", width="stretch", type="primary", icon=":material/arrow_forward:")
-            files = st.file_uploader("Or upload a paper (PDF, text) or an RO-Crate (zip, ro-crate-metadata.json)",
-                                     accept_multiple_files=True)
-            if add and (text or files):
-                add_and_build(text, files or [])
+def flowbar(active: int) -> None:
+    steps = ["1 Add a paper", "2 Review the crate", "3 Validate"]
+    st.html("<div class='flowbar'>" + "".join(
+        f"<span class='s{' on' if i == active else ''}'>{t}</span>" for i, t in enumerate(steps, 1)) + "</div>")
+
+
+def welcome_screen() -> None:
+    _, mid, _ = st.columns([1, 2.4, 1])
+    with mid:
+        flowbar(1)
+        st.html("<div class='onramp'><h1>Welcome to ReCRATE</h1><div class='sub'>Paste a preprint link and we rebuild "
+                "it into a research object you can check.</div></div>")
+        with st.form("welcome-link", border=False):
+            text = st.text_input("A DOI or link", label_visibility="collapsed",
+                                 placeholder="A DOI or link: arXiv, bioRxiv, a paper DOI, WorkflowHub, Zenodo")
+            go = st.form_submit_button("Start", type="primary", width="stretch")
+            if go and text.strip():
+                add_and_build(text.strip(), [])
                 st.rerun()
         if ss.ro.get("repo") and not (ss.ro.get("crate") or ss.ro.get("paper")):
             st.caption("Code added. Add the paper or crate it belongs to.")
@@ -1254,14 +1266,16 @@ def start(agent_none: bool = True) -> None:
                 if c2.button("Open", key=f"ex-{key}", width="stretch"):
                     open_example(key)
                     st.rerun()
-        st.markdown("<div class='eyebrow' style='margin-top:1.2rem'>What you'll get</div>", unsafe_allow_html=True)
-        c = st.columns(3)
-        for col, (t, d) in zip(c, [("Validate", "Each method run on the research's own data, compared with the "
-                                    "published result."),
-                                   ("Reuse", "Your data checked against what each method expects; parameters adjusted "
-                                    "and recorded."),
-                                   ("Record", "Every run as a Workflow Run RO-Crate, with an export for your paper.")]):
-            col.markdown(f"**{t}**  \n<span class='muted'>{d}</span>", unsafe_allow_html=True)
+
+
+def review_screen() -> None:  # stub; Task 3 writes the full screen
+    _, mid, _ = st.columns([1, 2.4, 1])
+    with mid:
+        flowbar(2)
+        st.markdown("### Crate ready")
+        if st.button("Looks good \u2014 validate output \u2192", type="primary", width="stretch"):
+            ss.stage = "workstation"
+            st.rerun()
 
 
 # ---- the top bar: connect, who, reset -------------------------------------------------------------------
@@ -1333,13 +1347,15 @@ def topbar() -> None:
 
 # ---- page ---------------------------------------------------------------------------------------------
 topbar()
-left, right = st.columns([1, 1.25], gap="small")
-with right:
-    with st.container(key="workcard"):
-        if ss.get("agent_dir"):
+if ss.stage == "workstation" and ss.get("agent_dir"):
+    left, right = st.columns([1, 1.25], gap="small")
+    with right:
+        with st.container(key="workcard"):
             workstation(PaperAgent.load(ss.agent_dir))
-        else:
-            start()
-with left:
-    with st.container(key="chatcard"):
-        chat_card()
+    with left:
+        with st.container(key="chatcard"):
+            chat_card()
+elif ss.stage == "review" and ss.get("agent_dir"):
+    review_screen()
+else:
+    welcome_screen()
