@@ -163,6 +163,12 @@ mark.cite {background: rgba(232,163,61,.3); color: inherit; padding: 0 .1em; bor
   margin-left: .3rem;}
 .tree .n {color: #8a8985; font-size: .78rem;}
 .st-key-sourcebox p, .st-key-sourcebox li {font-size: .86rem; line-height: 1.5;}
+.onramp {max-width: 640px; margin: 2.5rem auto 1rem; text-align: center;}
+.onramp h1 {font-size: 2.2rem; margin: .6rem 0 .3rem;}
+.onramp .sub {color: var(--muted); margin-bottom: 1.2rem;}
+.flowbar {display: flex; justify-content: center; gap: .5rem; font-size: .8rem; color: var(--muted);}
+.flowbar .s {padding: .15rem .6rem; border-radius: 999px; border: 1px solid var(--line); background: var(--card);}
+.flowbar .s.on {color: #fff; background: var(--accent); border-color: var(--accent);}
 .st-key-sourcebox h1, .st-key-sourcebox h2, .st-key-sourcebox h3 {font-size: 1rem !important;}
 </style>""")
 
@@ -258,6 +264,7 @@ ss.setdefault("uploads", Path(tempfile.mkdtemp(prefix="recrate-")))
 ss.setdefault("engine_choice", "auto")
 ss.setdefault("local_url", LOCAL_URL)
 ss.setdefault("section", "validate")
+ss.setdefault("stage", "welcome")  # welcome -> review -> workstation
 who = ss.who
 runner = "auto"  # each workflow's language picks its runner (Galaxy, Fiji, Python)
 
@@ -325,9 +332,32 @@ def build(trusted: bool) -> None:
     label = ("Reading the RO-Crate, then reproducing each method…" if ro.get("crate") else
              "Looking for a published RO-Crate (WorkflowHub, Zenodo, DataCite, the paper's code); if there is none, "
              "recreating it as of publication…")
-    with st.spinner(label):
+    _, mid, _ = st.columns([1, 2.4, 1])
+    with mid:
+        flowbar(2)
+        status = st.status("Building the research object", expanded=True)
+    status.write(label)
+
+    def _cb(key: str, step: str) -> None:  # called at the start of each real build stage
+        if key == "done":
+            return
+        status.update(label=step)
+        status.write(step)
+
+    try:
         agentify(out, paper=(ro.get("paper") or {}).get("path"), crate=(ro.get("crate") or {}).get("path"),
-                 repo=ro.get("repo"), validate="all" if trusted else "safe", paper_doi=paper_doi(ro.get("paper")))
+                 repo=ro.get("repo"), validate="all" if trusted else "safe",
+                 paper_doi=paper_doi(ro.get("paper")), on_progress=_cb)
+    except Exception as e:
+        status.update(label="Build failed", state="error")
+        msg = f"Couldn't build the crate: {e or type(e).__name__}"
+        say(msg)
+        ss.build_error = msg  # shown once on Welcome (the rerun wipes the status widget)
+        ss.stage = "welcome"
+        ss.agent_dir = None
+        ss.ro = {}
+        return
+    status.update(label="Built the research object", state="complete", expanded=False)
     load_agent(out, Path(ro["data"]["path"]) if ro.get("data") else None)
     a = PaperAgent.load(out)
     env = a.environment
@@ -346,6 +376,7 @@ def build(trusted: bool) -> None:
                     "software versions determined" + (": " + ", ".join(f"{s.name} {s.version}" for s in known[:5])
                                                       if known else "") + ".")
     ss._goto = "validate"
+    ss.stage = "review"
     say(f"{'Ready' if a.has_methods else 'Recreated the RO-Crate'}: **{a.card()['title']}**." + search_line + env_line
         + ("\n\n" + "\n".join(lines) if lines else "\n\nNo runnable method yet: see **Reproduce** for what's needed.")
         + "\n\nAsk me anything about it.")
@@ -376,6 +407,7 @@ def open_example(key: str) -> None:
     load_agent(ex["agent"], ex["data"])
     ss.ro = {"example": key}
     ss._goto = "validate"
+    ss.stage = "review"
     a = PaperAgent.load(ex["agent"])
     say(f"Opened **{a.card()['title']}**. {a.card()['verdict']} "
         "Its example data is selected for **Reuse**. Ask me anything, or try *reproduce*, *check my data*, *run*.")
@@ -420,8 +452,14 @@ def add_and_build(text: str, files: list) -> None:
     if ss.ro.get("crate") or ss.ro.get("paper"):
         build(trusted=False)
     elif not lines:
-        say("I didn't find an RO-Crate, a paper or an identifier in that. Try a DOI, a WorkflowHub or arXiv link, or "
-            "upload a PDF or a crate zip.")
+        msg = ("I didn't find an RO-Crate, a paper or an identifier in that. Try a DOI, a WorkflowHub or arXiv link, or "
+               "upload a PDF or a crate zip.")
+        say(msg)
+        ss.build_error = msg  # shown once on Welcome (say() is not rendered there)
+    else:
+        failed = [l for l in lines if l.startswith("⚠️")]
+        if failed:  # nothing usable resulted and a fetch failed: surface it on Welcome too
+            ss.build_error = "\n\n".join(failed)
 
 
 # ---- chat --------------------------------------------------------------------------------------
@@ -1456,21 +1494,26 @@ def workstation(agent: PaperAgent) -> None:
             record_actions(agent, run_dir)
 
 
-def start(agent_none: bool = True) -> None:
-    with st.container(key="workscroll"):
-        st.markdown("#### Recreate a piece of research")
-        st.markdown("<span class='muted'>Start from its <b>RO-Crate</b> or its <b>paper</b>. For a paper, ReCRATE recreates "
-                    "the crate with the software as it was when the paper was published. Then validate the research on "
-                    "its own data, or reuse its methods on yours.</span>", unsafe_allow_html=True)
-        with st.form("add-source", clear_on_submit=True, border=False):
-            c1, c2 = st.columns([5, 1.2], vertical_alignment="bottom")
-            text = c1.text_input("A DOI or link", placeholder="DOI or link: WorkflowHub, Zenodo, a paper DOI, arXiv, GitHub",
-                                 label_visibility="collapsed")
-            add = c2.form_submit_button("Recreate", width="stretch", type="primary", icon=":material/arrow_forward:")
-            files = st.file_uploader("Or upload a paper (PDF, text) or an RO-Crate (zip, ro-crate-metadata.json)",
-                                     accept_multiple_files=True)
-            if add and (text or files):
-                add_and_build(text, files or [])
+def flowbar(active: int) -> None:
+    steps = ["1 Add a paper", "2 Review the crate", "3 Validate"]
+    st.html("<div class='flowbar'>" + "".join(
+        f"<span class='s{' on' if i == active else ''}'>{t}</span>" for i, t in enumerate(steps, 1)) + "</div>")
+
+
+def welcome_screen() -> None:
+    _, mid, _ = st.columns([1, 2.4, 1])
+    with mid:
+        flowbar(1)
+        if ss.get("build_error"):
+            st.error(ss.pop("build_error"))
+        st.html("<div class='onramp'><h1>Welcome to ReCRATE</h1><div class='sub'>Paste a preprint link and we rebuild "
+                "it into a research object you can check.</div></div>")
+        with st.form("welcome-link", border=False):
+            text = st.text_input("A DOI or link", label_visibility="collapsed",
+                                 placeholder="A DOI or link: arXiv, bioRxiv, a paper DOI, WorkflowHub, Zenodo")
+            go = st.form_submit_button("Start", type="primary", width="stretch")
+            if go and text.strip():
+                add_and_build(text.strip(), [])
                 st.rerun()
         if ss.ro.get("repo") and not (ss.ro.get("crate") or ss.ro.get("paper")):
             st.caption("Code added. Add the paper or crate it belongs to.")
@@ -1491,6 +1534,47 @@ def start(agent_none: bool = True) -> None:
                                     "and recorded."),
                                    ("Record", "Every run as a Workflow Run RO-Crate, with an export for your paper.")]):
             col.markdown(f"**{t}**  \n<span class='muted'>{d}</span>", unsafe_allow_html=True)
+
+
+def review_screen() -> None:
+    agent = PaperAgent.load(ss.agent_dir)
+    _, mid, _ = st.columns([1, 2.4, 1])
+    with mid:
+        flowbar(2)
+        st.html("<div class='onramp'><h1>Review the crate</h1><div class='sub'>Here is what we built. "
+                "Check it looks right before validating.</div></div>")
+        ups = st.file_uploader("or upload a crate you already have", type=["zip", "json", "pdf"],
+                               accept_multiple_files=True, key="review-upload")
+        sig = [(u.name, u.size) for u in ups or []]
+        if not ups:
+            ss._review_upload_sig = None  # empty uploader: forget the last upload so a re-upload is processed
+        if ups and sig != ss.get("_review_upload_sig"):
+            ss._review_upload_sig = sig  # handle each new upload once, not on every rerun
+            add_and_build("", list(ups))
+            st.rerun()
+        st.markdown("#### What's in the crate")
+        st.html(tree_html(agent.path, agent.path))
+        diag = agent.diagnosis() if hasattr(agent, "diagnosis") else None
+        flags = []
+        if diag:
+            flags = [f for f in (diag.get("crate_findings", [])
+                                 + [x for m in diag.get("methods", []) for x in m.get("findings", [])])
+                     if f.get("severity") in ("blocking", "warning")]
+        if flags:
+            for f in flags:
+                st.markdown(f"\u26a0 {f['message']}")
+        else:
+            st.markdown("<span class='muted'>No problems spotted</span>", unsafe_allow_html=True)
+        ok, off = st.columns([2, 1])
+        if ok.button("Looks good \u2014 validate output \u2192", type="primary", width="stretch"):
+            ss.stage = "workstation"
+            st.rerun()
+        # Settled decision: "Something's off" returns to Welcome (simplest useful action), clearing the build.
+        if off.button("Something's off", width="stretch"):
+            ss.stage = "welcome"
+            ss.agent_dir = None
+            ss.ro = {}
+            st.rerun()
 
 
 # ---- the top bar: connect, who, reset -------------------------------------------------------------------
@@ -1562,13 +1646,15 @@ def topbar() -> None:
 
 # ---- page ---------------------------------------------------------------------------------------------
 topbar()
-left, right = st.columns([1, 1.25], gap="small")
-with right:
-    with st.container(key="workcard"):
-        if ss.get("agent_dir"):
+if ss.stage == "workstation" and ss.get("agent_dir"):
+    left, right = st.columns([1, 1.25], gap="small")
+    with right:
+        with st.container(key="workcard"):
             workstation(PaperAgent.load(ss.agent_dir))
-        else:
-            start()
-with left:
-    with st.container(key="chatcard"):
-        chat_card()
+    with left:
+        with st.container(key="chatcard"):
+            chat_card()
+elif ss.stage == "review" and ss.get("agent_dir"):
+    review_screen()
+else:
+    welcome_screen()

@@ -88,3 +88,23 @@ def test_mcp_server_exposes_paper_methods_as_tools(agent, demo):
         assert '"min_size_px": 12.5' in text
 
     asyncio.run(go())
+
+
+def test_agentify_reports_progress_stages(demo, tmp_path):
+    seen = []
+    agentify(tmp_path / "prog", paper=demo["paper"], crate=demo["crate"],
+             on_progress=lambda key, label: seen.append(key))
+    keys = [k for k in seen]
+    assert keys[0] == "paper"           # paper read first
+    assert "crate" in keys
+    assert "validate" in keys           # demo crate has runnable methods
+    assert keys[-1] == "done"
+    # order is monotonic against the known stage sequence
+    order = ["paper", "code", "crate", "environment", "diagnose", "validate", "done"]
+    assert keys == sorted(keys, key=order.index)
+
+
+def test_agentify_without_on_progress_unchanged(demo, tmp_path):
+    a = agentify(tmp_path / "noprog", paper=demo["paper"], crate=demo["crate"])
+    assert {m["name"]: m["status"] for m in a.card()["methods"]} == {
+        "count_nuclei": "validated", "size_distribution": "validated"}
