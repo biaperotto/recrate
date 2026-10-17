@@ -194,6 +194,38 @@ def cmd_draft(a) -> int:
     return 0
 
 
+def cmd_check_description(a) -> int:
+    from .verify import check_description
+
+    rep = check_description(Path(a.agent), Path(a.description))
+    if a.json:
+        print(json.dumps(rep.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        c = rep.checked
+        print(f"Checked {c['quotes']} quote(s), {c['published_values']} published value(s), {c['files']} file(s).")
+        for f in rep.findings:
+            print(f"  {f}")
+        print("OK: every quote and published value is in the paper." if rep.ok else "Not OK: fix the errors above.")
+    return 0 if rep.ok else 1
+
+
+def cmd_install_skill(a) -> int:
+    """Install the /recrate Claude Code skill: for this project (.claude/skills) or for you (~/.claude/skills)."""
+    import shutil
+
+    src = Path(__file__).resolve().parent / "skill"
+    dest = (Path.home() / ".claude" / "skills" / "recrate") if a.user else (Path.cwd() / ".claude" / "skills" / "recrate")
+    if dest.exists() or dest.is_symlink():
+        if dest.is_symlink() or dest.is_file():
+            dest.unlink()
+        else:
+            shutil.rmtree(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dest)
+    print(f"Installed the recrate skill in {dest}\nIn Claude Code: /recrate <paper PDF, DOI, arXiv link or RO-Crate>")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     from .runners import CHOICES
 
@@ -291,6 +323,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("description")
     s.add_argument("out")
     s.set_defaults(func=cmd_draft)
+
+    s = sub.add_parser("check-description", help="Check a drafted crate description against the paper's text")
+    s.add_argument("agent", help="The agent folder (with paper/paper.md)")
+    s.add_argument("description", help="crate_description.json")
+    s.add_argument("--json", action="store_true", help="Machine-readable report")
+    s.set_defaults(func=cmd_check_description)
+
+    s = sub.add_parser("install-skill", help="Install the /recrate Claude Code skill")
+    s.add_argument("--user", action="store_true", help="For all your projects (~/.claude/skills), not just this one")
+    s.set_defaults(func=cmd_install_skill)
     return p
 
 

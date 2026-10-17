@@ -807,6 +807,10 @@ def figure_builder(agent: PaperAgent, run_dir: Path, data_dir: Path) -> None:
 # ---- Validate: does the research reproduce on its own data? ------------------------------------------
 def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> None:
     env = agent.environment
+    report = agent.path / "REPORT.md"
+    if report.exists():  # written by the /recrate agent: what can be recreated, and what can't
+        with st.expander("Report from the ReCRATE agent", expanded=not agent.methods, icon=":material/smart_toy:"):
+            st.markdown(report.read_text(encoding="utf-8"))
     if not agent.methods:
         empty_validate(agent)
     else:

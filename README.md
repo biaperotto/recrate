@@ -57,7 +57,15 @@ The app has two cards; drag the divider between them to give either more room.
 
 **No API key needed.** The chat works with an open model on your own computer, for free: install [Ollama](https://ollama.com), run `ollama pull qwen2.5:7b`, and ReCRATE finds it (LM Studio and llama.cpp work too). Without a model it understands simple commands. **Connect** in the header shows the options, including Claude with an API key. Either way, the numbers come from running the methods, never from the model.
 
-**Making a paper's methods runnable.** In the ReCRATE folder, start Claude Code (`claude`) and run `/agentify agents/<the research object>`: Claude reads the paper and its code, describes each method in the crate, runs it on the published data and repairs it until it validates. This uses your Claude subscription; then press *Reload* in the app.
+**Making a paper's methods runnable: the `/recrate` agent.** A paper alone rarely says how to run its methods, so ReCRATE ships a Claude Code skill, built the way [Paper2Agent](https://github.com/jmiao24/Paper2Agent) builds its agents: a coordinator that hands the work to specialist subagents, each in its own context, so that every claim is checked by someone who didn't make it.
+
+1. a **paper reader** and a **code and environment** specialist work in parallel: the methods, their parameters with the sentences that state them, the published results and where they are printed; the code, its dependencies, the data (size, licence, access) and the compute each method needs;
+2. one **method implementer** per runnable method, in parallel: a thin wrapper around the authors' code (or a re-implementation when there is none, said as such), the published values exactly as printed, and a first run on the published data;
+3. `recrate check-description` checks, without a model, that every quoted parameter and every published value is really in the paper (a row's values printed together, as in a table), then ReCRATE builds the crate and validates it;
+4. a fresh **verifier** re-derives everything from the paper and code and reviews each run; its corrections go back through the check and the validation;
+5. the result: the RO-Crate (a draft until a person confirms it), a `REPORT.md` with each method's verdict and what the paper doesn't state, and the agent ready to talk to.
+
+Methods that need a GPU, a cluster, data too large to fetch or access that must be requested are described and marked *not runnable here*, with what they need. In this repository the skill is ready (`/recrate <paper PDF, DOI, arXiv link or crate>` in Claude Code); elsewhere, `recrate install-skill` (or `--user` for all your projects). It runs on your Claude subscription; then press *Reload* in the app.
 
 From the command line:
 
