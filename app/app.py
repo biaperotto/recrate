@@ -1278,6 +1278,8 @@ def review_screen() -> None:
         ups = st.file_uploader("or upload a crate you already have", type=["zip", "json", "pdf"],
                                accept_multiple_files=True, key="review-upload")
         sig = [(u.name, u.size) for u in ups or []]
+        if not ups:
+            ss._review_upload_sig = None  # empty uploader: forget the last upload so a re-upload is processed
         if ups and sig != ss.get("_review_upload_sig"):
             ss._review_upload_sig = sig  # handle each new upload once, not on every rerun
             add_and_build("", list(ups))
