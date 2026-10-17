@@ -318,9 +318,29 @@ def build(trusted: bool) -> None:
     out = ROOT / "agents" / slug(title)
     label = ("Reading the RO-Crate, then reproducing each method…" if ro.get("crate") else
              "Recreating the RO-Crate: publication date, the software available then, code and cited data…")
-    with st.spinner(label):
+    _, mid, _ = st.columns([1, 2.4, 1])
+    with mid:
+        flowbar(2)
+        status = st.status("Building the research object", expanded=True)
+    status.write(label)
+
+    def _cb(key: str, step: str) -> None:  # called at the start of each real build stage
+        if key == "done":
+            return
+        status.update(label=step)
+        status.write(step)
+
+    try:
         agentify(out, paper=(ro.get("paper") or {}).get("path"), crate=(ro.get("crate") or {}).get("path"),
-                 repo=ro.get("repo"), validate="all" if trusted else "safe")
+                 repo=ro.get("repo"), validate="all" if trusted else "safe", on_progress=_cb)
+    except Exception as e:
+        status.update(label="Build failed", state="error")
+        say(f"Couldn't build the crate: {e}")
+        ss.stage = "welcome"
+        ss.agent_dir = None
+        ss.ro = {}
+        return
+    status.update(label="Built the research object", state="complete", expanded=False)
     load_agent(out, Path(ro["data"]["path"]) if ro.get("data") else None)
     a = PaperAgent.load(out)
     env = a.environment

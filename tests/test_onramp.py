@@ -12,3 +12,10 @@ def test_crate_without_methods_still_lists_files(demo, tmp_path):
     a = agentify(tmp_path / "paperonly", paper=demo["paper"])  # no crate -> may have no runnable method
     # the review screen reads agent.path file tree; assert the crate dir is listable
     assert a.path.exists()
+
+
+def test_agentify_failure_is_catchable(tmp_path):
+    import pytest
+    from recrate.agent import agentify
+    with pytest.raises(Exception):
+        agentify(tmp_path / "bad", paper=tmp_path / "does-not-exist.pdf")
