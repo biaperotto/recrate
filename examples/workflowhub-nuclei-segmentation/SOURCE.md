@@ -15,6 +15,7 @@ Retrieved 2026-10-17.
 | `crate/test-data/` | Test input (200×200, 16-bit), expected label image, overlay, and count (**20 nuclei**) | same | MIT |
 | `research-data/B2/` | 3 of the 9 full fields of well B2 (1344×1024, 16-bit, DAPI) | [Zenodo 10.5281/zenodo.3362976](https://doi.org/10.5281/zenodo.3362976) | CC-BY-4.0 |
 | `fetch_data.sh` | Downloads whole wells from Zenodo (`./fetch_data.sh B2 B3`) | | |
+| `make_half_resolution.py` | Makes `my-data-half-resolution/`: the B2 fields at half resolution (2×2 averaged), for the reuse example | derived from `research-data/B2` | CC-BY-4.0 |
 
 ## The workflow
 

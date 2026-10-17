@@ -1,0 +1,129 @@
+{
+  "name": "Ecological sexual dimorphism and environmental variability within a community of Antarctic penguins (genus Pygoscelis)",
+  "description": "Gorman, Williams & Fraser (2014), PLOS ONE 9(3): e90081. Morphometrics of Adélie, chinstrap and gentoo penguins breeding near Palmer Station, Antarctica (2007-2010), and sexual size dimorphism. Crate drafted by ReCRATE from the paper: the authors used R and published no code, so the method re-implements the size dimorphism index as the paper describes it.",
+  "identifier": "https://doi.org/10.1371/journal.pone.0090081#recrate",
+  "citation": "https://doi.org/10.1371/journal.pone.0090081",
+  "license": "https://spdx.org/licenses/CC-BY-4.0",
+  "authors": [
+    "Kristen B. Gorman",
+    "Tony D. Williams",
+    "William R. Fraser"
+  ],
+  "datePublished": "2014-03-05",
+  "profile": "generic",
+  "draft": true,
+  "paper_file": "paper.pdf",
+  "methods": [
+    {
+      "name": "size_dimorphism_index",
+      "description": "Sexual size dimorphism index (SDI) per species for culmen length, culmen depth, flipper length and body mass, after Lovich & Gibbons (1992): mean of the larger sex divided by mean of the smaller sex, minus one, negative when males are larger (Table 2 of the paper).",
+      "workflow": {
+        "file": "workflows/size_dimorphism.py",
+        "language": "Python",
+        "software": [
+          {
+            "name": "Python",
+            "version": "3"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "id": "in-table",
+          "name": "input_dir",
+          "type": "File",
+          "format": "text/csv",
+          "description": "One row per individual: species (or another group), sex, and the four measurements",
+          "properties": {
+            "columns": {
+              "value": "Species,Sex,Culmen Length (mm),Culmen Depth (mm),Flipper Length (mm),Body Mass (g)"
+            }
+          }
+        },
+        {
+          "id": "in-group",
+          "name": "group_column",
+          "type": "Text",
+          "default": "Species",
+          "description": "Column that defines the groups compared (the paper: species)",
+          "role": "free",
+          "changes_question": true,
+          "quote": "An SDI was calculated for all structural parameters considered as best predictors of adult penguin sex for each species"
+        },
+        {
+          "id": "in-sex",
+          "name": "sex_column",
+          "type": "Text",
+          "default": "Sex",
+          "description": "Column with the sex of each individual"
+        },
+        {
+          "id": "in-male",
+          "name": "male_label",
+          "type": "Text",
+          "default": "MALE",
+          "description": "Value of the sex column for males"
+        },
+        {
+          "id": "in-female",
+          "name": "female_label",
+          "type": "Text",
+          "default": "FEMALE",
+          "description": "Value of the sex column for females"
+        },
+        {
+          "id": "in-keep",
+          "name": "keep_rows",
+          "type": "Text",
+          "default": "",
+          "description": "Inclusion rule: rows to keep, as 'Column=Value' conditions separated by ';' (empty: every row)",
+          "role": "free"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "out-sdi",
+          "name": "results",
+          "type": "File",
+          "format": "text/csv",
+          "description": "SDI per group and measurement",
+          "abs_tolerances": {
+            "culmen_length": {
+              "value": 0.006,
+              "source": "paper-rounding",
+              "note": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
+            },
+            "culmen_depth": {
+              "value": 0.006,
+              "source": "paper-rounding",
+              "note": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
+            },
+            "flipper_length": {
+              "value": 0.006,
+              "source": "paper-rounding",
+              "note": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
+            },
+            "body_mass": {
+              "value": 0.006,
+              "source": "paper-rounding",
+              "note": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
+            }
+          }
+        }
+      ],
+      "example_data": "data/",
+      "expected": "expected/table2_sdi.csv",
+      "followups": [
+        {
+          "title": "Exclude pairs that did not complete their clutch",
+          "kind": "inclusion rule",
+          "changes": {
+            "keep_rows": "Clutch Completion=Yes"
+          },
+          "why": "The paper excludes pairs whose second egg was never observed; the published data records this as Clutch Completion = No, and the method as drafted keeps them.",
+          "quote": "some pairs were excluded from statistical analyses because a final egg was never observed at the nest"
+        }
+      ]
+    }
+  ]
+}

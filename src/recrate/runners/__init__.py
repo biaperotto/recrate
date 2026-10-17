@@ -2,7 +2,7 @@
 
 * ImageJ Macro Language → Fiji (PyImageJ, headless). Without Fiji, the demo macro
   falls back to the Python reference implementation.
-* Python → the paper's own script, run as a command (see runners/script.py).
+* Python, R, shell → the paper's own script, run as a command (see runners/script.py).
 * Galaxy → the workflow's imaging tools, ported to Python (see galaxy.py).
 
 Any other language stops with a clear message rather than being run as something it isn't.
@@ -10,6 +10,7 @@ Any other language stops with a clear message rather than being run as something
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .base import RunResult, Runner
@@ -41,7 +42,9 @@ def get_runner(name: str = "auto", language: str | None = None, workflow: Path |
     lang = (language or "").lower()
     if "galaxy" in lang or (workflow is not None and Path(workflow).suffix == ".ga"):
         return _galaxy()
-    if "python" in lang or (workflow is not None and Path(workflow).suffix == ".py"):
+    words = set(re.findall(r"[a-z]+", lang))
+    if words & {"python", "r", "rscript", "bash", "shell", "sh"} or \
+            (workflow is not None and Path(workflow).suffix.lower() in {".py", ".r", ".sh"}):
         return ScriptRunner()
     if "imagej" in lang or (workflow is not None and Path(workflow).suffix == ".ijm"):
         fiji = FijiRunner()
@@ -53,7 +56,36 @@ def get_runner(name: str = "auto", language: str | None = None, workflow: Path |
     if workflow is not None and Path(workflow).name in SUPPORTED_WORKFLOWS:
         return PythonReferenceRunner()
     raise RuntimeError(f"ReCRATE has no runner for {language or Path(str(workflow)).suffix or 'this workflow'} yet "
-                       "(supported: ImageJ macros, Python scripts, Galaxy imaging workflows).")
+                       "(supported: ImageJ macros, Python, R and shell scripts, Galaxy imaging workflows).")
 
 
-__all__ = ["RunResult", "Runner", "FijiRunner", "PythonReferenceRunner", "ScriptRunner", "get_runner", "CHOICES"]
+def readiness(language: str | None, workflow: Path | None) -> str | None:
+    """None when this computer can run the workflow; otherwise why not, naming what is missing.
+
+    Built from the runners actually available: a Galaxy workflow is ready only when every tool its results need
+    is ported, and a script only when its interpreter is installed.
+    """
+    try:
+        runner = get_runner("auto", language, workflow)
+    except RuntimeError as e:
+        return str(e)
+    if workflow is None or not Path(workflow).exists():
+        return "The workflow file is missing."
+    if runner.name == "galaxy":
+        from ..galaxy import load_workflow, unported_tools
+
+        missing = unported_tools(load_workflow(Path(workflow)))
+        if missing:
+            return "Galaxy tool(s) not ported to ReCRATE yet: " + ", ".join(missing) + "."
+    if runner.name == "script":
+        from .script import interpreter
+
+        try:
+            interpreter(Path(workflow))
+        except RuntimeError as e:
+            return str(e)
+    return None
+
+
+__all__ = ["RunResult", "Runner", "FijiRunner", "PythonReferenceRunner", "ScriptRunner", "get_runner", "readiness",
+           "CHOICES"]

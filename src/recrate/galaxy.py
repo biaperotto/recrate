@@ -127,6 +127,16 @@ EXPOSED = {
 }
 
 
+# What each exposed parameter means for reuse: its unit, and which check of your data makes it your decision
+MEANING = {
+    "filter_size": {"unit": "pixel"},
+    "filter_type": {"role": "fixed"},
+    "equalization": {"role": "fixed"},
+    "threshold_method": {"role": "fixed", "sensitive_to": "Bit depth / intensity"},
+    "threshold_offset": {"unit": "intensity", "sensitive_to": "Bit depth / intensity"},
+}
+
+
 def tool_key(tool_id: str | None) -> str | None:
     if not tool_id:
         return None
@@ -172,6 +182,13 @@ def result_steps(wf: dict[str, Any]) -> set[str]:
         if tool_key(steps[sid].get("tool_id")) not in VISUAL_ONLY:
             visit(sid)
     return need
+
+
+def unported_tools(wf: dict[str, Any]) -> list[str]:
+    """Tools the scientific outputs need that ReCRATE has not ported: the reason a Galaxy workflow can't run here."""
+    needed = result_steps(wf)
+    return sorted({f"{tool_key(s.get('tool_id'))} {s.get('tool_version')}" for sid, s in wf["steps"].items()
+                   if sid in needed and s["type"] == "tool" and tool_key(s.get("tool_id")) not in TOOLS})
 
 
 def exposed_parameters(wf: dict[str, Any]) -> list[dict[str, Any]]:
@@ -337,19 +354,24 @@ def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
     work = out_dir.parent / f".{out_dir.name}-import"
     shutil.rmtree(work, ignore_errors=True)
     (work / "example").mkdir(parents=True)
-    expected = None
+    expected, tolerance = None, 0.0  # no source unless the published test states how it compares (no verdict)
     if tests and tests.exists():
         case = (yaml.safe_load(tests.read_text(encoding="utf-8")) or [{}])[0]
         job_files = [v["path"] for v in (case.get("job") or {}).values() if isinstance(v, dict) and v.get("path")]
         for p in job_files:
             shutil.copy2(tests.parent / p, work / "example" / Path(p).name)
-        count_out = next((v for v in (case.get("outputs") or {}).values()
-                          if isinstance(v, dict) and str(v.get("path", "")).endswith((".tabular", ".tsv", ".csv"))), None)
+        count_name, count_out = next(((k, v) for k, v in (case.get("outputs") or {}).items()
+                                      if isinstance(v, dict) and str(v.get("path", "")).endswith((".tabular", ".tsv", ".csv"))),
+                                     (None, None))
         if count_out and job_files:
             rows = (tests.parent / count_out["path"]).read_text(encoding="utf-8").split()
             if len(rows) >= 2 and rows[-1].isdigit():
                 expected = work / "expected.csv"
                 expected.write_text(f"image,count\n{Path(job_files[0]).name},{rows[-1]}\n", encoding="utf-8")
+                if count_out.get("compare") == "diff":  # the published test compares the count exactly
+                    rule = "compare: diff" + (f", lines_diff: {count_out['lines_diff']}" if "lines_diff" in count_out else "")
+                    tolerance = {"value": 0.0, "source": "paper-stated",
+                                 "quote": f"{count_name}: {rule}", "note": f"the workflow's published test, {tests.name}"}
 
     params = exposed_parameters(wf)
     tools = [f"{tool_key(s.get('tool_id'))} {s.get('tool_version')}" for _, s in sorted(wf["steps"].items(),
@@ -372,10 +394,11 @@ def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
                         "description": "Fluorescence image of cell nuclei, a single 2D channel (as the workflow's tools require)",
                         "properties": {"channels": {"value": 1}, "dimensions": {"value": "2D"}}}]
                       + [{"id": f"in-{p['name']}", "name": p["name"], "type": p["type"], "default": p["default"],
-                          "description": p["description"], **({"scaling": p["scaling"]} if p.get("scaling") else {})}
+                          "description": p["description"], **({"scaling": p["scaling"]} if p.get("scaling") else {}),
+                          **MEANING.get(p["name"], {})}
                          for p in params],
             "outputs": [{"id": "out-results", "name": "objects_count", "type": "File", "format": "text/csv",
-                         "tolerances": {"count": 0.0}}],
+                         "tolerances": {"count": tolerance}}],
             **({"example_data": str(work / "example")} if any((work / "example").iterdir()) else {}),
             **({"expected": str(expected)} if expected else {}),
         }],

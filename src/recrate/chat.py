@@ -46,6 +46,8 @@ _DATA = {"type": "string", "description": "Folder with the images. Omit to use t
 _RUN = {"type": "string", "description": "Run crate folder or run name, as returned by reproduce/run_on_my_data. "
                                          "Omit for the latest run in this conversation."}
 
+_RATIO = {"type": "number", "description": "The user's pixel size divided by the research's, only when the "
+          "research states no pixel size and the user knows how theirs compares (e.g. 2 for 2×2 binning)"}
 TOOLS: list[dict[str, Any]] = [
     {"name": "about_paper", "description": "Title, DOI, crate source, and the paper's methods with their "
                                            "validation status against the paper's reported results.",
@@ -56,19 +58,28 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "describe_method", "description": "One method's card: expected input (format, pixel size, channels), "
                                                "parameters and defaults, software, tolerances.",
      "input_schema": _schema({"method": _METHOD}, ["method"])},
+    {"name": "list_tables", "description": "The paper's tables (label, caption). Read one with get_table.",
+     "input_schema": _schema({})},
+    {"name": "get_table", "description": "One of the paper's tables, as printed, by label (e.g. 'Table 2').",
+     "input_schema": _schema({"table": {"type": "string"}}, ["table"])},
+    {"name": "list_figures", "description": "The paper's figures (label, caption). Show one with show_figure.",
+     "input_schema": _schema({})},
+    {"name": "show_figure", "description": "Show one of the paper's figures to the user, by label (e.g. 'Figure 3'); "
+                                           "returns its caption.",
+     "input_schema": _schema({"figure": {"type": "string"}}, ["figure"])},
     {"name": "list_my_files", "description": "The files the user uploaded in this conversation, with their "
                                              "image metadata (pixel size, channels, dimensions).",
      "input_schema": _schema({})},
     {"name": "check_my_data", "description": "Check whether the user's data fits a method (domain profile checks). "
                                              "Returns ok / warn / fail per check and parameter adjustments.",
-     "input_schema": _schema({"method": _METHOD, "data_path": _DATA}, ["method"])},
+     "input_schema": _schema({"method": _METHOD, "data_path": _DATA, "pixel_ratio": _RATIO}, ["method"])},
     {"name": "reproduce", "description": "Run a method on the paper's own data and compare with the paper's "
                                          "reported results. Writes a run crate.",
      "input_schema": _schema({"method": _METHOD}, ["method"])},
     {"name": "run_on_my_data", "description": "Run a method on the user's data after checking it. Applies and "
                                               "records adjustments (e.g. rescaling size parameters for a different "
                                               "pixel size); stops if a check fails. Writes a run crate.",
-     "input_schema": _schema({"method": _METHOD, "data_path": _DATA,
+     "input_schema": _schema({"method": _METHOD, "data_path": _DATA, "pixel_ratio": _RATIO,
                               "auto_adjust": {"type": "boolean", "default": True},
                               "channel": {"type": "integer", "default": 0, "description": "0-based channel"},
                               "overrides": {"type": "object", "description": (
@@ -99,6 +110,19 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "reproducibility_record", "description": "Every run based on the paper's crate: by whom, on what "
                                                       "data, with which adjustments and verdicts.",
      "input_schema": _schema({})},
+    {"name": "followup_checks", "description": "When a method's numbers differ from the paper's: the follow-up "
+                                               "checks proposed (inclusion rules, rounding, versions), with what each "
+                                               "changes and why, and those already run.",
+     "input_schema": _schema({"method": {"type": "string"}}, ["method"])},
+    {"name": "run_followup_check", "description": "Run one follow-up check by id. It is its own recorded run, "
+                                                  "linked to the reproduction; the original result is never replaced.",
+     "input_schema": _schema({"method": {"type": "string"}, "check": {"type": "string"}}, ["method", "check"])},
+    {"name": "report_page", "description": "Write one HTML page for this research object (verdict, every compared "
+                                           "value, figures, follow-ups, every run) that opens anywhere.",
+     "input_schema": _schema({})},
+    {"name": "make_figure", "description": "Plot the published vs reproduced values of a reproduction from its "
+                                           "run's outputs, and record the figure in its run crate.",
+     "input_schema": _schema({"run": _RUN})},
 ]
 
 
@@ -177,6 +201,41 @@ class ChatTools:
         card = self.agent.spec(method).summary()
         return ToolResult(json.dumps(card, ensure_ascii=False, default=str), [{"type": "method_card", "card": card}])
 
+    def _find(self, items: list[dict], name: str) -> dict | None:
+        n = name.lower().strip()
+        return next((x for x in items if n in (x["label"].lower(), x["file"].lower(), Path(x["file"]).stem.lower())
+                     or x["label"].lower().replace(" ", "") == n.replace(" ", "")), None)
+
+    def t_list_tables(self) -> ToolResult:
+        t = self.agent.tables()
+        return ToolResult(json.dumps(t, ensure_ascii=False), [{"type": "table", "rows": [
+            {"table": x["label"], "caption": x["caption"]} for x in t]}] if t else [])
+
+    def t_get_table(self, table: str) -> ToolResult:
+        t = self._find(self.agent.tables(), table)
+        if t is None:
+            raise ValueError(f"No table {table!r} in this paper.")
+        import csv as _csv
+        with (self.agent.path / "paper" / t["file"]).open(newline="", encoding="utf-8") as fh:
+            rows = list(_csv.reader(fh))
+        head, body = rows[0], rows[1:]
+        recs = [dict(zip(head, r)) for r in body]
+        return ToolResult(json.dumps({"label": t["label"], "caption": t["caption"], "rows": recs}, ensure_ascii=False),
+                          [{"type": "note", "text": f"{t['label']}: {t['caption']}"}, {"type": "table", "rows": recs}])
+
+    def t_list_figures(self) -> ToolResult:
+        f = self.agent.figures()
+        return ToolResult(json.dumps(f, ensure_ascii=False), [{"type": "table", "rows": [
+            {"figure": x["label"], "caption": x["caption"][:160]} for x in f]}] if f else [])
+
+    def t_show_figure(self, figure: str) -> ToolResult:
+        f = self._find(self.agent.figures(), figure)
+        if f is None:
+            raise ValueError(f"No figure {figure!r} in this paper.")
+        return ToolResult(json.dumps({"label": f["label"], "caption": f["caption"]}, ensure_ascii=False),
+                          [{"type": "figure", "path": str(self.agent.path / "paper" / f["file"]),
+                            "caption": f"{f['label']}: {f['caption']}"}])
+
     def t_list_my_files(self) -> ToolResult:
         from .profiles.bioimaging import list_images, read_image_metadata
 
@@ -187,8 +246,8 @@ class ChatTools:
         return ToolResult(json.dumps({"folder": str(d), "files": rows}, default=str),
                           [{"type": "table", "rows": rows}] if rows else [])
 
-    def t_check_my_data(self, method: str, data_path: str | None = None) -> ToolResult:
-        r = check_inputs(self.agent.spec(method), self._data(data_path))
+    def t_check_my_data(self, method: str, data_path: str | None = None, pixel_ratio: float | None = None) -> ToolResult:
+        r = check_inputs(self.agent.spec(method), self._data(data_path), pixel_ratio=pixel_ratio)
         adj = [a.__dict__ for a in r.adjustments]
         payload = {"status": r.status, "can_run": r.can_run, "checks": r.as_rows(), "adjustments": adj}
         return ToolResult(json.dumps(payload, default=str),
@@ -198,25 +257,31 @@ class ChatTools:
         out = reproduce(self.agent.spec(method), self.agent.runs_dir, runner=self.runner, agent=self.who,
                         progress=self.progress)
         self.last_run = out.run_dir
+        from .agent import PaperAgent, record_reproduction
+
+        if record_reproduction(self.agent.path, method, out):
+            self.agent.methods[:] = PaperAgent.load(self.agent.path).methods
         c = out.comparison
         verdict = ("reproduced" if c.reproduced else "differs") if c and c.measures else "not compared"
         rows = [{"measure": m.measure, "reported": m.reported, "reproduced": m.reproduced,
-                 "difference": f"{m.rel_diff:.1%}", "tolerance": f"{m.tolerance:.0%}",
-                 "within": "yes" if m.within else "no"} for m in (c.measures if c else [])]
-        payload = {"verdict": verdict, "headline": c.headline() if c else None, "measures": rows,
-                   "run": out.run_dir.name}
+                 "difference": f"±{m.rel_diff:.3g}" if m.absolute else f"{m.rel_diff:.1%}",
+                 "tolerance": m.tolerance_label, "within": "yes" if m.within else "no"}
+                for m in (c.measures if c else [])]
+        payload = {"verdict": verdict, "headline": c.headline() if c else None, "same_numbers": c.count if c else None,
+                   "ladder": out.ladder, "measures": rows, "run": out.run_dir.name}
         return ToolResult(json.dumps(payload, default=str),
                           [{"type": "comparison", "ok": verdict == "reproduced",
                             "headline": c.headline() if c else verdict, "rows": rows},
                            *self._run_attachments(out.run_dir)])
 
     def t_run_on_my_data(self, method: str, data_path: str | None = None, auto_adjust: bool = True,
-                         channel: int = 0, overrides: dict[str, Any] | None = None) -> ToolResult:
+                         channel: int = 0, overrides: dict[str, Any] | None = None,
+                         pixel_ratio: float | None = None) -> ToolResult:
         ov = {k: (v["value"], v.get("reason") or "chosen by the user") if isinstance(v, dict) else
               (v, "chosen by the user") for k, v in (overrides or {}).items()}
         out = run_on_data(self.agent.spec(method), self._data(data_path), self.agent.runs_dir, runner=self.runner,
                           agent=self.who, auto_adjust=auto_adjust, channel=channel, overrides=ov,
-                          progress=self.progress)
+                          progress=self.progress, pixel_ratio=pixel_ratio)
         self.last_run = out.run_dir
         csv_text = (out.run_dir / "outputs" / "results.csv").read_text(encoding="utf-8")
         lines = csv_text.splitlines()
@@ -272,6 +337,44 @@ class ChatTools:
         return ToolResult(json.dumps({"crate_zip": archive, "run": d.name, "record": h}),
                           [{"type": "crate", "zip": archive, "run_dir": str(d), "record": h}])
 
+    def t_followup_checks(self, method: str) -> ToolResult:
+        from .followup import followups_for, propose
+
+        done = followups_for(self.agent.runs_dir, self.agent.spec(method))
+        payload = {"proposed": [f.as_dict() for f in propose(self.agent.spec(method))],
+                   "already_run": [{k: r[k] for k in ("run", "followup", "headline")} for r in done]}
+        rows = [{"id": f["id"], "kind": f["kind"], "check": f["title"], "why": f["why"],
+                 "can run here": "yes" if f["runnable"] else f"needs {f['needs']}"} for f in payload["proposed"]]
+        done_rows = [{"ran": r["followup"], "result": r["headline"]} for r in done]
+        return ToolResult(json.dumps(payload, default=str),
+                          [{"type": "table", "rows": rows}] + ([{"type": "table", "rows": done_rows}] if done else []))
+
+    def t_run_followup_check(self, method: str, check: str) -> ToolResult:
+        from .followup import run_followup
+        from .runcrate import summarise_run
+
+        out = run_followup(self.agent.spec(method), check, self.agent.runs_dir, who=self.who, runner=self.runner)
+        self.last_run = out.run_dir
+        h = summarise_run(out.run_dir)["headline"]
+        return ToolResult(json.dumps({"headline": h, "same_numbers": out.comparison.count if out.comparison else None,
+                                      "run": out.run_dir.name}),
+                          [{"type": "note", "text": h}, *self._run_attachments(out.run_dir)])
+
+    def t_report_page(self) -> ToolResult:
+        from .report import build_report
+
+        path = build_report(self.agent.path)
+        return ToolResult(json.dumps({"report": str(path)}), [{"type": "note", "text": f"Report page written: {path}"}])
+
+    def t_make_figure(self, run: str | None = None) -> ToolResult:
+        from .figures import make_run_figure
+
+        current = next((m.run_crate for m in self.agent.methods if m.run_crate), None)
+        path = make_run_figure(self._run_dir(run) if run else Path(current) if current else self._run_dir(None))
+        return ToolResult(json.dumps({"figure": str(path)}),
+                          [{"type": "figure", "path": str(path), "caption": "Published vs reproduced, plotted from "
+                                                                            "this run's outputs"}])
+
     def t_reproducibility_record(self) -> ToolResult:
         if not self.agent.has_methods:
             return ToolResult(json.dumps({"headline": "No runnable method yet, so no runs.", "runs": []}))
@@ -310,6 +413,10 @@ def system_prompt(agent: PaperAgent, max_paper_chars: int = MAX_PAPER_CHARS) -> 
         "create the output RO-Crate (create_output_crate) and a methods paragraph.\n"
         "- After a run with adjustments, offer compare_paper_parameters to show what the paper's values "
         "unchanged would give.\n"
+        "- A validation that differs is a finding about the published result, not a failure: name each "
+        "value that differs (published vs recomputed, and the tolerance) and say how many reproduce.\n"
+        "- If the research states no pixel size and a parameter is in pixels, ask the user how their pixel size "
+        "compares with the research's and pass pixel_ratio; never guess it.\n"
         "- If images have no pixel size, ask the user for it (from the microscope or acquisition software) and "
         "call set_pixel_size with what they say; never guess it.\n"
         "- If the user wants a different parameter value, pass it in overrides with their reason.\n"
@@ -456,6 +563,8 @@ class LocalChat:
             "- **crate** / **export**: package the latest run as an output RO-Crate\n"
             "- **compare** with the paper's parameters unchanged\n"
             "- **my pixel size is 0.5 µm** (when your images have no calibration)\n"
+            "- **why does it differ?** follow-up checks, and **run check** <id>\n"
+            "- **plot** published vs reproduced, **report** page\n"
             "- **methods** paragraph, **approve** / **reject** the latest run, **record**, **files**, **about**")
 
     def __init__(self, agent: PaperAgent, tools: ChatTools):
@@ -490,7 +599,7 @@ class LocalChat:
                 f"- **{m.name}** ({m.language}): {m.status}" + (f". {m.detail}" if m.detail else "")
                 for m in self.agent.methods))
         else:
-            lines.append("No runnable method yet: see **Validate** for how to add one.")
+            lines.append("No runnable method yet: see **Reproduce** for how to add one.")
         return "\n\n".join(lines)
 
     def send(self, text: str) -> Iterator[tuple]:
@@ -500,7 +609,11 @@ class LocalChat:
         low = text.lower().strip()
         has = lambda *w: any(re.search(rf"\b{x}", low) for x in w)  # noqa: E731
         method = self._method(text)
-        needs_method = has("reproduce", "check", "run", "describe")
+        # A question about the paper ("what was excluded from the analysis?") is answered from the paper, not
+        # taken as a command because it contains a command word.
+        question = low.endswith("?") and not re.match(r"(can|could|would|will) you\b", low)
+        cmd = lambda *w: not question and has(*w)  # noqa: E731
+        needs_method = cmd("reproduce", "check", "run", "describe")
         if needs_method and method is None:
             yield ("text", "This paper agent has no runnable methods yet, so I can only answer from the paper.")
             return
@@ -510,25 +623,43 @@ class LocalChat:
         elif px and has("is", "set", "=", "use", "my"):
             yield from self._do("set_pixel_size", pixel_size=float(px.group(1)), unit=px.group(2) or "µm",
                                 source="stated in the chat")
-        elif has("compare", "as-is", "unchanged", "without adjust"):
+        elif cmd("run check", "run the check", "follow-up check"):
+            from .followup import propose
+
+            ids = [f.id for f in propose(self.agent.spec(method))] if method else []
+            cid = next((i for i in ids if i in low.replace(" ", "-")), None) or next(
+                (f.id for f in propose(self.agent.spec(method)) if f.runnable), None)
+            if cid is None:
+                yield ("text", "No follow-up check can run here for this method.")
+            else:
+                yield ("text", f"Running the follow-up check **{cid}** (its own recorded run; the original stays):")
+                yield from self._do("run_followup_check", method=method, check=cid)
+        elif has("differ", "follow", "why") and method:
+            yield from self._do("followup_checks", method=method)
+            yield ("text", "Say **run check** and the check's id to run one.")
+        elif cmd("plot", "figure", "chart"):
+            yield from self._do("make_figure")
+        elif cmd("report"):
+            yield from self._do("report_page")
+        elif cmd("compare", "as-is", "unchanged", "without adjust"):
             yield ("text", f"Running **{method}** with the paper's parameters unchanged (a comparison, not recorded):")
             yield from self._do("compare_paper_parameters", method=method)
-        elif has("reproduce"):
+        elif cmd("reproduce"):
             yield ("text", f"Reproducing **{method}** on the paper's own data:")
             yield from self._do("reproduce", method=method)
-        elif has("crate", "export", "package", "deposit", "publish"):
+        elif cmd("crate", "export", "package", "deposit", "publish"):
             yield ("text", "Packaging the latest run as an output RO-Crate:")
             yield from self._do("create_output_crate")
-        elif has("check", "fit", "compatible"):
+        elif cmd("check", "fit", "compatible"):
             yield ("text", f"Checking your files against what **{method}** expects:")
             yield from self._do("check_my_data", method=method)
-        elif has("run", "apply", "analy"):
+        elif cmd("run", "apply", "analy"):
             yield ("text", f"Running **{method}** on your files (checks first, adjustments applied and recorded):")
             yield from self._do("run_on_my_data", method=method)
             yield ("text", "Look at the overlays. Say **approve** or **reject**, or **crate** to export the run.")
-        elif has("approve", "looks right", "accept"):
+        elif cmd("approve", "looks right", "accept"):
             yield from self._do("approve_run", accepted=True)
-        elif has("reject", "wrong"):
+        elif cmd("reject", "wrong"):
             yield from self._do("approve_run", accepted=False)
         elif has("methods paragraph", "methods text", "paragraph"):
             yield from self._do("methods_text")
@@ -538,7 +669,7 @@ class LocalChat:
             yield from self._do("list_my_files")
         elif has("about", "what is this", "overview", "summar", "methods", "what can you", "what does"):
             yield ("text", self.overview())
-        elif has("describe"):
+        elif cmd("describe"):
             yield from self._do("describe_method", method=method)
         else:
             hits = self.agent.search(text, 3)

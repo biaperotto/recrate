@@ -27,10 +27,13 @@ An input crate is a standard [Workflow RO-Crate 1.0](https://about.workflowhub.e
 | `channels` | File input | integer | Expected number of channels |
 | `dimensions` | File input | `2D` / `3D` | Expected dimensionality |
 | `scaling` | value input | `inverse_pixel_area` / `inverse_pixel_size` | How the parameter changes with pixel size |
-| `tolerance:<column>` | output | fraction, e.g. `0.05` | Allowed relative difference for that measurement; its `description` records where in the paper the tolerance is stated |
+| `tolerance:<column>` | output | fraction, e.g. `0.05` | Allowed relative difference for that measurement (on the mean) |
+| `tolerance_abs:<column>` | output | number, e.g. `0.005` | Allowed absolute difference, for every item |
+| `tolerance_source:<column>` | output | `paper-rounding` / `paper-stated` / `method-noise` / `person` | Where the tolerance comes from; `description` holds the evidence (quote, person and reason, number of reruns). No source, no verdict |
 | `source` | reported-results File | text, e.g. `Table 1 (p. 4)` | Where in the paper the reported results come from |
+| `followup` | workflow | JSON: `title`, `kind`, `changes`, `why`, `quote` | A check to run when the numbers differ (see `recrate/followup.py`) |
 
-The reported results and tolerances are the ground truth the validation verdict is judged against. When a crate is drafted from a paper, these are extracted by an LLM, so the `source` property (and each tolerance's `description`) cites the paper location a person checks before the `draft` flag is removed. In a description (see `draft.py`) set `expected_source` on the method and `tolerance_sources` on the output.
+The reported results and tolerances are the ground truth the validation verdict is judged against. When a crate is drafted from a paper, these are extracted by an LLM, so the `source` property (and each tolerance's `tolerance_source`/`description`) cites the paper location a person checks before the `draft` flag is removed. In a description (see `draft.py`) set `expected_source` on the method and a `source` on each tolerance.
 
 A better long-term option for imaging is to take expected calibration directly from the OME metadata of the paper's example images, so it comes from the OME standard rather than a new field.
 

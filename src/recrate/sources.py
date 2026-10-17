@@ -119,6 +119,10 @@ def _json(url: str) -> dict:
     return json.loads(_get(url, "application/json")[0])
 
 
+def get_bytes(url: str) -> bytes:
+    return _get(url, timeout=120)[0]
+
+
 def get_json(url: str, accept: str = "application/json") -> dict:
     """JSON over HTTPS, with verified TLS (used for release histories and DOI metadata)."""
     return json.loads(_get(url, accept, timeout=30)[0])
@@ -226,7 +230,19 @@ def _unpaywall_oa(doi: str) -> dict | None:
 
 
 def fetch_doi(doi: str, dest: Path) -> Found:
-    """A paper DOI: its metadata and abstract, and the full text when the publisher links an open PDF."""
+    """A paper DOI: its reading package when it is open access in Europe PMC (text, tables, figures,
+    supplement); else the full text when the publisher links an open PDF; else its metadata and abstract."""
+    from .reading import from_europepmc
+
+    try:
+        pkg = from_europepmc(doi, Path(dest) / "package", get_json, get_bytes)
+    except Exception:  # noqa: BLE001 - Europe PMC unavailable: fall back to the publisher
+        pkg = None
+    if pkg:
+        meta = json.loads((pkg.parent / "package.json").read_text(encoding="utf-8"))
+        n_t, n_f = len(meta.get("tables", [])), len([f for f in meta.get("figures", []) if f.get("file")])
+        return Found("paper", meta.get("title") or doi, pkg, f"https://doi.org/{doi}",
+                     [f"Full text from Europe PMC, with {n_t} table(s) and {n_f} figure(s)."])
     meta = json.loads(_get(f"https://doi.org/{urllib.parse.quote(doi)}", "application/vnd.citationstyles.csl+json")[0])
     title = meta.get("title") if isinstance(meta.get("title"), str) else (meta.get("title") or ["Untitled"])[0]
     dest.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,411 @@
+{
+  "@context": "https://w3id.org/ro/crate/1.1/context",
+  "@graph": [
+    {
+      "@id": "ro-crate-metadata.json",
+      "@type": "CreativeWork",
+      "conformsTo": {
+        "@id": "https://w3id.org/ro/crate/1.1"
+      },
+      "about": {
+        "@id": "./"
+      }
+    },
+    {
+      "@id": "./",
+      "@type": "Dataset",
+      "name": "Ecological sexual dimorphism and environmental variability within a community of Antarctic penguins (genus Pygoscelis)",
+      "description": "Gorman, Williams & Fraser (2014), PLOS ONE 9(3): e90081. Morphometrics of Adélie, chinstrap and gentoo penguins breeding near Palmer Station, Antarctica (2007-2010), and sexual size dimorphism. Crate drafted by ReCRATE from the paper: the authors used R and published no code, so the method re-implements the size dimorphism index as the paper describes it.",
+      "mainEntity": {
+        "@id": "workflows/size_dimorphism.py"
+      },
+      "hasPart": [
+        {
+          "@id": "workflows/size_dimorphism.py"
+        },
+        {
+          "@id": "data/size-dimorphism-index/"
+        },
+        {
+          "@id": "expected/size-dimorphism-index.csv"
+        },
+        {
+          "@id": "paper.pdf"
+        }
+      ],
+      "additionalProperty": [
+        {
+          "@id": "#domain-profile"
+        },
+        {
+          "@id": "#draft"
+        }
+      ],
+      "conformsTo": [
+        {
+          "@id": "https://w3id.org/workflowhub/workflow-ro-crate/1.0"
+        }
+      ],
+      "identifier": "https://doi.org/10.1371/journal.pone.0090081#recrate",
+      "datePublished": "2014-03-05",
+      "citation": {
+        "@id": "https://doi.org/10.1371/journal.pone.0090081"
+      },
+      "license": {
+        "@id": "https://spdx.org/licenses/CC-BY-4.0"
+      },
+      "author": [
+        {
+          "@id": "#author-0"
+        },
+        {
+          "@id": "#author-1"
+        },
+        {
+          "@id": "#author-2"
+        }
+      ]
+    },
+    {
+      "@id": "https://w3id.org/workflowhub/workflow-ro-crate/1.0",
+      "@type": "CreativeWork",
+      "name": "Workflow RO-Crate",
+      "version": "1.0"
+    },
+    {
+      "@id": "#software-0",
+      "@type": "SoftwareApplication",
+      "name": "Python",
+      "softwareVersion": "3"
+    },
+    {
+      "@id": "#language-python",
+      "@type": "ComputerLanguage",
+      "name": "Python"
+    },
+    {
+      "@id": "#size-dimorphism-index-in-table-columns",
+      "@type": "PropertyValue",
+      "name": "columns",
+      "value": "Species,Sex,Culmen Length (mm),Culmen Depth (mm),Flipper Length (mm),Body Mass (g)"
+    },
+    {
+      "@id": "#size-dimorphism-index-in-table",
+      "@type": "FormalParameter",
+      "name": "input_dir",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "text/csv",
+      "description": "One row per individual: species (or another group), sex, and the four measurements",
+      "additionalProperty": [
+        {
+          "@id": "#size-dimorphism-index-in-table-columns"
+        }
+      ]
+    },
+    {
+      "@id": "#size-dimorphism-index-in-group-role",
+      "@type": "PropertyValue",
+      "name": "role",
+      "value": "free"
+    },
+    {
+      "@id": "#size-dimorphism-index-in-group-quote",
+      "@type": "PropertyValue",
+      "name": "quote",
+      "value": "An SDI was calculated for all structural parameters considered as best predictors of adult penguin sex for each species"
+    },
+    {
+      "@id": "#size-dimorphism-index-in-group-changes-question",
+      "@type": "PropertyValue",
+      "name": "changes_question",
+      "value": true
+    },
+    {
+      "@id": "#size-dimorphism-index-in-group",
+      "@type": "FormalParameter",
+      "name": "group_column",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Text",
+      "description": "Column that defines the groups compared (the paper: species)",
+      "defaultValue": "Species",
+      "additionalProperty": [
+        {
+          "@id": "#size-dimorphism-index-in-group-role"
+        },
+        {
+          "@id": "#size-dimorphism-index-in-group-quote"
+        },
+        {
+          "@id": "#size-dimorphism-index-in-group-changes-question"
+        }
+      ]
+    },
+    {
+      "@id": "#size-dimorphism-index-in-sex",
+      "@type": "FormalParameter",
+      "name": "sex_column",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Text",
+      "description": "Column with the sex of each individual",
+      "defaultValue": "Sex"
+    },
+    {
+      "@id": "#size-dimorphism-index-in-male",
+      "@type": "FormalParameter",
+      "name": "male_label",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Text",
+      "description": "Value of the sex column for males",
+      "defaultValue": "MALE"
+    },
+    {
+      "@id": "#size-dimorphism-index-in-female",
+      "@type": "FormalParameter",
+      "name": "female_label",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Text",
+      "description": "Value of the sex column for females",
+      "defaultValue": "FEMALE"
+    },
+    {
+      "@id": "#size-dimorphism-index-in-keep-role",
+      "@type": "PropertyValue",
+      "name": "role",
+      "value": "free"
+    },
+    {
+      "@id": "#size-dimorphism-index-in-keep",
+      "@type": "FormalParameter",
+      "name": "keep_rows",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Text",
+      "description": "Inclusion rule: rows to keep, as 'Column=Value' conditions separated by ';' (empty: every row)",
+      "defaultValue": "",
+      "additionalProperty": [
+        {
+          "@id": "#size-dimorphism-index-in-keep-role"
+        }
+      ]
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-length",
+      "@type": "PropertyValue",
+      "name": "tolerance_abs:culmen_length",
+      "value": 0.006
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-length-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:culmen_length",
+      "value": "paper-rounding",
+      "description": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-depth",
+      "@type": "PropertyValue",
+      "name": "tolerance_abs:culmen_depth",
+      "value": 0.006
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-depth-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:culmen_depth",
+      "value": "paper-rounding",
+      "description": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-flipper-length",
+      "@type": "PropertyValue",
+      "name": "tolerance_abs:flipper_length",
+      "value": 0.006
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-flipper-length-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:flipper_length",
+      "value": "paper-rounding",
+      "description": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-body-mass",
+      "@type": "PropertyValue",
+      "name": "tolerance_abs:body_mass",
+      "value": 0.006
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-body-mass-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:body_mass",
+      "value": "paper-rounding",
+      "description": "Table 2 prints two decimals, so half a unit of the last decimal is 0.005; 0.006 adds a 0.001 margin, wider than rounding alone"
+    },
+    {
+      "@id": "#size-dimorphism-index-out-sdi",
+      "@type": "FormalParameter",
+      "name": "results",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "text/csv",
+      "description": "SDI per group and measurement",
+      "additionalProperty": [
+        {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-length"
+        },
+        {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-length-source"
+        },
+        {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-depth"
+        },
+        {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-culmen-depth-source"
+        },
+        {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-flipper-length"
+        },
+        {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-flipper-length-source"
+        },
+        {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-body-mass"
+        },
+        {
+          "@id": "#size-dimorphism-index-out-sdi-tolerance-abs-body-mass-source"
+        }
+      ]
+    },
+    {
+      "@id": "#size-dimorphism-index-followup-0",
+      "@type": "PropertyValue",
+      "name": "followup",
+      "value": "{\"title\": \"Exclude pairs that did not complete their clutch\", \"kind\": \"inclusion rule\", \"changes\": {\"keep_rows\": \"Clutch Completion=Yes\"}, \"why\": \"The paper excludes pairs whose second egg was never observed; the published data records this as Clutch Completion = No, and the method as drafted keeps them.\", \"quote\": \"some pairs were excluded from statistical analyses because a final egg was never observed at the nest\"}",
+      "description": "Exclude pairs that did not complete their clutch"
+    },
+    {
+      "@id": "workflows/size_dimorphism.py",
+      "@type": [
+        "File",
+        "SoftwareSourceCode",
+        "ComputationalWorkflow"
+      ],
+      "name": "size_dimorphism_index",
+      "programmingLanguage": {
+        "@id": "#language-python"
+      },
+      "softwareRequirements": [
+        {
+          "@id": "#software-0"
+        }
+      ],
+      "input": [
+        {
+          "@id": "#size-dimorphism-index-in-table"
+        },
+        {
+          "@id": "#size-dimorphism-index-in-group"
+        },
+        {
+          "@id": "#size-dimorphism-index-in-sex"
+        },
+        {
+          "@id": "#size-dimorphism-index-in-male"
+        },
+        {
+          "@id": "#size-dimorphism-index-in-female"
+        },
+        {
+          "@id": "#size-dimorphism-index-in-keep"
+        }
+      ],
+      "output": [
+        {
+          "@id": "#size-dimorphism-index-out-sdi"
+        }
+      ],
+      "description": "Sexual size dimorphism index (SDI) per species for culmen length, culmen depth, flipper length and body mass, after Lovich & Gibbons (1992): mean of the larger sex divided by mean of the smaller sex, minus one, negative when males are larger (Table 2 of the paper).",
+      "additionalProperty": [
+        {
+          "@id": "#size-dimorphism-index-followup-0"
+        }
+      ]
+    },
+    {
+      "@id": "data/size-dimorphism-index/",
+      "@type": "Dataset",
+      "name": "Example data from the paper (size_dimorphism_index)",
+      "hasPart": [
+        {
+          "@id": "data/size-dimorphism-index/penguins_raw.csv"
+        }
+      ],
+      "exampleOfWork": {
+        "@id": "#size-dimorphism-index-in-table"
+      }
+    },
+    {
+      "@id": "data/size-dimorphism-index/penguins_raw.csv",
+      "@type": "File",
+      "name": "penguins_raw.csv"
+    },
+    {
+      "@id": "expected/size-dimorphism-index.csv",
+      "@type": "File",
+      "name": "Results reported in the paper (size_dimorphism_index)",
+      "encodingFormat": "text/csv",
+      "exampleOfWork": {
+        "@id": "#size-dimorphism-index-out-sdi"
+      }
+    },
+    {
+      "@id": "#domain-profile",
+      "@type": "PropertyValue",
+      "name": "domain profile",
+      "value": "generic"
+    },
+    {
+      "@id": "#draft",
+      "@type": "PropertyValue",
+      "name": "draft",
+      "value": true
+    },
+    {
+      "@id": "paper.pdf",
+      "@type": [
+        "File",
+        "ScholarlyArticle"
+      ],
+      "name": "Ecological sexual dimorphism and environmental variability within a community of Antarctic penguins (genus Pygoscelis)",
+      "identifier": "https://doi.org/10.1371/journal.pone.0090081"
+    },
+    {
+      "@id": "#author-0",
+      "@type": "Person",
+      "name": "Kristen B. Gorman"
+    },
+    {
+      "@id": "#author-1",
+      "@type": "Person",
+      "name": "Tony D. Williams"
+    },
+    {
+      "@id": "#author-2",
+      "@type": "Person",
+      "name": "William R. Fraser"
+    }
+  ]
+}

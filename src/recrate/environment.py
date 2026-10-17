@@ -69,7 +69,7 @@ MONTHS = "January|February|March|April|May|June|July|August|September|October|No
 class Software:
     name: str
     version: str | None
-    how: str  # declared | stated | pinned | as of publication | later | unknown
+    how: str  # declared | stated | pinned | as of publication | later | history | unknown
     registry: str | None = None
     package: str | None = None
     released: str | None = None  # release date of that version, when known
@@ -82,6 +82,7 @@ class Software:
                 "as of publication": f"latest release before publication ({self.released})" if self.released
                 else "latest release before publication",
                 "later": f"no release before publication; first release {self.released} ({self.version})",
+                "history": f"the registry's records start {self.released}, after the publication: version unknown",
                 "unknown": "a model, named without a version" if self.registry == "none" and self.package and
                 self.package[0].isupper() and self.package not in {"Fiji", "ImageJ"} else "no release history available"}[self.how]
 
@@ -311,6 +312,8 @@ def resolve(software: list[Software], when: date | None, fetch_json=None) -> lis
         if before:
             hit = max(before, key=lambda r: _vkey(r[0]))
             s.version, s.released, s.how = hit[0], hit[1].isoformat(), "as of publication"
+        elif history and s.registry == "conda":  # conda-forge (2016-) and Bioconda (2015-) started late: their
+            s.released, s.how = history[0][1].isoformat(), "history"  # first record is not the first release
         elif history:  # the method was published before its software was released
             s.version, s.released, s.how = history[0][0], history[0][1].isoformat(), "later"
         else:

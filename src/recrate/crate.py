@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 METADATA_FILE = "ro-crate-metadata.json"
+LEGACY_SCALING = {"inverse_pixel_size": ("pixel size", -1.0), "inverse_pixel_area": ("pixel size", -2.0)}
 
 
 class CrateError(ValueError):
@@ -36,7 +37,7 @@ class Prop:
     name: str
     value: Any
     unit: str | None = None
-    description: str | None = None
+    description: str = ""
 
 
 @dataclass
@@ -56,6 +57,24 @@ class Parameter:
     @property
     def is_file(self) -> bool:
         return (self.type or "").lower() in {"file", "dataset", "directory"}
+
+    @property
+    def scaling_rule(self) -> tuple[str, float] | None:
+        """``(data property, exponent)``: the parameter is multiplied by (yours / the paper's) ** exponent of that
+        property. ``scales_with:sampling rate^1``; the older ``inverse_pixel_size`` and ``inverse_pixel_area`` mean
+        pixel size to the power -1 and -2."""
+        rule = str(self.prop("scaling") or "")
+        if rule in LEGACY_SCALING:
+            return LEGACY_SCALING[rule]
+        if rule.startswith("scales_with:"):
+            prop, _, exp = rule.split(":", 1)[1].partition("^")
+            return prop.strip(), float(exp or 1)
+        return None
+
+    @property
+    def role(self) -> str:
+        """``scales_with`` (has a rule), ``free`` (a choice the user may change) or ``fixed`` (as published)."""
+        return "scales_with" if self.scaling_rule else str(self.prop("role") or "fixed")
 
 
 @dataclass
@@ -82,6 +101,7 @@ class MethodSpec:
     method_name: str = ""
     method_description: str = ""
     draft: bool = False
+    followups: list[dict[str, Any]] = field(default_factory=list)  # declared follow-up checks (recrate.followup)
     raw: dict[str, Any] = field(default_factory=dict)
 
     # ---- convenience -------------------------------------------------
@@ -116,6 +136,34 @@ class MethodSpec:
                     src[name.split(":", 1)[1]] = prop.description
         return src
 
+    def abs_tolerances(self) -> dict[str, float]:
+        """Absolute margins per column (``tolerance_abs:<column>``), checked for every item."""
+        tol: dict[str, float] = {}
+        for out in self.outputs:
+            for name, prop in out.properties.items():
+                if name.startswith("tolerance_abs:"):
+                    tol[name.split(":", 1)[1]] = float(prop.value)
+        return tol
+
+    @property
+    def output_kind(self) -> str:
+        """The kind of the main output (model.OUTPUT_KINDS); a results table unless the crate says otherwise."""
+        return str(self.outputs[0].prop("kind") or "table") if self.outputs else "table"
+
+    def tolerance_specs(self) -> list["Tolerance"]:
+        """Every tolerance with its source (``tolerance_source:<column>``): see model.TOLERANCE_SOURCES."""
+        from .model import Tolerance
+
+        out = []
+        for o in self.outputs:
+            for name, prop in o.properties.items():
+                kind, _, col = name.partition(":")
+                if kind in {"tolerance", "tolerance_abs"} and col:
+                    src = o.properties.get(f"tolerance_source:{col}")
+                    out.append(Tolerance(col, float(prop.value), kind == "tolerance_abs",
+                                         str(src.value) if src else None, src.description if src else ""))
+        return out
+
     def summary(self) -> dict[str, Any]:
         """A plain dict for display (the 'method card')."""
         d = self.data_input
@@ -138,11 +186,15 @@ class MethodSpec:
                 **{k: (f"{p.value} {p.unit}" if p.unit else p.value) for k, p in d.properties.items()},
             },
             "parameters": {
-                p.name: {"default": p.default, "description": p.description,
-                         **({"scaling": p.prop("scaling")} if p.prop("scaling") else {})}
+                p.name: {"default": p.default, "description": p.description, "role": p.role,
+                         **({"scaling": p.prop("scaling")} if p.prop("scaling") else {}),
+                         **({"unit": p.prop("unit")} if p.prop("unit") else {}),
+                         **({"quote": p.prop("quote")} if p.prop("quote") else {})}
                 for p in self.value_inputs
             },
-            "tolerances": self.tolerances(),
+            "output_kind": self.output_kind,
+            "tolerances": {t.column: {"value": t.value, "absolute": t.absolute, "source": t.source,
+                                      "evidence": t.evidence} for t in self.tolerance_specs()},
             "tolerance_sources": self.tolerance_sources(),
             "has_example_data": bool(self.example_data and self.example_data.exists()),
             "has_reported_results": bool(self.expected_results and self.expected_results.exists()),
@@ -191,7 +243,7 @@ def _props(entity: dict[str, Any], graph: dict[str, dict[str, Any]]) -> dict[str
         name = pv.get("name")
         if name:
             out[name] = Prop(name=name, value=pv.get("value"), unit=pv.get("unitText") or pv.get("unitCode"),
-                             description=pv.get("description"))
+                             description=pv.get("description", ""))
     return out
 
 
@@ -332,5 +384,7 @@ def load_crate(path: str | Path, method: str | None = None) -> MethodSpec:
         method_name=wf.get("name", Path(wf_id).stem),
         method_description=wf.get("description", ""),
         draft=str(root_props["draft"].value).lower() == "true" if "draft" in root_props else False,
+        followups=[json.loads(graph[_ref(r)]["value"]) for r in _as_list(wf.get("additionalProperty"))
+                   if graph.get(_ref(r) or "", {}).get("name") == "followup"],
         raw=raw,
     )

@@ -12,4 +12,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev,mcp]"
+      - name: Make the half-resolution reuse example
+        run: python examples/workflowhub-nuclei-segmentation/make_half_resolution.py
+      - name: Validate run crates (rocrate-validator, Workflow Run Crate 0.5)
+        run: pytest -q tests/test_rocrate_validator.py
       - run: pytest -q

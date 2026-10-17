@@ -137,17 +137,33 @@ def passages(text: str, size: int = 900) -> list[str]:
     return out
 
 
+STOPWORDS = set("""a an and are as at be been by can could did do does for from had has have how in into is it its
+of on or our that the their them then there these they this to was were what when where which who why will with would
+you your paper method methods study""".split())
+
+
+def _stem(word: str) -> str:
+    """A crude stem, enough for a paper's vocabulary: 'excluded', 'exclusion', 'excluding' all match 'exclu'."""
+    return word[:5] if len(word) >= 6 else word
+
+
 def search(text: str, query: str, k: int = 5) -> list[dict]:
-    """Keyword search over passages; returns the best k with a score."""
-    terms = [t for t in re.findall(r"[\w.µ%-]+", query.lower()) if len(t) > 1]
+    """Keyword search over passages, weighting rare words more (IDF) and matching word stems; best k with a score."""
+    import math
+
+    terms = list(dict.fromkeys(_stem(t) for t in re.findall(r"[\w.µ%-]+", query.lower())
+                               if len(t) > 1 and t not in STOPWORDS))
     if not terms:
         return []
+    ps = passages(text)
+    pats = {t: re.compile(rf"(?<![\w]){re.escape(t)}") for t in terms}
+    counts = [{t: len(pats[t].findall(p.lower())) for t in terms} for p in ps]
+    idf = {t: math.log((len(ps) + 1) / (1 + sum(1 for c in counts if c[t]))) + 1 for t in terms}
     scored = []
-    for i, p in enumerate(passages(text)):
-        low = p.lower()
-        score = sum(low.count(t) for t in terms) + 3 * sum(1 for t in set(terms) if t in low)
+    for i, (p, c) in enumerate(zip(ps, counts)):
+        score = sum(idf[t] * (1 + math.log(c[t])) for t in terms if c[t])
         if score:
-            scored.append({"passage": i, "score": score, "text": p})
+            scored.append({"passage": i, "score": round(score, 3), "text": p})
     return sorted(scored, key=lambda d: -d["score"])[:k]
 
 

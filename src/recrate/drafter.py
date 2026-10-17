@@ -35,11 +35,13 @@ Rules:
   "channels", "dimensions". Mark size parameters given in pixels with "scaling": "inverse_pixel_area"
   (areas) or "inverse_pixel_size" (lengths).
 - If the paper reports per-image or summary results for its own data, point "example_data" and "expected"
-  at those files when they exist in the code or data, and set "tolerances" per reported measurement.
-- The reported results and tolerances are the ground truth the verdict is judged against, so cite them:
-  set "expected_source" to where in the paper the reported results are (e.g. "Table 1 (p. 4)", "Figure 3b"),
-  and "tolerance_sources" for any tolerance the paper states. If a number is your estimate rather than the
-  paper's, say so in that source string; never leave it blank to hide that.
+  at those files when they exist in the code or data, and set "tolerances" per reported measurement, each
+  with its "source": "paper-rounding" (abs_tolerances, half a unit of the last printed decimal), or
+  "paper-stated" with the "quote". Never invent a tolerance without a source.
+- The reported results are the ground truth the verdict is judged against, so cite them: set
+  "expected_source" to where in the paper the reported results are (e.g. "Table 1 (p. 4)", "Figure 3b").
+  If a number is your estimate rather than the paper's, say so in that source string; never leave it blank
+  to hide that.
 - Set "draft": true, "citation" to the paper's DOI URL if known, and "profile" to "bioimaging" for image data.
 
 FORMAT:

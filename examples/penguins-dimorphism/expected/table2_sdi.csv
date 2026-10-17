@@ -1,0 +1,4 @@
+group,culmen_length,culmen_depth,flipper_length,body_mass
+Adelie Penguin (Pygoscelis adeliae),-0.09,-0.08,-0.02,-0.20
+Chinstrap penguin (Pygoscelis antarctica),-0.11,-0.10,-0.05,-0.10
+Gentoo penguin (Pygoscelis papua),-0.08,-0.10,-0.04,-0.17

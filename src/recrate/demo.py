@@ -73,6 +73,14 @@ def _col_mean(csv_path: Path, col: str) -> float:
         return mean(float(r[col]) for r in csv.DictReader(fh))
 
 
+AGREEMENT = ("Repeated acquisitions of the same fields gave counts within 5%, areas within 10% and fractions of "
+             "large nuclei within 15%.")
+
+
+def _stated(value: float) -> dict:
+    return {"value": value, "source": "paper-stated", "quote": AGREEMENT}
+
+
 PAPER = """# Counting and sizing nuclei in 2D fluorescence images with Fiji
 
 ReCRATE demo authors. Demo Journal of Bioimage Methods (2026). https://doi.org/{doi}
@@ -109,6 +117,8 @@ scikit-image. For each field we report the median nuclear area and the fraction 
 Across the six fields, the mean count was {count:.1f} nuclei per field and the mean nuclear area was
 {area:.1f} µm². The median nuclear area per field averaged {median:.1f} µm², and on average
 {frac:.0%} of nuclei were larger than 150 µm². Per-field values are given in the supplementary tables.
+Repeated acquisitions of the same fields gave counts within 5%, areas within 10% and fractions of large
+nuclei within 15%.
 
 ## Data and code availability
 
@@ -166,7 +176,7 @@ def make_demo(out_dir: str | Path, seed: int = 7) -> dict[str, Path]:
                                min_size],
                     "outputs": [{"id": "out-results", "name": "results", "type": "File", "format": "text/csv",
                                  "description": "Per field: count and mean area (µm²)",
-                                 "tolerances": {"count": 0.05, "mean_area": 0.10}}],
+                                 "tolerances": {"count": _stated(0.05), "mean_area": _stated(0.10)}}],
                     "example_data": "images",
                     "expected": "table_counts.csv",
                 },
@@ -181,7 +191,7 @@ def make_demo(out_dir: str | Path, seed: int = 7) -> dict[str, Path]:
                                 "description": "Area above which a nucleus counts as large (µm²)"}],
                     "outputs": [{"id": "out-results", "name": "results", "type": "File", "format": "text/csv",
                                  "description": "Per field: count, median area (µm²), fraction large",
-                                 "tolerances": {"median_area": 0.10, "fraction_large": 0.15}}],
+                                 "tolerances": {"median_area": _stated(0.10), "fraction_large": _stated(0.15)}}],
                     "example_data": "images",
                     "expected": "table_sizes.csv",
                 },

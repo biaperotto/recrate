@@ -10,14 +10,18 @@ A run crate records:
 * parameter values actually used, including adjustments and why
 * outputs (results table, masks, overlays)
 * the input compatibility check (domain profile) as an AssessAction
-* in reproduce mode, the comparison with the paper's reported results
-* optionally, a person's visual approval of the overlays
+* in reproduce mode, the comparison with the paper's reported results (each tolerance with its source)
+  and the verdict ladder (model.py)
+* figures, each made by code from the run's outputs, with the action that made it
+* for a follow-up check, which run it follows up and what it changed
+* optionally, a person's visual approval of the overlays, or review of the conclusion
 * ``isBasedOn`` the paper's crate, so runs can be collected into the paper's
   reproducibility record
 """
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import html
 import json
@@ -54,6 +58,34 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "x"
 
 
+_FAVICON = __import__("base64").b64encode((Path(__file__).parent / "favicon.svg").read_bytes()).decode() \
+    if (Path(__file__).parent / "favicon.svg").exists() else ""
+_MEDIA = {".png": "image/png", ".svg": "image/svg+xml", ".pdf": "application/pdf", ".jpg": "image/jpeg"}
+
+
+def reuse_summary(spec: MethodSpec, files: list[Path], results_csv: Path, adjust: dict[str, Any],
+                  param_notes: dict[str, str] | None) -> str:
+    """One line for a reuse run: inputs, the main result per input (or overall), and every parameter change."""
+    from .compare import _num, read_results
+
+    rows = read_results(results_csv) if results_csv.exists() else []
+    main = ""
+    if rows:
+        key = next(iter(rows[0]))
+        col = next((c for c in rows[0] if c != key and _num(rows[0][c]) is not None), None)
+        if col:
+            vals = [_num(r[col]) for r in rows if _num(r[col]) is not None]
+            if len(rows) <= 4:
+                main = "; ".join(f"{r[key]}: {col} {r[col]}" for r in rows)
+            elif vals:
+                main = f"{col} {min(vals):g} to {max(vals):g} (mean {sum(vals) / len(vals):.4g}) over {len(rows)} rows"
+    changes = [f"{a.parameter} {a.old} → {a.new} ({a.reason})" for a in adjust.values()] + \
+              [f"{k}: {v}" for k, v in (param_notes or {}).items()]
+    return (f"Reuse of {spec.method_name or 'the method'} ({spec.name}) on {len(files)} input file(s)."
+            + (f" Results: {main}." if main else "")
+            + (" Parameter changes: " + "; ".join(changes) + "." if changes else " Parameters as published."))
+
+
 def _person(name: str) -> dict[str, Any]:
     return {"@id": f"#person-{_slug(name)}", "@type": "Person", "name": name}
 
@@ -69,6 +101,10 @@ def write_run_crate(
     agent: str = "anonymous",
     overlays: list[Path] | None = None,
     param_notes: dict[str, str] | None = None,
+    ladder: dict[str, dict[str, str]] | None = None,
+    figures: list[Path] | None = None,
+    followup: dict[str, Any] | None = None,
+    purpose: str | None = None,
 ) -> Path:
     """Create a run crate folder from a finished run. Returns its path."""
     out_dir = Path(out_dir)
@@ -152,6 +188,10 @@ def write_run_crate(
             e["description"] = f"Adjusted from {a.old} to {a.new}: {a.reason}."
         if param_notes and name in param_notes:
             e["description"] = param_notes[name]
+        if "description" not in e:
+            default = params_by_name[name].default if name in params_by_name else None
+            e["description"] = "As published." if default is None or str(default) == str(value) else \
+                f"Set to {value} (published: {default})."
         pv_refs.append(add(e))
 
     # Outputs
@@ -173,6 +213,13 @@ def write_run_crate(
         output_refs.append(add({"@id": f"outputs/overlays/{ov.name}", "@type": "File",
                                 "name": f"Overlay {ov.stem}", "encodingFormat": "image/png"}, part=True))
 
+    for i, fig in enumerate(figures or []):  # made by the paper's own plotting code, as part of the run
+        (out_dir / "outputs" / "figures").mkdir(exist_ok=True)
+        shutil.copy2(fig, out_dir / "outputs" / "figures" / fig.name)
+        output_refs.append(add({"@id": f"outputs/figures/{fig.name}", "@type": ["File", "ImageObject"],
+                                "name": f"Figure {fig.stem}", "encodingFormat": _MEDIA.get(fig.suffix.lower(), "image/png"),
+                                "description": "Plotted by the workflow's own code during this run."}, part=True))
+
     person_ref = add(_person(agent))
     adjust_txt = "; ".join([f"{a.parameter} {a.old} → {a.new} ({a.reason})" for a in adjust.values()]
                            + [f"{k}: {v}" for k, v in (param_notes or {}).items()])
@@ -180,7 +227,8 @@ def write_run_crate(
         "@id": "#run",
         "@type": "CreateAction",
         "name": f"ReCRATE {mode} run of {spec.name}",
-        "description": f"Mode: {mode}." + (f" Adjustments: {adjust_txt}." if adjust_txt else " No adjustments."),
+        "description": f"Mode: {mode}." + (f" Adjustments: {adjust_txt}." if adjust_txt else " No adjustments.")
+                       + (f" Follow-up check of run {followup['of']}: {followup['title']}." if followup else ""),
         "instrument": {"@id": wf_id},
         "agent": person_ref,
         "object": input_refs + pv_refs,
@@ -211,6 +259,8 @@ def write_run_crate(
     verdict = "not compared"
     if comparison is not None and comparison.measures:
         verdict = "reproduced" if comparison.reproduced else "differs"
+        if followup:  # evidence about a difference, not a reproduction
+            verdict = f"follow-up: {comparison.count} within tolerance"
         reported_refs = []
         if spec.expected_results and spec.expected_results.exists():
             (out_dir / "reported").mkdir(exist_ok=True)
@@ -220,15 +270,44 @@ def write_run_crate(
                                      part=True))
         measure_refs = [add({"@id": "#verdict", "@type": "PropertyValue", "name": "verdict", "value": verdict,
                              "description": comparison.headline()})]
+        sources = {t.column: t for t in spec.tolerance_specs()}
         for m in comparison.measures:
+            t = sources.get(m.measure.split(" · ")[0])
+            evidence = f": {t.evidence}" if t and t.evidence else ""
             measure_refs.append(add({
                 "@id": f"#measure-{_slug(m.measure)}", "@type": "PropertyValue", "name": m.measure,
-                "value": m.reproduced, "description": (f"reported {m.reported}; relative difference "
-                                                       f"{m.rel_diff:.4f}; tolerance {m.tolerance}"),
+                "value": m.reproduced, "description": (
+                    f"reported {m.reported}; {'absolute' if m.absolute else 'relative'} difference "
+                    f"{m.rel_diff:.4f}; tolerance {m.tolerance} ({m.source or 'no source'}{evidence}); "
+                    f"{'within' if m.within else 'outside'} tolerance"),
             }))
+        with (out_dir / "comparison.csv").open("w", newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            w.writerow(["value", "published", "reproduced", "difference", "kind", "tolerance", "tolerance_source",
+                        "within"])
+            for m in comparison.measures:
+                w.writerow([m.measure, m.reported, m.reproduced, round(m.rel_diff, 6),
+                            "absolute" if m.absolute else "relative", m.tolerance, m.source or "", m.within])
+        comparison_ref = add({"@id": "comparison.csv", "@type": "File", "encodingFormat": "text/csv",
+                              "name": "Comparison with the published values",
+                              "description": "Per value: published, reproduced, difference, tolerance and its source, "
+                                             "within tolerance or not."}, part=True)
         mentions.append(add({
             "@id": "#comparison", "@type": "AssessAction", "name": "Comparison with reported results",
-            "instrument": recrate_ref, "object": output_refs[:1] + reported_refs, "result": measure_refs,
+            "instrument": recrate_ref, "object": output_refs[:1] + reported_refs,
+            "result": measure_refs + [comparison_ref],
+            "actionStatus": {"@id": "http://schema.org/CompletedActionStatus"},
+        }))
+
+    if ladder:
+        from .model import STEPS
+
+        steps = [add({"@id": f"#ladder-{k}", "@type": "PropertyValue", "name": label,
+                      "value": ladder[k]["status"], "description": ladder[k]["reason"]}) for k, label in STEPS]
+        mentions.append(add({
+            "@id": "#ladder", "@type": "AssessAction", "name": "Verdict ladder",
+            "description": "Materials found, runs, same numbers, same conclusion (the last is set only by a person).",
+            "instrument": recrate_ref, "object": [{"@id": "#run"}], "result": steps,
             "actionStatus": {"@id": "http://schema.org/CompletedActionStatus"},
         }))
 
@@ -241,16 +320,30 @@ def write_run_crate(
         "@id": "./",
         "@type": "Dataset",
         "name": f"ReCRATE run: {mode} of {spec.method_name or 'method'} ({spec.name})",
-        "description": (comparison.headline() if comparison and comparison.measures
-                        else f"{mode.capitalize()} run of {spec.name} on new data."),
+        "description": (
+            f"Follow-up check of {followup['of']}: {followup['title']}. With this change, {comparison.count} values "
+            "are within tolerance. The original result stands; this is evidence for a person to weigh."
+            if followup and comparison and comparison.measures
+            else comparison.headline() if comparison and comparison.measures
+            else reuse_summary(spec, files, out_dir / "outputs" / "results.csv", adjust, param_notes)),
         "datePublished": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "conformsTo": [{"@id": u} for u in PROFILES.values()],
         "mainEntity": {"@id": wf_id},
         "isBasedOn": {"@id": spec.identifier},
         "hasPart": has_part,
         "mentions": mentions,
-        "additionalProperty": [{"@id": "#prop-mode"}, {"@id": "#prop-verdict"}, {"@id": "#prop-method"}],
+        "additionalProperty": [{"@id": "#prop-mode"}, {"@id": "#prop-verdict"}, {"@id": "#prop-method"}]
+                              + ([{"@id": "#prop-followup-of"}, {"@id": "#prop-followup"}] if followup else [])
+                              + ([{"@id": "#prop-purpose"}] if purpose else []),
     }
+    if purpose:
+        graph.append({"@id": "#prop-purpose", "@type": "PropertyValue", "name": "recrate purpose", "value": purpose})
+        root["description"] = purpose + ". " + root["description"]
+    if followup:
+        graph.append({"@id": "#prop-followup-of", "@type": "PropertyValue", "name": "recrate follow-up of",
+                      "value": followup["of"]})
+        graph.append({"@id": "#prop-followup", "@type": "PropertyValue", "name": "recrate follow-up check",
+                      "value": followup["title"], "description": followup.get("why", "")})
     if spec.citation:
         root["citation"] = {"@id": spec.citation}
     if spec.license:
@@ -260,8 +353,8 @@ def write_run_crate(
     graph.append({"@id": "#prop-method", "@type": "PropertyValue", "name": "recrate method",
                   "value": spec.method_name or (spec.workflow_path.stem if spec.workflow_path else "")})
 
-    metadata = {
-        "@context": "https://w3id.org/ro/crate/1.1/context",
+    metadata = {  # the workflow-run terms define sha256 (file checksums)
+        "@context": ["https://w3id.org/ro/crate/1.1/context", "https://w3id.org/ro/terms/workflow-run/context"],
         "@graph": [
             {"@id": "ro-crate-metadata.json", "@type": "CreativeWork",
              "conformsTo": {"@id": RO_CRATE}, "about": {"@id": "./"}},
@@ -315,6 +408,80 @@ def approve(run_dir: Path, who: str, accepted: bool = True, note: str = "") -> N
     meta["@graph"].extend([approval, result])
     root.setdefault("mentions", []).append({"@id": approval["@id"]})
     save_crate(run_dir, meta)
+
+
+def add_figure(run_dir: Path, data: bytes, filename: str, name: str, description: str,
+               made_from: list[str] | None = None, code: str = "recrate.figures") -> Path:
+    """Record a figure made by code from this run's outputs: the file, and the action that made it from which files.
+    A figure of the same file name is replaced (same inputs, same code)."""
+    meta = load_run_crate(run_dir)
+    idx = entity_index(meta)
+    root = idx["./"]
+    fid = f"outputs/figures/{filename}"
+    (Path(run_dir) / "outputs" / "figures").mkdir(parents=True, exist_ok=True)
+    (Path(run_dir) / fid).write_bytes(data)
+    aid = f"#figure-{_slug(filename)}"
+    meta["@graph"] = [e for e in meta["@graph"] if e["@id"] not in {fid, aid}]
+    if "#figures-code" not in idx:
+        meta["@graph"].append({"@id": "#figures-code", "@type": "SoftwareApplication",
+                               "name": f"ReCRATE figures ({code})", "softwareVersion": __version__})
+    meta["@graph"].extend([
+        {"@id": fid, "@type": ["File", "ImageObject"], "name": name, "description": description,
+         "encodingFormat": _MEDIA.get(Path(filename).suffix.lower(), "image/png")},
+        {"@id": aid, "@type": "CreateAction", "name": f"Plot {name}", "instrument": {"@id": "#figures-code"},
+         "object": [{"@id": f} for f in (made_from or ["outputs/results.csv"])], "result": {"@id": fid},
+         "endTime": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+         "actionStatus": {"@id": "http://schema.org/CompletedActionStatus"}},
+    ])
+    if {"@id": fid} not in root.setdefault("hasPart", []):
+        root["hasPart"].append({"@id": fid})
+    if {"@id": aid} not in root.setdefault("mentions", []):
+        root["mentions"].append({"@id": aid})
+    save_crate(run_dir, meta)
+    return Path(run_dir) / fid
+
+
+def review_conclusion(run_dir: Path, who: str, agrees: str, note: str = "") -> None:
+    """Record a person's judgement of the ladder's last step: does this run support the paper's conclusion?
+    ``agrees``: yes | partly | no. Updates the ladder in the run crate."""
+    if agrees not in {"yes", "partly", "no"}:
+        raise ValueError("agrees must be yes, partly or no")
+    if not who.strip():
+        raise ValueError("A review needs the reviewer's name.")
+    meta = load_run_crate(run_dir)
+    idx = entity_index(meta)
+    root = idx["./"]
+    person = _person(who)
+    if person["@id"] not in idx:
+        meta["@graph"].append(person)
+    n = sum(1 for e in meta["@graph"] if str(e["@id"]).startswith("#conclusion-review-")
+            and e.get("@type") == "AssessAction")
+    rid = f"#conclusion-review-{n}"
+    meta["@graph"].extend([
+        {"@id": rid, "@type": "AssessAction", "name": "Same conclusion? (review by a person)",
+         "agent": {"@id": person["@id"]}, "object": [{"@id": "#run"}],
+         "endTime": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+         "actionStatus": {"@id": "http://schema.org/CompletedActionStatus"}, "result": {"@id": f"{rid}-result"}},
+        {"@id": f"{rid}-result", "@type": "PropertyValue", "name": "same conclusion", "value": agrees,
+         **({"description": note} if note else {})},
+    ])
+    root.setdefault("mentions", []).append({"@id": rid})
+    step = idx.get("#ladder-conclusion")
+    if step is not None:
+        step["value"] = {"yes": "passed", "partly": "partial", "no": "failed"}[agrees]
+        step["description"] = f"Reviewed by {who}" + (f": {note}" if note else "")
+    save_crate(run_dir, meta)
+
+
+def run_ladder(run_dir: Path) -> dict[str, dict[str, str]] | None:
+    """The verdict ladder recorded in a run crate, if any."""
+    from .model import STEPS
+
+    idx = entity_index(load_run_crate(run_dir))
+    if "#ladder" not in idx:
+        return None
+    return {k: {"status": idx[f"#ladder-{k}"]["value"], "reason": idx[f"#ladder-{k}"].get("description", "")}
+            for k, _ in STEPS if f"#ladder-{k}" in idx}
 
 
 def review_image(run_dir: Path, who: str, image: str, accepted: bool, note: str = "") -> None:
@@ -400,8 +567,11 @@ def run_story(run_dir: Path) -> dict[str, Any]:
         "checks": [{"check": c.get("name"), "status": c.get("value"), "detail": c.get("description", "")}
                    for c in assess("#input-check")],
         "comparison": [{"measure": c.get("name"), "value": c.get("value"), "detail": c.get("description", "")}
-                       for c in assess("#comparison")],
+                       for c in assess("#comparison") if c.get("@type") == "PropertyValue"],
         "reviews": approvals,
+        "ladder": run_ladder(run_dir),
+        "figures": [{"file": f["@id"], "name": f.get("name"), "description": f.get("description", "")}
+                    for f in meta["@graph"] if str(f["@id"]).startswith("outputs/figures/")],
         "outputs": [p["@id"] for p in root.get("hasPart", []) if str(p["@id"]).startswith("outputs/")],
     }
 
@@ -418,7 +588,7 @@ def summarise_run(run_dir: Path) -> dict[str, Any]:
     agent = idx.get(run.get("agent", {}).get("@id", ""), {}).get("name")
     n_inputs = sum(1 for o in run.get("object", []) if idx.get(o["@id"], {}).get("@type") == "File")
     adjustments = [idx[o["@id"]]["description"] for o in run.get("object", [])
-                   if "description" in idx.get(o["@id"], {})]
+                   if idx.get(o["@id"], {}).get("description", "As published.") != "As published."]
     return {
         "run": Path(run_dir).name,
         "path": str(run_dir),
@@ -432,6 +602,12 @@ def summarise_run(run_dir: Path) -> dict[str, Any]:
         "images": n_inputs,
         "adjustments": adjustments,
         "approved": approvals[-1] if approvals else None,
+        "followup_of": props.get("recrate follow-up of"),
+        "purpose": props.get("recrate purpose"),
+        "followup": props.get("recrate follow-up check"),
+        "conclusion": next((idx[e["result"]["@id"]]["value"] for e in reversed(meta["@graph"])
+                            if str(e["@id"]).startswith("#conclusion-review-") and e.get("@type") == "AssessAction"),
+                           None),
     }
 
 
@@ -463,9 +639,10 @@ def render_preview(metadata: dict[str, Any]) -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(str(root.get('name', 'RO-Crate')))}</title>
+<link rel="icon" href="data:image/svg+xml;base64,{_FAVICON}">
 <style>
-:root{{--bg:#fbfaf7;--fg:#1d1d1b;--muted:#6b6a65;--line:#e4e1d8;--accent:#2f6f5e}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#171715;--fg:#ecebe6;--muted:#a3a29b;--line:#34332f;--accent:#7cc4ad}}}}
+:root{{--bg:#F4F4F0;--fg:#14181F;--muted:#6b6a65;--line:#e4e1d8;--accent:#2A78D6}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#171715;--fg:#F4F4F0;--muted:#a3a29b;--line:#34332f;--accent:#7FB0F0}}}}
 body{{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;max-width:900px;margin:0 auto;padding:24px 16px}}
 h1{{font-size:1.5rem;margin:0 0 .25rem}} h3{{margin:0;font-size:1rem}}
 .verdict{{display:inline-block;padding:2px 10px;border:1px solid var(--accent);color:var(--accent);border-radius:99px}}

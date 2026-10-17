@@ -29,9 +29,9 @@ dependencies = [
 [project.optional-dependencies]
 fiji = ["pyimagej>=1.5"]
 draft = ["anthropic>=0.40"]
-mcp = ["mcp>=1.2"]  # 1.x (FastMCP) and 2.x (MCPServer) both supported
+mcp = ["mcp>=1.2", "matplotlib>=3.7"]  # mcp 1.x (FastMCP) and 2.x (MCPServer); matplotlib for make_figure
 app = ["streamlit>=1.43", "pandas>=2", "matplotlib>=3.7"]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "roc-validator>=0.12"]  # roc-validator: run crates are checked against the RO-Crate profiles
 all = ["pyimagej>=1.5", "anthropic>=0.40", "mcp>=1.2", "streamlit>=1.43", "pandas>=2", "matplotlib>=3.7", "pytest>=7"]
 
 [project.scripts]
@@ -42,7 +42,7 @@ recrate-mcp = "recrate.mcp_server:main"  # recrate-mcp <paper agent folder>
 where = ["src"]
 
 [tool.setuptools.package-data]
-recrate = ["workflows/*.ijm", "workflows/*.py"]
+recrate = ["workflows/*.ijm", "workflows/*.py", "skill/*.md", "skill/agents/*.md", "favicon.svg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
