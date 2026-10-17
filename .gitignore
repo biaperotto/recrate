@@ -1,0 +1,10 @@
+__pycache__/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
+runs/
+deposits/
+examples/demo/paper_crate/reproducibility-record.json
+.DS_Store

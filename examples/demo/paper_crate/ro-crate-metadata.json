@@ -1,0 +1,296 @@
+{
+  "@context": "https://w3id.org/ro/crate/1.1/context",
+  "@graph": [
+    {
+      "@id": "ro-crate-metadata.json",
+      "@type": "CreativeWork",
+      "conformsTo": {
+        "@id": "https://w3id.org/ro/crate/1.1"
+      },
+      "about": {
+        "@id": "./"
+      }
+    },
+    {
+      "@id": "./",
+      "@type": "Dataset",
+      "name": "Nuclei counting in 2D fluorescence images (Fiji)",
+      "description": "Counts nuclei per field and their mean area. Otsu threshold, particles of at least 50 pixels kept to exclude debris. Synthetic demo standing in for a paper.",
+      "mainEntity": {
+        "@id": "count_nuclei.ijm"
+      },
+      "hasPart": [
+        {
+          "@id": "count_nuclei.ijm"
+        },
+        {
+          "@id": "data/"
+        },
+        {
+          "@id": "expected/results.csv"
+        }
+      ],
+      "additionalProperty": [
+        {
+          "@id": "#domain-profile"
+        }
+      ],
+      "conformsTo": [
+        {
+          "@id": "https://w3id.org/workflowhub/workflow-ro-crate/1.0"
+        }
+      ],
+      "identifier": "https://example.org/recrate-demo/nuclei-counting/v1",
+      "citation": {
+        "@id": "https://doi.org/10.0000/recrate-demo-paper"
+      },
+      "license": {
+        "@id": "https://spdx.org/licenses/CC-BY-4.0"
+      },
+      "author": [
+        {
+          "@id": "#author-0"
+        }
+      ]
+    },
+    {
+      "@id": "https://w3id.org/workflowhub/workflow-ro-crate/1.0",
+      "@type": "CreativeWork",
+      "name": "Workflow RO-Crate",
+      "version": "1.0"
+    },
+    {
+      "@id": "#software-0",
+      "@type": "SoftwareApplication",
+      "name": "Fiji",
+      "softwareVersion": "2.16.0"
+    },
+    {
+      "@id": "#language",
+      "@type": "ComputerLanguage",
+      "name": "ImageJ Macro Language"
+    },
+    {
+      "@id": "#in-images-pixel-size",
+      "@type": "PropertyValue",
+      "name": "pixel size",
+      "value": 0.65,
+      "unitText": "µm"
+    },
+    {
+      "@id": "#in-images-channels",
+      "@type": "PropertyValue",
+      "name": "channels",
+      "value": 1
+    },
+    {
+      "@id": "#in-images-dimensions",
+      "@type": "PropertyValue",
+      "name": "dimensions",
+      "value": "2D"
+    },
+    {
+      "@id": "#in-images",
+      "@type": "FormalParameter",
+      "name": "input_dir",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "image/tiff",
+      "description": "2D single-channel fluorescence images of nuclei, calibrated",
+      "additionalProperty": [
+        {
+          "@id": "#in-images-pixel-size"
+        },
+        {
+          "@id": "#in-images-channels"
+        },
+        {
+          "@id": "#in-images-dimensions"
+        }
+      ]
+    },
+    {
+      "@id": "#in-threshold",
+      "@type": "FormalParameter",
+      "name": "threshold_method",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Text",
+      "description": "ImageJ auto-threshold method",
+      "defaultValue": "Otsu"
+    },
+    {
+      "@id": "#in-min-size-scaling",
+      "@type": "PropertyValue",
+      "name": "scaling",
+      "value": "inverse_pixel_area"
+    },
+    {
+      "@id": "#in-min-size",
+      "@type": "FormalParameter",
+      "name": "min_size_px",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Float",
+      "description": "Minimum particle area in pixels; removes debris",
+      "defaultValue": "50",
+      "additionalProperty": [
+        {
+          "@id": "#in-min-size-scaling"
+        }
+      ]
+    },
+    {
+      "@id": "#out-results-tolerance-count",
+      "@type": "PropertyValue",
+      "name": "tolerance:count",
+      "value": 0.05
+    },
+    {
+      "@id": "#out-results-tolerance-mean_area",
+      "@type": "PropertyValue",
+      "name": "tolerance:mean_area",
+      "value": 0.1
+    },
+    {
+      "@id": "#out-results",
+      "@type": "FormalParameter",
+      "name": "results",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "text/csv",
+      "description": "One row per image: count and mean area (µm²)",
+      "additionalProperty": [
+        {
+          "@id": "#out-results-tolerance-count"
+        },
+        {
+          "@id": "#out-results-tolerance-mean_area"
+        }
+      ]
+    },
+    {
+      "@id": "count_nuclei.ijm",
+      "@type": [
+        "File",
+        "SoftwareSourceCode",
+        "ComputationalWorkflow"
+      ],
+      "name": "count_nuclei",
+      "programmingLanguage": {
+        "@id": "#language"
+      },
+      "softwareRequirements": [
+        {
+          "@id": "#software-0"
+        }
+      ],
+      "input": [
+        {
+          "@id": "#in-images"
+        },
+        {
+          "@id": "#in-threshold"
+        },
+        {
+          "@id": "#in-min-size"
+        }
+      ],
+      "output": [
+        {
+          "@id": "#out-results"
+        }
+      ]
+    },
+    {
+      "@id": "data/",
+      "@type": "Dataset",
+      "name": "Example data from the paper",
+      "hasPart": [
+        {
+          "@id": "data/field_01.tif"
+        },
+        {
+          "@id": "data/field_02.tif"
+        },
+        {
+          "@id": "data/field_03.tif"
+        },
+        {
+          "@id": "data/field_04.tif"
+        },
+        {
+          "@id": "data/field_05.tif"
+        },
+        {
+          "@id": "data/field_06.tif"
+        }
+      ],
+      "exampleOfWork": {
+        "@id": "#in-images"
+      }
+    },
+    {
+      "@id": "data/field_01.tif",
+      "@type": "File",
+      "name": "field_01.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/field_02.tif",
+      "@type": "File",
+      "name": "field_02.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/field_03.tif",
+      "@type": "File",
+      "name": "field_03.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/field_04.tif",
+      "@type": "File",
+      "name": "field_04.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/field_05.tif",
+      "@type": "File",
+      "name": "field_05.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/field_06.tif",
+      "@type": "File",
+      "name": "field_06.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "expected/results.csv",
+      "@type": "File",
+      "name": "Results reported in the paper",
+      "encodingFormat": "text/csv",
+      "exampleOfWork": {
+        "@id": "#out-results"
+      }
+    },
+    {
+      "@id": "#domain-profile",
+      "@type": "PropertyValue",
+      "name": "domain profile",
+      "value": "bioimaging"
+    },
+    {
+      "@id": "#author-0",
+      "@type": "Person",
+      "name": "ReCRATE demo"
+    }
+  ]
+}
