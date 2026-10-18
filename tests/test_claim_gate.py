@@ -60,12 +60,17 @@ def test_a_claim_already_not_checkable_stays_so():
 
 
 def test_the_first_failing_check_wins():
-    out = gate([_c(anchor="ninety-nine papers", paper_says="71")], PAPER)
+    out = gate([_c(anchor="ninety-nine papers were reported", paper_says="71")], PAPER)
+    assert out[0].why_not == "anchor not found in the paper's text"
+
+
+def test_a_long_hallucinated_anchor_is_not_found():
+    out = gate([_c(anchor="ninety-nine papers were reported", paper_says="68")], PAPER)
     assert out[0].why_not == "anchor not found in the paper's text"
 
 
 def test_the_gate_does_not_mutate_the_callers_claims():
-    c = _c(anchor="ninety-nine papers")
+    c = _c(anchor="ninety-nine papers were reported")
     out = gate([c], PAPER)
     assert c.result == "Not checked" and c.why_not == ""
     assert out[0] is not c
@@ -129,3 +134,75 @@ def test_a_missing_sheet_is_not_checkable_not_a_crash(tmp_path):
     c = _c(data_source={"file": "d.xlsx", "sheet": "nope", "columns": ["A"]})
     out = gate([c], PAPER, tmp_path)
     assert out[0].result == "Not checkable" and out[0].why_not
+
+
+# Spurious presence: what the gate must refuse although a substring test would accept it.
+
+def test_a_very_short_anchor_proves_nothing():
+    for anchor in ("a", "cat", "rate", "ninety-nine papers"):
+        out = gate([_c(anchor=anchor, paper_says="68")], "Allocated Rate, J. (2019): 68 papers.")
+        assert out[0].result == "Not checkable", anchor
+        assert out[0].why_not == "anchor too short to verify", anchor
+
+
+def test_an_anchor_inside_a_longer_word_is_not_found():
+    for anchor in ("data were availab", "ata were available"):
+        out = gate([_c(anchor=anchor, paper_says="68")], PAPER)
+        assert out[0].result == "Not checkable", anchor
+        assert out[0].why_not == "anchor not found in the paper's text", anchor
+
+
+def test_a_percent_value_is_not_matched_inside_a_longer_number():
+    paper = "The share was 48% of all papers."
+    out = gate([_c(anchor="the share was", paper_says="8%")], paper)
+    assert out[0].result == "Not checkable"
+    assert out[0].why_not == "the reported value is not printed in the paper"
+    assert gate([_c(anchor="the share was", paper_says="21%")], "The share was 121% of papers.")[0].result == "Not checkable"
+
+
+def test_a_value_ending_a_sentence_still_matches():
+    paper = "The share was 48% of all papers, which is 5 of 10."
+    assert gate([_c(anchor="the share was", paper_says="5 of 10")], paper)[0].result == "Not checked"
+
+
+def test_a_numeric_value_that_drops_a_decimal_is_not_printed():
+    paper = "Sixty-eight (68.5) papers reported that data were available."
+    out = gate([_c(anchor="data were available", paper_says="68")], paper)
+    assert out[0].result == "Not checkable"
+    assert out[0].why_not == "the reported value is not printed in the paper"
+
+
+def test_a_value_far_from_its_anchor_is_not_checkable():
+    paper = "Data were available in the methods section. " + "filler " * 400 + "Table 2 reports 68 papers."
+    out = gate([_c(anchor="data were available", paper_says="68")], paper)
+    assert out[0].result == "Not checkable"
+    assert out[0].why_not == "the reported value is not printed near the anchor"
+
+
+def test_a_value_a_sentence_from_its_anchor_passes():
+    paper = "Data were available for most papers. Overall, 68 papers reported it."
+    assert gate([_c(anchor="data were available", paper_says="68")], paper)[0].result == "Not checked"
+
+
+def test_a_path_outside_the_data_root_has_its_own_reason(tmp_path):
+    root = tmp_path / "data"
+    root.mkdir()
+    (tmp_path / "secret.csv").write_text("A\n1\n")
+    out = gate([_c(data_source={"file": "../secret.csv", "columns": ["A"]})], PAPER, root)
+    assert out[0].result == "Not checkable"
+    assert out[0].why_not == "data file path is outside the data root: ../secret.csv"
+
+
+def test_a_list_of_sheets_is_not_checkable_not_a_crash(tmp_path):
+    with pd.ExcelWriter(tmp_path / "d.xlsx") as w:
+        pd.DataFrame({"A": [1]}).to_excel(w, sheet_name="one", index=False)
+        pd.DataFrame({"A": [1]}).to_excel(w, sheet_name="two", index=False)
+    c = _c(data_source={"file": "d.xlsx", "sheet": ["one", "two"], "columns": ["A"]})
+    out = gate([c], PAPER, tmp_path)
+    assert out[0].result == "Not checkable" and out[0].why_not
+
+
+def test_a_malformed_data_source_is_not_checkable_not_a_crash(tmp_path):
+    for bad in (["d.csv"], "d.csv", {"file": "d.csv", "columns": "A"}):
+        out = gate([_c(data_source=bad)], PAPER, tmp_path)
+        assert out[0].result == "Not checkable" and out[0].why_not, bad

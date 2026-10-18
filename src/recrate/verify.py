@@ -73,7 +73,7 @@ def _number_forms(value: str) -> list[str]:
     return [o for o in out if o]
 
 
-def _positions(text: str, value: str) -> list[int]:
+def number_positions(text: str, value: str) -> list[int]:
     """Where a value is printed. A minus set in a symbol font often comes out of PDFs as "2" ("−0.11" reads
     "20.11"), so a negative value also matches that form."""
     pats = [rf"(?<![\d.]){re.escape(f)}(?![\d])" for f in _number_forms(value)]
@@ -81,6 +81,9 @@ def _positions(text: str, value: str) -> list[int]:
     if v.startswith("-"):
         pats.append(rf"(?<![\d.])2{re.escape(v[1:])}(?![\d])")
     return sorted({m.start() for p in pats for m in re.finditer(p, text)})
+
+
+_positions = number_positions
 
 
 def number_in(text: str, value: str) -> bool:
