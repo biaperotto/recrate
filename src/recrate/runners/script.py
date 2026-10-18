@@ -75,6 +75,12 @@ class ScriptRunner(Runner):
         version = m.group(0) if m else (platform.python_version() if lang == "Python" else "unknown")
         masks = output_dir / "masks"
         extra, software = [], [(lang, version)]
+        total = 0  # every other file the method wrote (e.g. a random split, a fitted model's table), up to 50 MB
+        for f in sorted(output_dir.rglob("*")):
+            if (f.is_file() and f.name != "results.csv" and not f.is_relative_to(masks)
+                    and not f.is_relative_to(output_dir / "figures") and total + f.stat().st_size <= 50 * 2 ** 20):
+                total += f.stat().st_size
+                extra.append(f)
         if lang == "Python":  # every installed package, as provenance (FAIR4RS R2)
             from ..env import installed_packages
 

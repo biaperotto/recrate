@@ -214,10 +214,13 @@ def write_run_crate(
         output_refs.append(add({"@id": f"outputs/overlays/{ov.name}", "@type": "File",
                                 "name": f"Overlay {ov.stem}", "encodingFormat": "image/png"}, part=True))
 
-    for f in result.extra_outputs or []:  # e.g. packages.txt: every package installed in the environment
+    out_root = Path(result.results_csv).parent
+    for f in result.extra_outputs or []:  # every other file the method wrote, and packages.txt
         if Path(f).exists():
-            shutil.copy2(f, out_dir / "outputs" / Path(f).name)
-            output_refs.append(add({"@id": f"outputs/{Path(f).name}", "@type": "File", "name": Path(f).name,
+            rel = Path(f).relative_to(out_root).as_posix() if Path(f).is_relative_to(out_root) else Path(f).name
+            (out_dir / "outputs" / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, out_dir / "outputs" / rel)
+            output_refs.append(add({"@id": f"outputs/{rel}", "@type": "File", "name": rel,
                                     "encodingFormat": "text/plain" if Path(f).suffix == ".txt" else
                                     _MEDIA.get(Path(f).suffix.lower(), "application/octet-stream")}, part=True))
     for i, fig in enumerate(figures or []):  # made by the paper's own plotting code, as part of the run

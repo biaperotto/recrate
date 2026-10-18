@@ -395,7 +395,20 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
             methods = [m for m in methods if m.status == "validated"]
     manifest["methods"] = [m.__dict__ for m in methods]
     (out / MANIFEST).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    _validate_crate(out)
     return PaperAgent.load(out)
+
+
+def _validate_crate(agent_dir: Path) -> None:
+    """Validate the RO-Crate as soon as it exists or changes (found, supplied, recreated or drafted)."""
+    from .export import crate_validation
+
+    try:
+        crate_validation(agent_dir)
+    except Exception as e:  # noqa: BLE001 - a validator problem must not stop the research object being built
+        manifest = json.loads((agent_dir / MANIFEST).read_text(encoding="utf-8"))
+        manifest["crate_validation"] = {"error": f"{type(e).__name__}: {e}"}
+        (agent_dir / MANIFEST).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _reading_package(p: Paper, source: Path, pdir: Path, manifest: dict[str, Any], paper_doi: str | None,
@@ -514,6 +527,8 @@ def revalidate(agent_dir: str | Path, runner: str = "auto") -> PaperAgent:
     manifest["methods"] = [m.__dict__ for m in validate_methods(crate_dir, agent_dir / "runs", runner=runner)]
     manifest["crate_source"] = manifest.get("crate_source") if manifest.get("crate_source") != "none" else "drafted"
     manifest["title"] = spec0.name
+    manifest["name"] = _slug(spec0.name)  # the name a PDF's page header gave is replaced by the crate's title
     manifest["draft"] = spec0.draft
     (agent_dir / MANIFEST).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    _validate_crate(agent_dir)
     return PaperAgent.load(agent_dir)

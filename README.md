@@ -28,7 +28,7 @@ paper or RO-Crate ──► research object ──────────► ag
 1. **Describe.** ReCRATE starts from a published crate (WorkflowHub, Zenodo, a folder), finds one published for the paper, or drafts one from the paper and its code with the `/recrate` agent. A drafted crate stays *draft* until a named person confirms it.
 2. **Reproduce: can I trust this result?** Each method runs on the paper's own data and every output is compared with the published value. The method climbs a ladder: *materials found* → *runs* → *same numbers* (e.g. 9/12) → *same conclusion*. When numbers differ, ReCRATE proposes follow-up checks (an inclusion rule, the rounding, a software or data version), each run and recorded on its own.
 3. **Reuse: what does this method say about my data?** Your data is checked against the method's declared inputs before the run, and the results against the paper's after it. Parameters fall into three groups: adjusted automatically, with the computation shown; needing your decision, with the paper's sentence; and as published.
-4. **Record: who ran what, and how do I cite it?** Every run is a Workflow Run RO-Crate linked to the paper. From it ReCRATE writes a methods paragraph, references (BibTeX, CSL-JSON), figures, and one report page a reviewer can open without installing anything.
+4. **Record: who ran what, and how do I cite it?** Every run is a Workflow Run RO-Crate linked to the paper. From it ReCRATE writes a methods paragraph, references (BibTeX, CSL-JSON), figures, and one report page a reviewer can open without installing anything. The research object's own RO-Crate, whether found, supplied, recreated as of publication or drafted, is validated with the RO-Crate validator as soon as it is created (and again whenever it changes), and exports as a zip that records how it was obtained.
 
 ## The approach: what every tool guarantees
 
@@ -128,6 +128,8 @@ recrate agentify  --paper examples/penguins-dimorphism/paper.pdf --crate example
 recrate followup  agents/penguins --run exclude-pairs-that-did-not-complete-their-clutch --who "Your name"
 recrate review    agents/penguins --who "Your name" --agrees partly --note "..."  # same conclusion?
 recrate report    agents/penguins                                                # one HTML page
+recrate export-crate agents/penguins                                           # its RO-Crate, as a zip
+recrate check-crate  agents/penguins                                           # the RO-Crate validator's verdict
 ```
 
 ## Limits and next steps

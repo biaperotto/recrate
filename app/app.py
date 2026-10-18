@@ -177,6 +177,14 @@ h1.hero {font-size: 2.3rem; line-height: 1.15; margin: 0 0 .7rem; font-weight: 7
   background: var(--card); border: 1px solid var(--line); padding: .35rem .7rem; min-height: 0; font-size: .86rem;}
 .st-key-suggest button:hover {border-color: var(--accent); color: var(--accent);}
 .st-key-suggest button p {text-align: left;}
+section[data-testid="stSidebar"] {background: var(--card); border-right: 1px solid var(--line);}
+/* the sidebar's open button sits inside the top bar, at its left end, instead of floating over its corner */
+[data-testid="stExpandSidebarButton"] {position: fixed; top: calc(.9rem + 29px); left: calc(1.4rem + 10px); z-index: 1001;}
+.st-key-topbar {padding-left: 2.6rem !important;}
+.st-key-topbar .logo {margin: 0; line-height: 0; display: flex; align-items: center; height: 100%;}
+.st-key-topbar [data-testid="stMarkdown"], .st-key-topbar [data-testid="stMarkdownContainer"] {margin: 0;}
+section[data-testid="stSidebar"] h3 {margin-bottom: 0;}
+section[data-testid="stSidebar"] .tree {font-size: .8rem;}
 </style>""")
 
 # The divider between the chat and the workstation: drag to resize, double-click to reset.
@@ -323,6 +331,8 @@ def make_engine(agent: PaperAgent, tools: ChatTools):
 # ---- building the agent ----------------------------------------------------------------------
 def load_agent(path: Path, data: Path | None = None) -> None:
     ss.agent_dir = str(path)
+    ros = [d for d in ss.get("session_ros", []) if d != str(Path(path).resolve())]
+    ss.session_ros = ros + [str(Path(path).resolve())]  # it now appears under Research Objects
     agent = PaperAgent.load(path)
     ss.tools = ChatTools(agent, ss.uploads / "data")
     ss.tools.data_dir = data
@@ -1363,7 +1373,111 @@ def preview(root: Path, rel: str) -> None:
         st.caption(f"Can't preview this file ({e}).")
 
 
+def research_objects() -> list[Path]:
+    """The research objects of this session, newest first: each paper or RO-Crate added (once its crate is found or
+    built) and each example opened. Nothing else on the computer is listed."""
+    return [Path(d) for d in reversed(ss.get("session_ros", [])) if (Path(d) / "agent.json").exists()]
+
+
+def ro_status(a: PaperAgent) -> str:
+    from recrate import build as builder
+
+    if builder.state(a.path).get("state") == "running":
+        return "⏳"
+    if not a.methods:
+        return "📄"
+    numbers = [m.ladder.get("numbers", {}).get("status") for m in a.methods if m.ladder]
+    if numbers and all(n == "passed" for n in numbers):
+        return "✅"
+    if any(n in ("partial", "failed") for n in numbers):
+        return "🟠"
+    return "⚪"
+
+
+def open_research_object(d: Path) -> None:
+    ex = next((k for k, e in EXAMPLES.items() if Path(e["agent"]).resolve() == d), None)
+    ss.landing = False
+    if ex:
+        open_example(ex)
+        return
+    load_agent(d)
+    ss.ro = {"agent": str(d)}
+    ss._goto = "validate"
+    say(f"Opened **{PaperAgent.load(d).card()['title']}**. {PaperAgent.load(d).card()['verdict']}")
+
+
+def sidebar() -> None:
+    """Research Objects: every one on this computer, each as the folder tree of its files, like the Record tab."""
+    with st.sidebar:
+        st.markdown("### Research Objects")
+        items = research_objects()
+        if not items:
+            st.caption("Add a paper (PDF, DOI, arXiv link) or an RO-Crate, or open an example. Once its RO-Crate is "
+                       "found or built, its research object appears here, with its files.")
+            return
+        st.caption("✅ reproduced · 🟠 partly · ⚪ not checked yet · 📄 no methods yet · ⏳ being made runnable")
+        current = Path(ss.agent_dir).resolve() if ss.get("agent_dir") else None
+        for d in items:
+            try:
+                a = PaperAgent.load(d)
+            except Exception:  # noqa: BLE001 - a broken folder is skipped, not fatal
+                continue
+            title = a.manifest.get("title") or a.name
+            here = d == current
+            with st.expander(f"{ro_status(a)} {short(title, 60)}", expanded=here):
+                n_runs = sum(1 for _ in a.runs_dir.glob("*/ro-crate-metadata.json")) if a.runs_dir.exists() else 0
+                st.caption(f"{a.manifest.get('crate_source') or 'crate'} · {len(a.methods)} method(s) · {n_runs} run(s)"
+                           + (" · draft" if a.manifest.get("draft") else ""))
+                if here:
+                    st.markdown(":blue-badge[open now]")
+                elif st.button("Open", key=f"ro-open-{abs(hash(str(d))) % 10**8}", icon=":material/folder_open:",
+                               width="stretch"):
+                    open_research_object(d)
+                    st.rerun()
+                st.markdown(f"<div class='tree'>{tree_html(d, d)}</div>", unsafe_allow_html=True)
+                st.divider()
+                crate_panel(a, f"side-{abs(hash(str(d))) % 10**8}")
+
+
+def crate_panel(agent: PaperAgent, key: str) -> None:
+    """The research object's RO-Crate: validated with the RO-Crate validator when it was created (and again if it has
+    changed since), so its status shows before anything is downloaded; then the download."""
+    from recrate.export import _how, crate_validation, export_crate
+
+    if agent.crate_dir is None:
+        return
+    with st.spinner("Validating the RO-Crate…"):
+        try:
+            v = crate_validation(agent.path)
+        except Exception as e:  # noqa: BLE001 - shown, not raised
+            v = {"error": f"{type(e).__name__}: {e}"}
+    st.markdown("**RO-Crate**" + (" &nbsp; :orange-badge[draft]" if agent.manifest.get("draft") else ""))
+    st.caption(_how(agent.manifest))
+    if v is None:
+        st.caption("Not validated: install the RO-Crate validator (`pip install roc-validator`).")
+    elif v.get("error"):
+        st.warning(f"Validation could not run: {v['error']}")
+    else:
+        req, rec = v["required"], v["recommended"]
+        (st.success if v["passed"] else st.error)(
+            f"{'Valid' if v['passed'] else 'Not valid'} · {v['profile']} · {req['passed_checks']}/{req['checks']} "
+            f"required checks" + (" · changed since validated" if v.get("stale") else ""))
+        st.caption(f"Recommended level: {rec['passed_checks']}/{rec['checks']} · validated {str(v.get('when', ''))[:16].replace('T', ' ')}")
+        if req["issues"] or rec["issues"]:
+            with st.expander(f"Validation details: {len(req['issues'])} problem(s), {len(rec['issues'])} suggestion(s)"):
+                for i in req["issues"]:
+                    st.markdown(f"❌ {html.escape(i['message'])}")
+                for i in rec["issues"]:
+                    st.caption(f"· {i['message']}")
+    st.download_button("Download RO-Crate (.zip)", data=lambda: Path(export_crate(agent.path)).read_bytes(),
+                       file_name=f"{agent.name[:60]}-ro-crate.zip", mime="application/zip", width="stretch",
+                       type="primary" if v and v.get("passed") else "secondary", icon=":material/download:",
+                       key=f"crate-dl-{key}", on_click="ignore")
+
+
 def record_section(agent: PaperAgent, runs: list[dict]) -> Path | None:
+    with st.container(border=True):
+        crate_panel(agent, "record")
     run_dir = None
     if not runs:
         st.info("No runs yet. Every reproduction and every run on your data is written here as a Workflow Run "
@@ -1670,7 +1784,7 @@ def mcp_install(agent_dir: Path, key: str) -> None:
 def topbar() -> None:
     with st.container(key="topbar"):
         c = st.columns([7, 1.2, 1.6, .8], vertical_alignment="center")
-        c[0].markdown(logo_html(180), unsafe_allow_html=True)
+        c[0].markdown(logo_html(150), unsafe_allow_html=True)
         kind, label = engine_plan()
         with c[1].popover("Connect", width="stretch", icon=":material/hub:", help=f"Chat: {label}"):
             connect_box()
@@ -1689,6 +1803,7 @@ def topbar() -> None:
 
 
 # ---- page ---------------------------------------------------------------------------------------------
+sidebar()
 ss.setdefault("landing", not ss.get("agent_dir"))
 if ss.landing and not ss.get("agent_dir"):
     landing()

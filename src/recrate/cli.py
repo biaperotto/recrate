@@ -20,6 +20,7 @@ Use it:
     recrate publish agents/my_paper RUN
     recrate record  agents/my_paper
     recrate report  agents/my_paper                      # one HTML page a reviewer can open
+    recrate export-crate agents/my_paper                 # the research object's RO-Crate, as a zip
 
 TARGET can be a paper agent folder or a bare crate folder.
 """
@@ -211,6 +212,21 @@ def cmd_install_mcp(a) -> int:
     result = install(a.agent, client=a.client, name=a.name, check=not a.no_check)
     print(describe(result))
     return 0 if result.get("check", {"ok": True})["ok"] else 1
+
+
+def cmd_export_crate(a) -> int:
+    from .export import export_crate
+
+    print(f"RO-Crate: {export_crate(a.target, a.out)}")
+    return 0
+
+
+def cmd_check_crate(a) -> int:
+    from .export import describe_validation, validate_crate
+
+    v = validate_crate(a.target)
+    print(json.dumps(v, indent=2) if a.json else describe_validation(v))
+    return 0 if v["passed"] else 1
 
 
 def cmd_report(a) -> int:
@@ -466,6 +482,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--name", help="Server name (default: recrate-<paper>)")
     s.add_argument("--no-check", action="store_true", help="Don't start the server to check it")
     s.set_defaults(func=cmd_install_mcp)
+
+    s = sub.add_parser("export-crate", help="Export the research object's current RO-Crate as a zip")
+    s.add_argument("target")
+    s.add_argument("--out", help="Default: <agent>/exports/<name>-ro-crate.zip")
+    s.set_defaults(func=cmd_export_crate)
+
+    s = sub.add_parser("check-crate", help="Validate the research object's RO-Crate with the RO-Crate validator")
+    s.add_argument("target")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_check_crate)
 
     s = sub.add_parser("report", help="Write one static HTML page for the research object (no install needed)")
     s.add_argument("target")

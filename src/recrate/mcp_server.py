@@ -16,7 +16,7 @@ What the agent gets, mirroring Paper2Agent's tools / resources / prompts:
   ``followup_checks``, ``run_followup_check``);
   figures (``make_figure``);
   record (``review_conclusion``, ``approve_run``, ``methods_text``, ``publish_run``, ``reproducibility_record``,
-  ``report_page``, ``draft_crate``).
+  ``report_page``, ``export_crate``, ``draft_crate``).
 
 Tools that produce files return ``{"message", "artifacts": [{"description", "path"}]}`` with absolute paths (the
 Paper2Agent convention), so a client can show outputs and figures. Each run writes a fresh run crate folder.
@@ -348,6 +348,15 @@ def build_server(agent_dir: str | Path) -> FastMCP:
         archive = next(r["archive"] for r in record["runs"] if r["run"] == Path(run_crate).name)
         return {"message": headline(record["summary"]), "summary": record["summary"],
                 "artifacts": _artifacts(("Run crate, zipped for deposit", Path(archive)))}
+
+    @mcp.tool(description="Export this research object's RO-Crate (found, supplied, recreated as of publication, or "
+                          "drafted) as a zip, with a record of how it was obtained. Runs are separate crates.")
+    def export_crate() -> dict[str, Any]:
+        from .export import export_crate as export
+
+        path = export(agent.path, agent.path / "exports" / f"{agent.name[:60]}-ro-crate-{_stamp()}.zip")
+        return {"message": f"RO-Crate exported ({agent.manifest.get('crate_source')}).",
+                "artifacts": _artifacts(("The research object's RO-Crate (zip)", path))}
 
     @mcp.tool(description="Write one static HTML report for this research object: verdict, ladder, every value "
                           "compared with its tolerance source, figures, follow-up checks, assumptions, every run. "

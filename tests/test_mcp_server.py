@@ -100,6 +100,8 @@ async def _exercise(call, agent_dir: Path, tools: set[str], called: dict) -> dic
     assert "Workflow Run RO-Crate" in str(methods)
     _, pub = await call("publish_run", {"run_crate": run["run_crate"]})
     assert pub["artifacts"][0]["path"].endswith(".zip")
+    _, crate = await call("export_crate")
+    assert crate["artifacts"][0]["path"].endswith(".zip") and Path(crate["artifacts"][0]["path"]).exists()
     _, page = await call("report_page")
     html = Path(page["artifacts"][0]["path"]).read_text()
     assert "Reproduced: 1 of 1" in html and "paper-stated" in html  # the verdict and the tolerance source

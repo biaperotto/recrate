@@ -135,10 +135,14 @@ def verdict_sentence(ladders: dict[str, dict[str, dict[str, str]]]) -> str:
     if failed and not passed and not differs:
         m = failed[0]
         return f"Not reproduced: {m} did not run ({ladders[m]['runs']['reason']})."
-    if differs:
+    if differs and len(names) == 1:
         m = differs[0]
-        others = f" {len(passed)} of {len(names)} method(s) match." if len(names) > 1 else ""
-        return f"Partly reproduced: {m} has {ladders[m]['numbers']['reason']}{others}"
+        return f"Partly reproduced: {m} has {ladders[m]['numbers']['reason']}"
+    if differs:
+        counts = "; ".join(f"{m} {ladders[m]['numbers']['reason'].split(' ')[0]}" for m in differs[:4])
+        more = f" and {len(differs) - 4} more" if len(differs) > 4 else ""
+        return (f"Partly reproduced: {len(passed)} of {len(names)} methods match in full. Values within tolerance: "
+                f"{counts}{more}.")
     return f"Not checked yet: {len(passed)} of {len(names)} method(s) reproduced so far."
 
 

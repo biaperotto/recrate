@@ -117,6 +117,9 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "run_followup_check", "description": "Run one follow-up check by id. It is its own recorded run, "
                                                   "linked to the reproduction; the original result is never replaced.",
      "input_schema": _schema({"method": {"type": "string"}, "check": {"type": "string"}}, ["method", "check"])},
+    {"name": "export_crate", "description": "Export this research object's RO-Crate as a zip the user can download, "
+                                            "with a record of how it was obtained.",
+     "input_schema": _schema({})},
     {"name": "report_page", "description": "Write one HTML page for this research object (verdict, every compared "
                                            "value, figures, follow-ups, every run) that opens anywhere.",
      "input_schema": _schema({})},
@@ -359,6 +362,13 @@ class ChatTools:
         return ToolResult(json.dumps({"headline": h, "same_numbers": out.comparison.count if out.comparison else None,
                                       "run": out.run_dir.name}),
                           [{"type": "note", "text": h}, *self._run_attachments(out.run_dir)])
+
+    def t_export_crate(self) -> ToolResult:
+        from .export import export_crate
+
+        path = export_crate(self.agent.path)
+        return ToolResult(json.dumps({"crate": str(path)}),
+                          [{"type": "crate", "zip": str(path), "record": "The research object's RO-Crate."}])
 
     def t_report_page(self) -> ToolResult:
         from .report import build_report
@@ -812,6 +822,8 @@ class LocalChat:
             yield ("text", "Say **run check** and the check's id to run one.")
         elif cmd("plot", "figure", "chart"):
             yield from self._do("make_figure")
+        elif cmd("export ro-crate", "export the ro-crate", "paper's crate", "research object's crate", "ro-crate zip"):
+            yield from self._do("export_crate")
         elif cmd("report"):
             yield from self._do("report_page")
         elif cmd("compare", "as-is", "unchanged", "without adjust"):
