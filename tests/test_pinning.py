@@ -72,6 +72,26 @@ def test_pin_git_unknown_ref_raises_and_leaves_nothing_behind(tmp_path):
     assert not (tmp_path / "work").exists()
 
 
+def test_pin_git_bad_ref_into_an_existing_empty_dest_leaves_it_empty_and_retryable(tmp_path):
+    origin = _make_repo(tmp_path / "origin", {"a.txt": "a"})
+    dest = tmp_path / "work"
+    dest.mkdir()
+    with pytest.raises(RuntimeError, match="nope"):
+        pin_git(str(origin), dest, ref="nope")
+    assert dest.is_dir() and not any(dest.iterdir())
+    assert len(pin_git(str(origin), dest).version) == 40
+
+
+def test_pin_git_into_a_non_empty_dest_raises_and_keeps_its_contents(tmp_path):
+    origin = _make_repo(tmp_path / "origin", {"a.txt": "a"})
+    dest = tmp_path / "work"
+    dest.mkdir()
+    (dest / "mine.txt").write_text("keep")
+    with pytest.raises(RuntimeError, match="Could not clone"):
+        pin_git(str(origin), dest)
+    assert [p.name for p in dest.iterdir()] == ["mine.txt"] and (dest / "mine.txt").read_text() == "keep"
+
+
 def test_pin_git_failed_clone_raises_and_leaves_nothing_behind(tmp_path):
     with pytest.raises(RuntimeError, match="Could not clone"):
         pin_git(str(tmp_path / "not-a-repo"), tmp_path / "work")

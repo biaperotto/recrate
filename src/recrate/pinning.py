@@ -39,13 +39,16 @@ def pin_git(url: str, dest: Path, ref: str | None = None) -> PinnedSource:
     """Clone ``url`` into ``dest`` and pin it to the commit it is at: ``ref`` (branch, tag or commit) when
     given, else the remote's default branch. ``PinnedSource.version`` is always the resolved SHA.
 
-    Raises ``RuntimeError`` on any failure, and never leaves a ``dest`` it created behind. A ``dest`` that
-    already exists is not removed: git refuses a non-empty one, which surfaces as the same error.
+    Raises ``RuntimeError`` on any failure and leaves ``dest`` as it found it: a ``dest`` that did not exist
+    is removed again, and one that existed empty is emptied again (the directory itself stays), so a retry
+    on the same ``dest`` works. A non-empty ``dest`` is never touched: git refuses it, which surfaces as the
+    same error with its contents intact.
     """
     dest = Path(dest)
     if ref is not None and ref.startswith("-"):
         raise RuntimeError(f"Could not pin {url}: {ref!r} is not a valid git ref")
     created = not dest.exists()
+    was_empty = dest.is_dir() and not any(dest.iterdir())
     try:
         # --depth 1 cannot check out an arbitrary commit, so only take the shortcut when none is asked for.
         clone = ["git", "clone"] + (["--depth", "1"] if ref is None else []) + ["--", url, str(dest)]
@@ -57,6 +60,12 @@ def pin_git(url: str, dest: Path, ref: str | None = None) -> PinnedSource:
     except Exception:
         if created and dest.exists():
             shutil.rmtree(dest, ignore_errors=True)
+        elif was_empty and dest.is_dir():
+            for child in dest.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
         raise
     return PinnedSource(url=url, kind="git", version=version, path=dest)
 
