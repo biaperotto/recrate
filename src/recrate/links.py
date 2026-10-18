@@ -24,11 +24,11 @@ CODE_HOSTS = ("github.com", "gitlab.com", "codeberg.org", "bitbucket.org")
 STOP = {"the", "and", "lab", "group", "org", "code", "data", "team", "project", "main", "dev", "repo", "tools",
         "university", "institute", "center", "centre", "science", "research"}
 LANGUAGES = {".r": "R", ".rmd": "R Markdown", ".qmd": "Quarto", ".py": "Python", ".ipynb": "Jupyter notebook",
-             ".jl": "Julia", ".m": "MATLAB", ".sh": "Shell", ".do": "Stata", ".sas": "SAS", ".cpp": "C++", ".c": "C",
+             ".jl": "Julia", ".m": "MATLAB/Octave", ".sh": "Shell", ".do": "Stata", ".sas": "SAS", ".cpp": "C++", ".c": "C",
              ".java": "Java", ".nf": "Nextflow", ".smk": "Snakemake", ".cwl": "CWL", ".ga": "Galaxy", ".ijm": "ImageJ macro"}
 INTERPRETER = {"R": "Rscript", "R Markdown": "Rscript", "Quarto": "quarto", "Python": "python3",
-               "Jupyter notebook": "python3", "Julia": "julia", "MATLAB": "matlab", "Stata": "stata", "SAS": "sas",
-               "Nextflow": "nextflow", "Snakemake": "snakemake", "CWL": "cwltool"}
+               "Jupyter notebook": "python3", "Julia": "julia", "MATLAB/Octave": "octave-cli", "Stata": "stata", "SAS": "sas",
+               "Nextflow": "nextflow", "Snakemake": "snakemake", "CWL": "cwltool", "Octave": "octave-cli"}
 DEPENDENCY_FILES = ("requirements.txt", "environment.yml", "environment.yaml", "pyproject.toml", "setup.py",
                     "renv.lock", "DESCRIPTION", "install.R", "Project.toml", "Dockerfile", "Makefile", "Snakefile",
                     "nextflow.config", "Pipfile", "conda.yml")

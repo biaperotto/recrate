@@ -91,7 +91,7 @@ def execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: str
     if spec.workflow_path is None or not spec.workflow_path.exists():
         raise CrateError("The crate's workflow file is missing.")
     run = get_runner(runner, spec.workflow_language, spec.workflow_path)
-    if run.name == "script":
+    if run.name in {"script", "notebook"}:
         from .env import env_python
 
         run.python = env_python(spec.path.parent)  # the research object's own environment, when built

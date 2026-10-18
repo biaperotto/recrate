@@ -2,7 +2,8 @@
 
 * ImageJ Macro Language → Fiji (PyImageJ, headless). Without Fiji, the demo macro
   falls back to the Python reference implementation.
-* Python, R, shell → the paper's own script, run as a command (see runners/script.py).
+* Python, R, shell, Julia, Octave → the paper's own script, run as a command (see runners/script.py).
+* Quarto / R Markdown, Jupyter notebooks, Snakemake, Nextflow, CWL → their engines (see runners/engines.py).
 * Galaxy → the workflow's imaging tools, ported to Python (see galaxy.py).
 
 Any other language stops with a clear message rather than being run as something it isn't.
@@ -16,9 +17,10 @@ from pathlib import Path
 from .base import RunResult, Runner
 from .fiji import FijiRunner
 from .python_ref import SUPPORTED_WORKFLOWS, PythonReferenceRunner
+from .engines import ENGINES, engine_for
 from .script import ScriptRunner
 
-CHOICES = ["auto", "fiji", "reference", "script", "galaxy"]
+CHOICES = ["auto", "fiji", "reference", "script", "galaxy", *ENGINES]
 
 
 def _galaxy() -> Runner:
@@ -36,15 +38,20 @@ def get_runner(name: str = "auto", language: str | None = None, workflow: Path |
         return ScriptRunner()
     if name == "galaxy":
         return _galaxy()
+    if name in ENGINES:
+        return ENGINES[name]()
     if name != "auto":
         raise ValueError(f"Unknown runner {name!r}; use one of {', '.join(CHOICES)}.")
 
     lang = (language or "").lower()
     if "galaxy" in lang or (workflow is not None and Path(workflow).suffix == ".ga"):
         return _galaxy()
+    engine = engine_for(language, workflow)  # before scripts: "R Markdown" is not an R script
+    if engine:
+        return ENGINES[engine]()
     words = set(re.findall(r"[a-z]+", lang))
-    if words & {"python", "r", "rscript", "bash", "shell", "sh"} or \
-            (workflow is not None and Path(workflow).suffix.lower() in {".py", ".r", ".sh"}):
+    if words & {"python", "r", "rscript", "bash", "shell", "sh", "julia", "octave", "matlab"} or \
+            (workflow is not None and Path(workflow).suffix.lower() in {".py", ".r", ".sh", ".jl", ".m"}):
         return ScriptRunner()
     if "imagej" in lang or (workflow is not None and Path(workflow).suffix == ".ijm"):
         fiji = FijiRunner()
@@ -56,7 +63,8 @@ def get_runner(name: str = "auto", language: str | None = None, workflow: Path |
     if workflow is not None and Path(workflow).name in SUPPORTED_WORKFLOWS:
         return PythonReferenceRunner()
     raise RuntimeError(f"ReCRATE has no runner for {language or Path(str(workflow)).suffix or 'this workflow'} yet "
-                       "(supported: ImageJ macros, Python, R and shell scripts, Galaxy imaging workflows).")
+                       "(supported: Python, R, shell, Julia and Octave scripts; Quarto and R Markdown; Jupyter "
+                       "notebooks; Snakemake, Nextflow and CWL workflows; ImageJ macros; Galaxy imaging workflows).")
 
 
 def readiness(language: str | None, workflow: Path | None, python: Path | None = None) -> str | None:
@@ -84,6 +92,17 @@ def readiness(language: str | None, workflow: Path | None, python: Path | None =
             interpreter(Path(workflow), python)
         except RuntimeError as e:
             return str(e)
+    if runner.name in ENGINES:
+        if runner.name == "notebook":
+            runner.python = python
+        why = runner.readiness()
+        if why:
+            return why
+        if runner.name == "quarto" and re.search(r"```\{r[ ,}]", Path(workflow).read_text(errors="replace")):
+            import shutil
+
+            if not shutil.which("Rscript"):  # an R document also needs R
+                return "Needs R (Rscript), not installed here: install R (cran.r-project.org)."
     return None
 
 

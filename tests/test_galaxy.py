@@ -76,7 +76,7 @@ def test_runs_on_the_zenodo_images(tmp_path):
 
 def test_unknown_workflow_languages_are_refused():
     with pytest.raises(RuntimeError, match="no runner"):
-        get_runner("auto", "Common Workflow Language", Path("wf.cwl"))
+        get_runner("auto", "Fortran", Path("model.f90"))
 
 
 def test_reuse_at_half_resolution(tmp_path):

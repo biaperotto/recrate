@@ -30,6 +30,8 @@ LANGUAGES = {
     ".py": ("Python", "RECRATE_PYTHON", sys.executable, ["-c", "import platform;print(platform.python_version())"]),
     ".r": ("R", "RECRATE_RSCRIPT", "Rscript", ["--version"]),
     ".sh": ("Bash", "RECRATE_BASH", "bash", ["--version"]),
+    ".jl": ("Julia", "RECRATE_JULIA", "julia", ["--version"]),
+    ".m": ("Octave", "RECRATE_OCTAVE", "octave-cli", ["--version"]),
 }
 
 
@@ -38,7 +40,7 @@ def interpreter(workflow: Path, python: str | Path | None = None) -> tuple[str, 
     the research object's own environment (env.py), used for Python scripts when it was built."""
     suffix = Path(workflow).suffix.lower()
     if suffix not in LANGUAGES:
-        raise RuntimeError(f"No interpreter for {Path(workflow).name} (scripts: .py, .R, .sh).")
+        raise RuntimeError(f"No interpreter for {Path(workflow).name} (scripts: .py, .R, .sh, .jl, .m).")
     name, var, default, version = LANGUAGES[suffix]
     cmd = str(python) if python and suffix == ".py" else os.environ.get(var, default)
     if not (Path(cmd).exists() or shutil.which(cmd)):
