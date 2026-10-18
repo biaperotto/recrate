@@ -915,13 +915,73 @@ def figure_builder(agent: PaperAgent, run_dir: Path, data_dir: Path) -> None:
 
 
 # ---- Reproduce: does the research reproduce on its own data? ------------------------------------------
+def claims_view(agent: PaperAgent) -> bool:
+    """SPIKE (Milestone 5 shape): claims.json as the body of Reproduce.
+
+    Reads the file and nothing else — no numbers are computed here. Renders
+    one row per checkable claim: what the paper says, what the shared data
+    gives, and whether they agree.
+    """
+    import json
+    from urllib.parse import quote
+
+    path = agent.path / "claims.json"
+    if not path.exists():
+        return False
+    claims = json.loads(path.read_text(encoding="utf-8"))
+    if not claims:
+        return False
+    ok = sum(c["result"] == "Reproduced" for c in claims)
+    base = agent.manifest.get("landing_url") or ""
+    (st.success if ok == len(claims) else st.warning)(
+        f"**{ok} of {len(claims)} checkable claims reproduced from the shared data.**")
+
+    rows = []
+    for c in claims:
+        src = c.get("data_source") or {}
+        anchor = c.get("anchor") or ""
+        rows.append({
+            "Claim": c["claim"],
+            "Where in the paper": f"{base}#:~:text={quote(anchor[:120])}" if base and anchor else None,
+            "Paper says": c["paper_says"],
+            "Data gives": c.get("data_gives") or "",
+            "Result": c["result"],
+            "Data source": src.get("url"),
+        })
+    st.dataframe(
+        pd.DataFrame(rows), hide_index=True, width="stretch",
+        column_config={
+            "Where in the paper": st.column_config.LinkColumn("Where in the paper", display_text="open"),
+            "Data source": st.column_config.LinkColumn("Data source", display_text="pinned file"),
+        },
+        alt="Every checkable claim the paper makes, what the paper reports, what the shared "
+            "data gives, and whether the two agree")
+
+    with st.expander(f"How each number was computed ({len(claims)})", icon=":material/functions:"):
+        for c in claims:
+            comp, src = c.get("computation") or {}, c.get("data_source") or {}
+            st.markdown(
+                f"**{c['claim']}**  \n<span class='muted'>{src.get('file', '')} · sheet "
+                f"{src.get('sheet', '')} · columns {', '.join(comp.get('columns', []))} · "
+                f"{comp.get('aggregation', '')} · pinned at {src.get('version', '')}</span>",
+                unsafe_allow_html=True)
+    with st.expander("Where each anchor was found in the paper"):
+        st.caption("Lifted verbatim from the fetched paper text — this is what the link points at.")
+        for c in claims:
+            st.markdown(f"<div class='quote'>{html.escape(c.get('anchor') or '(none found)')}</div>",
+                        unsafe_allow_html=True)
+    return True
+
+
 def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> None:
+    has_claims = claims_view(agent)
     report = agent.path / "REPORT.md"
     if report.exists():  # written by the /recrate agent: what can be recreated, and what can't
         with st.expander("Report from the ReCRATE agent", expanded=not agent.methods, icon=":material/smart_toy:"):
             st.markdown(report.read_text(encoding="utf-8"))
     if not agent.methods:
-        empty_validate(agent)
+        if not has_claims:
+            empty_validate(agent)
     else:
         verdict_and_ladder(agent)
     for m in agent.methods:
