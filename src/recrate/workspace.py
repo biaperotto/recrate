@@ -146,6 +146,8 @@ def flag_images(rows: list[dict[str, str]], metric: str, reported: list[dict[str
                 tolerance: float = 0.1) -> dict[str, list[str]]:
     """Reasons to look twice at an image: far from the rest of this run (robust z > 3.5), or outside
     the range the paper reports (which may be real biology: check the overlay)."""
+    if not rows or "image" not in rows[0]:  # results per threshold, per group...: no image to flag
+        return {}
     vals = {r["image"]: float(r[metric]) for r in rows if r.get(metric) not in (None, "")}
     flags: dict[str, list[str]] = {k: [] for k in vals}
     if len(vals) >= 3:

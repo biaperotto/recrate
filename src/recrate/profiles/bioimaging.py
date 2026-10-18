@@ -247,6 +247,15 @@ class BioimagingProfile(DomainProfile):
                 report.items.append(CheckItem("Channels", exp_ch, ", ".join(map(str, chans)), FAIL,
                                               "Fewer channels than the method needs."))
 
+        # Ground truth, for methods that score themselves against it (e.g. average precision)
+        if str(expected.prop("ground truth") or "").lower() == "required":
+            have = sum(1 for f in files if ground_truth_count(data_path, f.stem) is not None)
+            report.items.append(CheckItem(
+                "Ground truth", "required", f"{have} of {len(files)} images", OK if have else FAIL,
+                "" if have else "This method measures accuracy against ground truth: put label images named like "
+                                "your images in ground-truth/ (or masks/) next to them, or use a method that only "
+                                "segments."))
+
         # Pixel size
         exp_px_prop = expected.properties.get("pixel size")
         observed_um = [to_um(m["pixel_size"], m["unit"]) for m in metas]

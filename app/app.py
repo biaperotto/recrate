@@ -83,9 +83,9 @@ TOOL_LABEL = {
     "about_paper": "Reading the research object", "search_paper": "Searching the paper",
     "list_tables": "Listing the paper's tables", "get_table": "Reading a table",
     "list_figures": "Listing the paper's figures", "show_figure": "Showing a figure",
-    "describe_method": "Reading the method", "list_my_files": "Looking at your data",
-    "check_my_data": "Checking your data", "reproduce": "Reproducing the published result",
-    "run_on_my_data": "Running on your data", "methods_text": "Writing the methods paragraph",
+    "describe_method": "Reading the method", "list_my_files": "Looking at the data",
+    "check_my_data": "Checking the new data", "reproduce": "Reproducing the published result",
+    "run_on_my_data": "Running on new data", "methods_text": "Writing the methods paragraph",
     "approve_run": "Recording your review", "create_output_crate": "Creating the output RO-Crate",
     "reproducibility_record": "Reading the record", "set_pixel_size": "Setting the pixel size",
     "compare_paper_parameters": "Running with the published values unchanged",
@@ -521,7 +521,7 @@ def render_attachment(a: dict, key: str) -> None:
         st.markdown(f"**Input check: {ICON[a['status']]} {a['status']}**")
         for r in a["rows"]:
             if r["status"] != "ok" or r["note"]:
-                st.caption(f"{ICON[r['status']]} {r['check']}: published {r['paper']} · yours {r['your data']}"
+                st.caption(f"{ICON[r['status']]} {r['check']}: published {r['paper']} · new data {r['your data']}"
                            + (f" · {r['note']}" if r["note"] else ""))
         for adj in a["adjustments"]:
             st.caption(f"↳ {adj['parameter']} {adj['old']} → {adj['new']}: {adj['reason']}")
@@ -643,7 +643,7 @@ def chat_card() -> None:
             render_message(msg, i)
         if has_agent:
             suggestions(PaperAgent.load(ss.agent_dir))
-    entry = st.chat_input("Ask about the research, or attach your data…" if has_agent else
+    entry = st.chat_input("Ask about the research, or attach new data…" if has_agent else
                           "Paste a DOI or link, or attach a paper or crate…", accept_file="multiple")
     st.markdown("<div class='muted' style='font-size:.72rem;margin-top:-.2rem'>Enter to send · Shift+Enter for a new "
                 "line</div>", unsafe_allow_html=True)
@@ -827,7 +827,7 @@ def environment_table(agent: PaperAgent) -> None:
 # ---- results, review and figures (shared by Reproduce and Reuse) ----------------------------
 def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None:
     if run_dir is None:
-        st.caption("No runs yet: reproduce a method or run it on your data.")
+        st.caption("No runs yet: reproduce a method or run it on new data.")
         return
     s = summarise_run(run_dir)
     spec = agent.spec(s["method"])
@@ -848,7 +848,7 @@ def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None
             reported = reported if keyed else None
         used = {p["name"]: p["value"] for p in run_story(run_dir)["parameters"]}
         changed = [f"{k} {v}" for k, v in used.items() if k in spec.default_params() and str(spec.default_params()[k]) != v]
-        lab1 = "Your run" + (f" ({', '.join(changed)})" if changed else "")
+        lab1 = "This run" + (f" ({', '.join(changed)})" if changed else "")
         lab2 = "Published values unchanged (" + ", ".join(f"{k} {v}" for k, v in spec.default_params().items()
                                                          if str(v) != used.get(k)) + ")"
         other, ref_rows = (w["rows"] if w else None), reported
@@ -861,7 +861,7 @@ def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None
     metric = st.segmented_control("Measure", metrics, default=metrics[0], key=f"metric-{s['run']}",
                                   label_visibility="collapsed") or metrics[0]
     if s["mode"] != "reproduce" and not other and rows and f"{metric}_true" in rows[0]:  # ground truth in your data
-        other, lab2 = [{**r, metric: r[f"{metric}_true"]} for r in rows], "Ground truth (in your data)"
+        other, lab2 = [{**r, metric: r[f"{metric}_true"]} for r in rows], "Ground truth (in the new data)"
     has = lambda r: r.get(metric) not in (None, "")  # noqa: E731
     if other and not any(has(r) for r in other):  # e.g. the paper publishes the count, not the mean area
         other = None
@@ -869,7 +869,7 @@ def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None
         ref_rows = None
     mean = lambda rr: sum(float(r[metric]) for r in rr if has(r)) / max(1, sum(1 for r in rr if has(r)))  # noqa: E731
     c = st.columns(3)
-    c[0].metric("This run" if s["mode"] == "reproduce" else "Your run", f"{mean(rows):.4g}", border=True, help=lab1)
+    c[0].metric("This run", f"{mean(rows):.4g}", border=True, help=lab1)
     if s["mode"] == "reproduce" and other:
         c[1].metric("Published", f"{mean(other):.4g}", border=True)
     elif other:
@@ -921,7 +921,7 @@ def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None
         st.toast("Added to the export bundle.")
     ovs = sorted((run_dir / "outputs" / "overlays").glob("*.png"))
     if ovs:  # what the method found, on each image: the first thing to look at
-        st.markdown("**Segmentation on " + ("your images" if s["mode"] != "reproduce" else "the published images") + "**")
+        st.markdown("**Segmentation on " + ("the new images" if s["mode"] != "reproduce" else "the published images") + "**")
         by = {Path(r.get("image", "")).stem: r for r in rows}
         for i in range(0, min(len(ovs), 6), 3):
             for col, ov in zip(st.columns(3), ovs[i:i + 3]):
@@ -938,7 +938,7 @@ def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None
                    if f.suffix.lower() in IMAGE_EXT and f.stem != "published_vs_reproduced") \
         if (run_dir / "outputs" / "figures").is_dir() else []
     if drawn:
-        where = "your data" if s["mode"] != "reproduce" else "the published data"
+        where = "the new data" if s["mode"] != "reproduce" else "the published data"
         st.markdown(f"**Figures drawn from {where}**")
         for f in drawn:
             label = figure_label(f.name)
@@ -974,7 +974,7 @@ def side_by_side(paper: list[Path], yours: list[Path], rows: list[dict], run: st
     name = lambda o: o.name.removesuffix("_overlay.png")  # noqa: E731
     c1, c2 = st.columns(2)
     a = c1.selectbox("The paper's data", paper, format_func=name, key=f"sbs-p-{run}")
-    b = c2.selectbox("Your data", yours, format_func=name, key=f"sbs-y-{run}")
+    b = c2.selectbox("New data", yours, format_func=name, key=f"sbs-y-{run}")
     c1.image(str(a), width="stretch")
     c2.image(str(b), width="stretch")
     row = next((r for r in rows if Path(r.get("image") or "").stem == name(b)), None)
@@ -1430,7 +1430,7 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
     if unproven:
         st.warning(f"**{', '.join(unproven)}** did not reproduce the paper's results (see **Reproduce**). You can "
                    "still reuse it, but use its results with care.")
-    st.markdown("<div class='eyebrow'>1 · Your data</div>", unsafe_allow_html=True)
+    st.markdown("<div class='eyebrow'>1 · New data: yours, or any data that isn't the paper's</div>", unsafe_allow_html=True)
     with st.container(border=True):
         suggested = EXAMPLES.get(ss.get("ro", {}).get("example", ""), {}).get("reuse_links")
         mode = st.segmented_control("Data", ["Upload files", "A folder on this computer", "From a link"], key="data_mode",
@@ -1463,7 +1463,7 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
                 tools.data_dir = Path(folder).expanduser()
                 st.rerun()
         else:
-            up = st.file_uploader("Your data files", accept_multiple_files=True, label_visibility="collapsed")
+            up = st.file_uploader("Data files", accept_multiple_files=True, label_visibility="collapsed")
             if up:
                 d = ss.uploads / "data"
                 d.mkdir(parents=True, exist_ok=True)
@@ -1488,13 +1488,13 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
                if files or not agent.spec(m.id).needs_data else None)
         adj = {a["parameter"]: a for a in (fit["adjustments"] if fit else [])}
         with st.container(border=True):
-            verdict = "<span class='muted'>add your data to check</span>" if not fit else ICON[fit["status"]] + " " + {
+            verdict = "<span class='muted'>add data to check</span>" if not fit else ICON[fit["status"]] + " " + {
                 "ok": "fits as is", "warn": f"fits with {len(adj)} adjustment(s)" if adj else "fits, with warnings",
                 "fail": "doesn't fit yet"}[fit["status"]]
             st.markdown(f"**{m.name}** &nbsp; {verdict}", unsafe_allow_html=True)
             if fit:
                 st.dataframe(pd.DataFrame([{"Property": x["check"], "Paper's data": str(x["paper"]),
-                                            "Your data": str(x["your data"]),
+                                            "New data": str(x["your data"]),
                                             "Check": f"{ICON[x['status']]} {x['status']}", "Note": x["note"]}
                                            for x in fit["rows"]]), hide_index=True, width="stretch")
                 for row in fit["rows"]:
@@ -1548,12 +1548,12 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
             if missing:
                 st.warning(f"Give a reason for: {', '.join(missing)}.")
             run = latest(runs, m.name, "reuse")
-            if run and st.toggle("Show the latest run on your data", key=f"showrun-{m.id}",
+            if run and st.toggle("Show the latest run on new data", key=f"showrun-{m.id}",
                                  value=ss.get("run_name") == run.name):
                 results_tab(agent, run, data_dir)
     if missing_px:
         with st.form("pixel-size"):
-            st.markdown("**Your images have no pixel size.** Enter it from the acquisition metadata; it is written "
+            st.markdown("**These images have no pixel size.** Enter it from the acquisition metadata; it is written "
                         "into working copies and recorded as provided by you.")
             c1, c2 = st.columns([2, 1])
             px = c1.number_input("Pixel size", min_value=0.0, value=0.0, step=0.01, format="%.4f")
@@ -1609,11 +1609,11 @@ def reuse_actions(agent: PaperAgent, data_dir: Path, files: list[Path]) -> None:
     overrides = ss.get(f"ov-{m.id}", {})
     missing = [k for k, (_, why) in overrides.items() if not str(why).strip()]
     can = bool(fit and fit["can_run"]) and not missing
-    why_not = None if can else ("Add your data first" if not fit else
-                                "Give a reason for your own values" if missing else "Your data doesn't fit yet")
+    why_not = None if can else ("Add the data first" if not fit else
+                                "Give a reason for your own values" if missing else "The data doesn't fit yet")
     if len(names) == 1:
         c1.markdown(f"**{name}**")
-    if c2.button(f"Run on my data", type="primary", width="stretch", disabled=not can, icon=":material/play_arrow:",
+    if c2.button("Run on new data", type="primary", width="stretch", disabled=not can, icon=":material/play_arrow:",
                  help=why_not):
         spec = agent.spec(m.id)
         adj = fit["adjustments"] if fit else []
@@ -1625,7 +1625,7 @@ def reuse_actions(agent: PaperAgent, data_dir: Path, files: list[Path]) -> None:
         if adj or overrides:
             tools.whatifs[out.run_dir.name] = run_with_progress(
                 "Running with the published values", lambda: whatif(spec, data_dir, spec.default_params(), runner=runner))
-        note_for_chat(f"Ran **{m.name}** on your data ({', '.join(f'{k} = {v}' for k, v in out.params.items())}).")
+        note_for_chat(f"Ran **{m.name}** on new data ({', '.join(f'{k} = {v}' for k, v in out.params.items())}).")
         st.rerun()
     if why_not:
         st.caption(why_not)
@@ -1830,7 +1830,7 @@ def run_sentence(r: dict) -> str:
     """One run, in the words a researcher would use."""
     what = {"reproduce": f"Reproduced **{r['method']}** on the published data",
             "follow-up": f"Checked a possible cause of a difference in **{r['method']}**",
-            "reuse": f"Ran **{r['method']}** on your data"}.get(r["mode"], f"Ran **{r['method']}**")
+            "reuse": f"Ran **{r['method']}** on new data"}.get(r["mode"], f"Ran **{r['method']}**")
     result = (f"{r['images']} file(s)" if r.get("images") else "") if r["mode"] == "reuse" else \
         (r.get("purpose") or "") + " " + (r["verdict"] or "")
     return what + (f": {short(result.strip(), 140)}" if result and result.strip() else "")
@@ -1840,7 +1840,7 @@ def record_section(agent: PaperAgent, runs: list[dict]) -> Path | None:
     """The record, minimal: what was run, when, by whom, with what result. For the selected run, what you changed and
     a methods paragraph for your paper; below, its record to download. The RO-Crate details stay inside that file."""
     if not runs:
-        st.info("Nothing recorded yet. Every time you reproduce the research or run a method on your data, it is "
+        st.info("Nothing recorded yet. Every time you reproduce the research or run a method on new data, it is "
                 "recorded here, so you can show exactly what you did.")
         return None
     st.caption("Every run is recorded: what ran, on which data, with which settings, and by whom.")
@@ -1952,7 +1952,7 @@ def start(agent_none: bool = True) -> None:
 
 # ---- the start page ------------------------------------------------------------------------------------
 GET = [("Reproduce", "Each method run on the research's own data, compared with the published result.", "replay"),
-       ("Reuse", "Your data checked against what each method expects; parameters adjusted and recorded.", "tune"),
+       ("Reuse", "New data checked against what each method expects; parameters adjusted and recorded.", "tune"),
        ("Record", "Every run as a Workflow Run RO-Crate, with an export for your paper.", "inventory_2")]
 
 
@@ -1970,7 +1970,7 @@ def landing() -> None:
         st.image(str(IMG / "logo.svg"), width=340)
         st.markdown("<h1 class='hero'>A paper as an agent you can trust</h1>"
                     "<p class='lede'>Give ReCRATE a paper or its RO-Crate. It checks the paper's results before you rely "
-                    "on them, checks your data before you reuse the method, and records every run.</p>",
+                    "on them, checks new data before you reuse the method, and records every run.</p>",
                     unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1])
         c1.button("Start", type="primary", width="stretch", icon=":material/arrow_forward:", key="go",

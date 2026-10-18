@@ -131,7 +131,7 @@
       },
       "additionalType": "File",
       "encodingFormat": "image/tiff",
-      "description": "images/ (fluorescence, one nucleus channel) and masks/ (ground-truth labels, the same names)",
+      "description": "Fluorescence images (one nucleus channel), in the folder or in images/, and their ground-truth labels with the same names in ground-truth/ or masks/",
       "additionalProperty": [
         {
           "@id": "#stardist-ap-in-data-dimensions"
@@ -141,6 +141,9 @@
         },
         {
           "@id": "#stardist-ap-in-data-intensity"
+        },
+        {
+          "@id": "#stardist-ap-in-data-ground-truth"
         }
       ]
     },
@@ -994,6 +997,13 @@
       "@type": "CreativeWork",
       "name": "",
       "description": "The licence the description gives for this research."
+    },
+    {
+      "@id": "#stardist-ap-in-data-ground-truth",
+      "@type": "PropertyValue",
+      "name": "ground truth",
+      "value": "required",
+      "description": "The method scores its segmentation against ground-truth labels named like the images"
     }
   ]
 }

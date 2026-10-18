@@ -39,7 +39,7 @@ def main() -> None:
     (out / "masks").mkdir(parents=True, exist_ok=True)
     model = StarDist2D.from_pretrained(a.model)
     truth, pred = [], []
-    for f in images_in(d / "images"):
+    for f in images_in(d):  # the folder itself, or its images/
         gt = ground_truth(d, f.stem)
         if gt is None:
             continue  # no ground truth for this image: nothing to score
@@ -49,7 +49,8 @@ def main() -> None:
         pred.append(labels)
         truth.append(gt)
     if not truth:
-        raise SystemExit("No image in input_dir/images has ground truth in input_dir/masks (same name).")
+        raise SystemExit("No image has ground truth: put label images named like the images in ground-truth/ "
+                         "(or masks/) next to them.")
     stats = matching_dataset(truth, pred, thresh=TAUS, show_progress=False)
     with (out / "results.csv").open("w", newline="") as fh:
         w = csv.writer(fh)

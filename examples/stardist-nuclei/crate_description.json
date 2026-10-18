@@ -37,7 +37,7 @@
           "name": "input_dir",
           "type": "File",
           "format": "image/tiff",
-          "description": "images/ (fluorescence, one nucleus channel) and masks/ (ground-truth labels, the same names)",
+          "description": "Fluorescence images (one nucleus channel), in the folder or in images/, and their ground-truth labels with the same names in ground-truth/ or masks/",
           "properties": {
             "dimensions": {
               "value": "2D"
@@ -47,6 +47,9 @@
             },
             "intensity": {
               "value": "normalised per image (percentiles 1 to 99.8)"
+            },
+            "ground truth": {
+              "value": "required"
             }
           }
         },

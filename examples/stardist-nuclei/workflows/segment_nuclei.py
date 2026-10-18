@@ -39,7 +39,8 @@ def ground_truth(d: Path, stem: str) -> np.ndarray | None:
     (BBBC039: values 1 to 3 in the red channel). Either way, each nucleus is one connected region of one value."""
     from skimage.measure import label
 
-    for p in (d / "masks" / f"{stem}{s}" for s in (".tif", ".tiff", ".png")):
+    for p in (d / sub / f"{stem}{s}" for sub in ("masks", "ground-truth", "ground_truth", "labels")
+              for s in (".tif", ".tiff", ".png")):
         if p.exists():
             m = read(p)
             if m.ndim == 3:

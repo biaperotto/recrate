@@ -95,10 +95,18 @@ This follows the [FAIR principles for research software (FAIR4RS)](https://doi.o
 
 ## Quick start
 
+Needs Python 3.10 or later.
+
 ```bash
-git clone <this repo> recrate && cd recrate
+git clone https://github.com/biaperotto/recrate.git && cd recrate
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[app,mcp]"
+streamlit run app/app.py          # the app: press Start, or Try an example
+```
+
+Or from the command line:
+
+```bash
 recrate agentify --crate examples/workflowhub-nuclei-segmentation/crate --out agents/nuclei
 ```
 
