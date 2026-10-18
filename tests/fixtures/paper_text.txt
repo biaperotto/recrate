@@ -1,0 +1,17 @@
+Abstract
+
+We counted nuclei in fluorescence images of cultured cells before and after treatment with a test compound.
+
+Results
+
+Image set and segmentation
+
+In total 68 images were analysed, of which 12 were excluded for being out of focus. Across the remaining images the pipeline detected a median of 214 nuclei per image.
+
+Effect of treatment
+
+The fraction of cells in the dividing state was 21% (8%, 48%) in treated wells, compared with 9% (3%, 24%) in control wells. The mean nuclear area was 153.4 square micrometres in the control group.
+
+Methods
+
+Images were acquired at 0.65 micrometres per pixel.

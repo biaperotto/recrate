@@ -1,0 +1,29 @@
+{
+  "claims": [
+    {
+      "claim": "The analysis covered 68 images in total.",
+      "section": "Results: Image set and segmentation",
+      "anchor": "In total 68 images were analysed",
+      "paper_says": "68"
+    },
+    {
+      "claim": "A typical image contained about 214 detected nuclei.",
+      "section": "Results: Image set and segmentation",
+      "anchor": "a median of 214 nuclei per image",
+      "paper_says": "214",
+      "kind": "number"
+    },
+    {
+      "claim": "About a fifth of treated cells were dividing, with a wide interval.",
+      "section": "Results: Effect of treatment",
+      "anchor": "was 21% (8%, 48%) in treated wells",
+      "paper_says": "21% (8%, 48%)"
+    },
+    {
+      "claim": "Control nuclei averaged roughly 153 square micrometres.",
+      "section": "Results: Effect of treatment",
+      "anchor": "mean nuclear area was 153.4 square micrometres",
+      "paper_says": "153.4"
+    }
+  ]
+}
