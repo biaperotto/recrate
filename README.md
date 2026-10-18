@@ -49,18 +49,16 @@ An agent is only as trustworthy as the rules its tools follow. ReCRATE enforces 
 
 ReCRATE takes the Paper2Agent idea and builds it on FAIR4RS and RO-Crate. It is its own implementation (it does not use Paper2Agent's code), but it covers what Paper2Agent does: the same way of building agents (a coordinator with specialist subagents, each tool tested before delivery) and the same interface (MCP tools that return a message and file paths). On top of that, it changes what a tool is built from and what it guarantees.
 
-🟥 a gap in Paper2Agent · 🟩 how ReCRATE fills it
-
 | | Paper2Agent | ReCRATE |
 | --- | --- | --- |
-| Description of the research | 🟥 Inferred from the code | 🟩 An RO-Crate: found for the paper, supplied, or recreated as of publication, and validated |
+| Description of the research | Inferred from the code | An RO-Crate: found for the paper, supplied, or recreated as of publication, and validated |
 | Starts from | A paper and its code repository | The same, or an RO-Crate |
 | The paper's own environment | Built per paper | Built per paper with `uv` (`recrate env`), and every run records each installed package |
 | Tools come from | The code's tutorials | The paper's reported methods **and** the code's tutorials and examples |
 | A tool is | A typed function, which may take data or just values | The same: typed parameters with their units and the paper's sentence; data optional |
-| Tested against | 🟥 The tutorials' outputs, not the paper's results | 🟩 The paper's **published results**, with sourced tolerances and an independent verifier |
-| Your data | 🟥 Left to the model | 🟩 Checked against the method's declared inputs; parameters rescaled only by declared rules |
-| Provenance | 🟥 Not recorded | 🟩 A Workflow Run RO-Crate per run, linked to the paper |
+| Tested against | The tutorials' outputs, not the paper's results | The paper's **published results**, with sourced tolerances and an independent verifier |
+| Your data | Left to the model | Checked against the method's declared inputs; parameters rescaled only by declared rules |
+| Provenance | Not recorded | A Workflow Run RO-Crate per run, linked to the paper |
 | Where you use it | Claude Code | Claude Desktop, Claude Code or any MCP client (`recrate install-mcp`), and the app's chat |
 | How it is built | A pipeline run in Claude Code | The same pipeline (`/recrate`), from Claude Code, `recrate build`, or one button in the app |
 
