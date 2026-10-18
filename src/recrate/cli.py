@@ -20,6 +20,7 @@ Use it:
     recrate record  agents/my_paper
     recrate export  agents/my_paper dist/   # package crate/ as a WorkflowHub .crate.zip
     recrate report  agents/my_paper                      # one HTML page a reviewer can open
+    recrate claims  agents/my_paper [--no-search]        # the paper's checkable claims -> claims.json
 
 TARGET can be a paper agent folder or a bare crate folder.
 """
@@ -343,6 +344,23 @@ def cmd_check_description(a) -> int:
     return 0 if rep.ok else 1
 
 
+def cmd_claims(a) -> int:
+    import os
+
+    from .claim_run import run_claims
+
+    online = not a.no_search and not os.environ.get("RECRATE_OFFLINE")
+    try:
+        claims = run_claims(Path(a.agent), online=online)
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    for c in claims:
+        print(f"  {c.id}  {c.result:<13}  {c.paper_says}  {c.claim}" + (f"  ({c.why_not})" if c.why_not else ""))
+    print(f"Wrote {len(claims)} claim(s) to {Path(a.agent) / 'claims.json'}")
+    return 0
+
+
 def cmd_install_skill(a) -> int:
     """Install the /recrate Claude Code skill: for this project (.claude/skills) or for you (~/.claude/skills)."""
     import shutil
@@ -451,6 +469,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-search", action="store_true", help="Don't look for a published RO-Crate; recreate one")
     s.add_argument("--out", required=True, help="Paper agent folder to create")
     s.set_defaults(func=cmd_agentify)
+
+    s = sub.add_parser("claims", help="List a paper agent's checkable claims, gated, into claims.json")
+    s.add_argument("agent", help="The agent folder (with paper/paper.md)")
+    s.add_argument("--no-search", action="store_true", help="Don't fetch and pin the paper's data")
+    s.set_defaults(func=cmd_claims)
 
     s = sub.add_parser("validate", help="Re-run each method on the paper's data and compare with its results")
     s.add_argument("agent")
