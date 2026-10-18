@@ -12,6 +12,7 @@ verdict that did not come through ``gate``.
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -19,13 +20,17 @@ from typing import Callable
 from .claim_extract import extract_claims
 from .claim_gate import gate
 from .claims import Claim, save_claims
-from .pinning import data_links, file_record, pin_git
+from .pinning import PinnedSource, data_links, file_record, pin_git
 
 SECTION = "data availability section"
-WHOLE_PAPER = "whole paper (no data availability section found)"
+WHOLE_PAPER = "whole paper (no usable data availability section)"
 
 _AVAILABILITY = re.compile(r"(data|code|materials?)\b.*\bavailab|availab\w*\s+of\s+(data|code|materials?)", re.I)
 _MARKDOWN_HEADING = re.compile(r"\s*#{1,6}\s")
+_PLAIN_HEADING = re.compile(
+    r"(?:\d+\.?\s*)?(?:abstract|introduction|background|methods?|materials and methods|results(?: and discussion)?|"
+    r"discussion|conclusions?|acknowledge?ments?|funding|references|bibliography|supplementary (?:material|information)|"
+    r"author contributions?|competing interests?|conflicts? of interest|ethics(?: statement)?)\s*:?", re.I)
 
 
 def _is_availability_heading(line: str) -> bool:
@@ -33,24 +38,39 @@ def _is_availability_heading(line: str) -> bool:
     return 0 < len(text) <= 80 and not text.endswith(".") and bool(_AVAILABILITY.search(text))
 
 
-def _ends_section(lines: list[str], i: int) -> bool:
-    """Whether ``lines[i]`` starts the next section: a markdown heading, or (for plain text from a PDF) a
-    short unpunctuated line standing alone between blank lines."""
-    line = lines[i].strip()
-    if _MARKDOWN_HEADING.match(lines[i]):
-        return True
-    alone = (i == 0 or not lines[i - 1].strip()) and (i + 1 >= len(lines) or not lines[i + 1].strip())
-    return bool(line) and alone and len(line) <= 60 and not line.endswith((".", ",", ";", ":"))
+def _ends_section(line: str) -> bool:
+    """Whether ``line`` starts the next section: a markdown heading, or (plain text from a PDF) a line that is
+    just a well-known section name. Only known names: a looser rule cuts a section short at a short line of
+    its own prose and loses the link after it."""
+    return bool(_MARKDOWN_HEADING.match(line) or _PLAIN_HEADING.fullmatch(line.strip()))
 
 
-def data_section(paper_text: str) -> str | None:
-    """The text of the paper's data-availability section (heading to the next heading), or None."""
+def data_sections(paper_text: str) -> list[str]:
+    """The text of every availability section (heading to the next heading), those naming data first.
+
+    Papers often have separate "Data availability" and "Code availability" sections; the data one is
+    listed first so its links are tried first.
+    """
     lines = paper_text.splitlines()
+    found: list[tuple[bool, str]] = []
     for i, line in enumerate(lines):
         if _is_availability_heading(line):
-            end = next((j for j in range(i + 1, len(lines)) if _ends_section(lines, j)), len(lines))
-            return "\n".join(lines[i + 1:end])
-    return None
+            end = next((j for j in range(i + 1, len(lines)) if _ends_section(lines[j])), len(lines))
+            found.append(("data" not in line.lower(), "\n".join(lines[i + 1:end])))
+    return [text for _, text in sorted(found, key=lambda f: f[0])]  # stable: data sections first
+
+
+def _existing_checkout(url: str, dest: Path) -> PinnedSource | None:
+    """``dest`` as a pin when it already is a git checkout of ``url`` (a re-run), else None."""
+    if not (dest / ".git").exists():
+        return None
+    def git(*args: str) -> str | None:
+        proc = subprocess.run(["git", "-C", str(dest), *args], capture_output=True, text=True)
+        return proc.stdout.strip() if proc.returncode == 0 else None
+    remote, sha = git("remote", "get-url", "origin"), git("rev-parse", "HEAD")
+    if remote is None or sha is None or remote.rstrip("/").removesuffix(".git") != url.rstrip("/").removesuffix(".git"):
+        return None
+    return PinnedSource(url=url, kind="git", version=sha, path=dest)
 
 
 def _pin(links: list[str], data_dir: Path) -> tuple[dict | None, str]:
@@ -62,7 +82,7 @@ def _pin(links: list[str], data_dir: Path) -> tuple[dict | None, str]:
             continue
         dest = data_dir / url.rstrip("/").rsplit("/", 1)[-1]
         try:
-            pinned = pin_git(url, dest)
+            pinned = _existing_checkout(url, dest) or pin_git(url, dest)
         except (RuntimeError, OSError) as e:
             failures.append(str(e))
             continue
@@ -84,19 +104,22 @@ def run_claims(agent_dir: Path, *, respond: Callable[[str], str] | None = None,
 
     claims = extract_claims(paper_text, respond=respond)
 
-    section = data_section(paper_text)
-    found_in, where = (SECTION, section) if section is not None else (WHOLE_PAPER, paper_text)
-    note = "" if section is not None else " (no data availability section; whole paper searched)"
-    links = data_links(where)
+    sections = data_sections(paper_text)
+    links = data_links("\n\n".join(sections))
+    found_in, note = SECTION, ""
+    if not links:  # a section that names no link is no proof the data is not shared: look everywhere, and say so
+        links = data_links(paper_text)
+        found_in = WHOLE_PAPER
+        note = (" (no link in the data availability section; whole paper searched)" if sections
+                else " (no data availability section; whole paper searched)")
 
     source, reason = None, ""
     if not links:
         reason = "data not shared" + note
     elif not online:
-        reason = f"data was not fetched because the run was offline: {links[0]}{note}"
+        reason = f"data was not fetched (offline or --no-search): {links[0]}{note}"
     else:
-        data_dir = agent_dir / "data"
-        source, failure = _pin(links, data_dir)
+        source, failure = _pin(links, agent_dir / "data")
         if source is None:
             reason = f"data could not be pinned: {failure}{note}"
         else:

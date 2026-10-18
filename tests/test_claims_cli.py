@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -71,7 +72,7 @@ def test_no_data_statement_still_writes_every_row(tmp_path, agent):   # Review F
     claims = run_claims(agent.path, respond=_replay_no_data, online=False)
     assert claims and all(c.result == "Not checkable" for c in claims)
     assert all(c.why_not for c in claims)
-    assert {c.why_not for c in claims} >= {"data not shared"}
+    assert any(c.why_not.startswith("data not shared") for c in claims)
 
 
 def test_cli_claims_command(tmp_path, agent, capsys, monkeypatch):
@@ -101,7 +102,7 @@ def test_offline_with_a_data_link_is_not_called_unshared(agent):
     reasons = {c.why_not for c in claims if c.paper_says != "99.9"}
     assert len(reasons) == 1
     (reason,) = reasons
-    assert "offline" in reason and "not shared" not in reason
+    assert "not fetched" in reason and "offline" in reason and "not shared" not in reason
     assert not (agent.path / "data").exists()
 
 
@@ -155,10 +156,73 @@ def test_cli_no_search_skips_pinning(agent, capsys, monkeypatch):
     monkeypatch.setattr(claim_run, "pin_git", _fake_pin(calls))
     assert main(["claims", str(agent.path), "--no-search"]) == 0
     assert calls == []
-    assert "offline" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "not fetched" in out and "not shared" not in out
 
 
 def test_cli_reports_a_missing_paper(tmp_path, capsys):
     (tmp_path / "a").mkdir()
     assert main(["claims", str(tmp_path / "a")]) == 2
     assert "paper.md" in capsys.readouterr().err
+
+
+_CODE_REPO = "https://github.com/someone/their-code"
+
+
+def test_a_plain_text_section_with_a_link_on_its_own_line_keeps_the_link(agent, monkeypatch):
+    base = (agent.path / "paper" / "paper.md").read_text(encoding="utf-8").split("## Data and code availability")[0]
+    plain = base.replace("## ", "").replace("# ", "")
+    _set_paper(agent, plain + f"\nData availability\n\nThe images are deposited at\n\n{_REPO}\n\nMethods\n\nText.\n")
+    calls: list[str] = []
+    monkeypatch.setattr(claim_run, "pin_git", _fake_pin(calls))
+    claims = run_claims(agent.path, respond=_replay, online=True)
+    assert calls == [_REPO]
+    good = [c for c in claims if c.result == "Not checked"]
+    assert good and all(c.data_source["found_in"] == "data availability section" for c in good)
+
+
+def test_a_section_without_a_link_falls_back_to_the_whole_paper(agent, monkeypatch):
+    base = (agent.path / "paper" / "paper.md").read_text(encoding="utf-8").split("## Data and code availability")[0]
+    _set_paper(agent, base + f"See {_REPO} for the images.\n\n## Data availability\n\nOn request.\n")
+    monkeypatch.setattr(claim_run, "pin_git", _fake_pin([]))
+    claims = run_claims(agent.path, respond=_replay, online=True)
+    good = [c for c in claims if c.result == "Not checked"]
+    assert good and all(c.data_source["found_in"].startswith("whole paper") for c in good)
+    # and with nothing anywhere it still says so, rather than inventing a link
+    _set_paper(agent, base + "## Data availability\n\nOn request.\n")
+    claims = run_claims(agent.path, respond=_replay, online=False)
+    assert all(c.why_not.startswith("data not shared") for c in claims if c.paper_says != "99.9")
+
+
+def test_separate_code_and_data_sections_pin_the_data_repository(agent, monkeypatch):
+    _set_paper(agent, _paper_with(agent, f"The scripts are at {_CODE_REPO}.").replace(
+        "## Data and code availability", "## Code availability") + f"\n## Data availability\n\nThe images: {_REPO}\n")
+    calls: list[str] = []
+    monkeypatch.setattr(claim_run, "pin_git", _fake_pin(calls))
+    run_claims(agent.path, respond=_replay, online=True)
+    assert calls == [_REPO]
+
+
+def test_rerun_reuses_the_pinned_checkout_and_gives_the_same_rows(agent, monkeypatch):
+    _set_paper(agent, _paper_with(agent, f"The data are at {_REPO}."))
+
+    def pin(url, dest, ref=None):
+        dest = Path(dest)
+        dest.mkdir(parents=True)
+        (dest / "table.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+        for cmd in (["init", "-q"], ["remote", "add", "origin", url], ["add", "."],
+                    ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]):
+            subprocess.run(["git", "-C", str(dest), *cmd], check=True, capture_output=True)
+        sha = subprocess.run(["git", "-C", str(dest), "rev-parse", "HEAD"], check=True, capture_output=True,
+                             text=True).stdout.strip()
+        return PinnedSource(url=url, kind="git", version=sha, path=dest)
+
+    monkeypatch.setattr(claim_run, "pin_git", pin)
+    first = run_claims(agent.path, respond=_replay, online=True)
+
+    def refuse(url, dest, ref=None):
+        raise RuntimeError("fatal: destination path already exists and is not an empty directory")
+    monkeypatch.setattr(claim_run, "pin_git", refuse)
+    second = run_claims(agent.path, respond=_replay, online=True)
+    assert [c.to_json() for c in second] == [c.to_json() for c in first]
+    assert any(c.result == "Not checked" and c.data_source["version"] for c in second)
