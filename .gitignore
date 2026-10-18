@@ -1,7 +1,6 @@
 __pycache__/
 *.egg-info/
 .pytest_cache/
-.recrate-cache/
 build/
 dist/
 .venv/
@@ -14,3 +13,8 @@ examples/demo/paper_agent/
 examples/workflowhub-nuclei-segmentation/paper_agent/
 .mcp.json
 examples/penguins-dimorphism/paper_agent/
+examples/workflowhub-nuclei-segmentation/my-data-half-resolution/
+*.bak-*
+examples/medrxiv-inferential-reproducibility/paper_agent/
+examples/stardist-nuclei/paper_agent/
+examples/stardist-nuclei/paper-download/

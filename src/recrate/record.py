@@ -44,6 +44,7 @@ def summarise_record(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "reproduced": sum(1 for r in reproduce if r["verdict"] == "reproduced"),
         "differed": sum(1 for r in reproduce if r["verdict"] == "differs"),
         "reused_on_new_data": len(reuse),
+        "follow_up_checks": sum(1 for r in runs if r["mode"] == "follow-up"),
         "people": sorted({r["by"] for r in runs if r["by"] and r["by"] != VALIDATION_AGENT}),
         "methods": sorted({r["method"] for r in runs if r.get("method")}),
         "validation_runs": sum(1 for r in runs if r["by"] == VALIDATION_AGENT),
@@ -54,7 +55,8 @@ def summarise_record(runs: list[dict[str, Any]]) -> dict[str, Any]:
 
 def headline(summary: dict[str, Any]) -> str:
     return (f"Reproduced {summary['reproduced']} time(s), differed {summary['differed']}, "
-            f"reused on new data {summary['reused_on_new_data']} time(s) "
+            f"reused on new data {summary['reused_on_new_data']} time(s), "
+            f"{summary.get('follow_up_checks', 0)} follow-up check(s), "
             f"by {len(summary['people'])} person(s).")
 
 

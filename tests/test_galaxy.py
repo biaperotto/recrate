@@ -61,7 +61,13 @@ def test_runs_on_the_zenodo_images(tmp_path):
     data = EXAMPLE / "research-data" / "B2"
     a = agentify(tmp_path / "agent", crate=CRATE)
     spec = a.spec()
-    assert check_inputs(spec, data).status == "ok"
+    unstated = check_inputs(spec, data)  # the crate states no pixel size, and filter_size is in pixels
+    pixel = next(i for i in unstated.items if i.name == "Pixel size")
+    assert unstated.status == "warn" and "filter_size" in pixel.note
+    assert next(i for i in unstated.items if i.name == "Bit depth / intensity").status == "ok"  # same as the paper's
+    assert check_inputs(spec, data, scale_ratio=1).status == "ok"
+    half = check_inputs(spec, data, scale_ratio=2)
+    assert [(a.parameter, a.new) for a in half.adjustments] == [("filter_size", 1.5)]
     out = run_on_data(spec, data, a.runs_dir, agent="test", overrides={"filter_size": (2.0, "sharper nuclei")})
     rows = (out.run_dir / "outputs" / "results.csv").read_text().splitlines()
     assert len(rows) == 1 + len(list(data.glob("*.tif"))) and all(int(r.split(",")[1]) > 100 for r in rows[1:])
@@ -70,4 +76,34 @@ def test_runs_on_the_zenodo_images(tmp_path):
 
 def test_unknown_workflow_languages_are_refused():
     with pytest.raises(RuntimeError, match="no runner"):
-        get_runner("auto", "Common Workflow Language", Path("wf.cwl"))
+        get_runner("auto", "Fortran", Path("model.f90"))
+
+
+def test_reuse_at_half_resolution(tmp_path):
+    """The README's reuse story: the research images at half resolution. The published filter size merges
+    neighbouring nuclei; rescaled for the stated pixel ratio, the counts match full resolution."""
+    half = EXAMPLE / "my-data-half-resolution"
+    if not half.exists():
+        pytest.skip("run examples/workflowhub-nuclei-segmentation/make_half_resolution.py")
+    a = agentify(tmp_path / "agent", crate=CRATE)
+
+    def counts(out):
+        return [int(r.split(",")[1]) for r in (out.run_dir / "outputs" / "results.csv").read_text().splitlines()[1:]]
+
+    unchanged = counts(run_on_data(a.spec(), half, a.runs_dir, agent="test"))
+    rescaled = run_on_data(a.spec(), half, a.runs_dir, agent="test", scale_ratio=2)
+    assert rescaled.params["filter_size"] == 1.5
+    assert unchanged == [385, 385, 281] and counts(rescaled) == [425, 414, 306]  # full resolution: 425, 413, 307
+
+
+def test_reuse_on_bbbc039_with_ground_truth(tmp_path):
+    """Another lab's images with ground truth: each run reports the true count next to its own. The published
+    workflow, unchanged, finds 472 of BBBC039's 627 nuclei (no step splits touching nuclei)."""
+    data = EXAMPLE / "reuse-bbbc039"
+    if not data.exists():
+        pytest.skip("BBBC039 sample not present")
+    a = agentify(tmp_path / "agent", crate=CRATE, validate="none")
+    out = run_on_data(a.spec(), data, a.runs_dir, agent="test")
+    rows = [r.split(",") for r in (out.run_dir / "outputs" / "results.csv").read_text().splitlines()]
+    assert rows[0] == ["image", "count", "mean_area_px", "count_true"]
+    assert sum(int(r[1]) for r in rows[1:]) == 472 and sum(int(r[3]) for r in rows[1:]) == 627

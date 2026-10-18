@@ -204,9 +204,45 @@ def detect_software(text: str) -> list[Software]:
 REQ_LINE = re.compile(r"^\s*([A-Za-z0-9_.\-]+)\s*(?:\[[^\]]*\])?\s*(==|>=|~=|=)?\s*([0-9][\w.\-]*)?")
 
 
-def detect_from_repo(code_dir: Path) -> list[Software]:
-    """Dependencies declared by the code: requirements*.txt, environment.yml, pyproject.toml."""
+R_BASE = {"base", "stats", "utils", "methods", "graphics", "grDevices", "datasets", "grid", "parallel", "splines",
+          "stats4", "tools", "tcltk", "compiler"}
+
+
+def detect_r_packages(code_dir: Path, limit: int = 60) -> list[Software]:
+    """R packages the code uses: renv.lock (pinned), DESCRIPTION, then library()/require()/pkg:: in R, R Markdown and
+    Quarto files, most used first. Versions are then resolved as of publication from CRAN."""
+    from collections import Counter
+
+    code_dir = Path(code_dir)
     out: list[Software] = []
+    lock = code_dir / "renv.lock"
+    if lock.exists():
+        import json as _json
+
+        for name, pkg in (_json.loads(lock.read_text(encoding="utf-8")).get("Packages") or {}).items():
+            out.append(Software(name, pkg.get("Version"), "pinned", "cran", name, evidence="renv.lock"))
+        return out
+    uses: Counter = Counter()
+    for f in code_dir.rglob("*"):
+        if f.suffix.lower() in {".r", ".rmd", ".qmd"} and ".git" not in f.parts:
+            text = f.read_text(encoding="utf-8", errors="replace")
+            found = set(re.findall(r"(?:library|require|requireNamespace)\(\s*['\"]?([A-Za-z][\w.]*)", text))
+            found |= set(re.findall(r"\b([A-Za-z][\w.]*)::", text))
+            uses.update(found - R_BASE)
+    desc = code_dir / "DESCRIPTION"
+    if desc.exists():
+        m = re.search(r"Imports:(.*?)(?:\n\S|$)", desc.read_text(encoding="utf-8", errors="replace"), re.S)
+        for name in re.findall(r"([A-Za-z][\w.]*)", m.group(1) if m else ""):
+            uses[name] += 100
+    for name, n in uses.most_common(limit):
+        out.append(Software(name, None, "unknown", "cran", name, evidence=f"used in {n} file(s) of the code"))
+    return out
+
+
+def detect_from_repo(code_dir: Path) -> list[Software]:
+    """Dependencies declared or used by the code: requirements*.txt, environment.yml, pyproject.toml, and R packages
+    (renv.lock, DESCRIPTION, library() calls)."""
+    out: list[Software] = detect_r_packages(code_dir)
     code_dir = Path(code_dir)
     files = sorted(code_dir.glob("requirements*.txt")) + sorted(code_dir.glob("environment*.y*ml"))
     for f in files:
@@ -265,6 +301,11 @@ def releases(registry: str, package: str, fetch_json: Callable[[str, str], dict]
                 d = datetime.fromisoformat(str(t).replace(" ", "T")).date()
                 seen[v] = min(d, seen.get(v, d))
         out = list(seen.items())
+    elif registry == "cran":  # every release of a CRAN package, with its date (crandb)
+        data = fetch_json(f"https://crandb.r-pkg.org/{package}/all", "application/json")
+        for v, t in (data.get("timeline") or {}).items():
+            if _is_release(v.replace("-", ".")):
+                out.append((v, datetime.fromisoformat(str(t).replace("Z", "+00:00")).date()))
     elif registry == "github":
         for page in (1, 2, 3):
             data = fetch_json(f"https://api.github.com/repos/{package}/releases?per_page=100&page={page}",
@@ -293,7 +334,8 @@ def version_as_of(registry: str, package: str, when: date, fetch_json) -> tuple[
 
 def registry_url(registry: str | None, package: str | None) -> str | None:
     return {"pypi": f"https://pypi.org/project/{package}/", "conda": f"https://anaconda.org/conda-forge/{package}",
-            "github": f"https://github.com/{package}/releases"}.get(registry or "") if package else None
+            "github": f"https://github.com/{package}/releases",
+            "cran": f"https://cran.r-project.org/package={package}"}.get(registry or "") if package else None
 
 
 def resolve(software: list[Software], when: date | None, fetch_json=None) -> list[Software]:

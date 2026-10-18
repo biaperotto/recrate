@@ -26,12 +26,27 @@ recrate agentify --paper examples/penguins-dimorphism/paper.pdf --crate examples
                  --out examples/penguins-dimorphism/paper_agent
 ```
 
-**Validation: differs, honestly.** The paper rounds to two decimals, so each value must be within ±0.006 of
-the published one. 9 of 12 values reproduce; three chinstrap values don't: culmen length −0.097 vs −0.11,
-flipper length −0.043 vs −0.05, body mass −0.117 vs −0.10. The data have the same number of sexed chinstrap
-penguins as the paper (68), so the difference is in how the paper computed those three values, which it
-doesn't say. This is what validation is for: it shows exactly where a published result can't be recovered
-from the published data.
+**Reproduction: partly, and why.** Table 2 prints two decimals, so each value is compared within ±0.006
+(source: `paper-rounding`; half a unit of the last decimal is 0.005, and the extra 0.001 is a margin that
+`check-description` reports as wider than rounding alone). 9 of 12 values match; three chinstrap values don't:
+culmen length −0.097 vs −0.11, flipper length −0.043 vs −0.05, body mass −0.117 vs −0.10.
+
+**Follow-up check: an exclusion the paper states in words.** The paper says "some pairs were excluded from
+statistical analyses because a final egg was never observed at the nest", and gives n = 54 chinstraps for the
+SDI. The published data records this as `Clutch Completion = No`, which the method as drafted keeps (68
+chinstraps). The crate declares the exclusion as a follow-up check (`recrate followup <agent> --run
+exclude-pairs-that-did-not-complete-their-clutch`). With it, 12 of 12 values match, and the chinstrap sample is
+27 males and 27 females: 54, as the paper states (Adélie 132 and gentoo 112, against 137 and 116 in the paper).
+The check is its own run crate, linked to the reproduction; the first result (9 of 12) stays on record. A
+second check, rounding the reproduced values as the paper prints them, gives 6 of 12, so rounding alone
+doesn't explain the paper's values.
+
+**The paper's figures.** `workflows/isotope_figures.py` (ours, CC0) redraws Figures 3, 4 and 5 from the same data as
+their captions describe them: mean δ13C and δ15N by sex and year, ± 1 SE. ReCRATE shows each next to the original, for
+a person to judge. Figure 3 shows the same pattern every year, and our ± 1 SE bars match the paper's wider bars; the
+paper's narrower inner bars are not explained by the captions. The sample sizes the captions print are compared
+exactly and don't come back (Adélie n = 127 / 128, chinstrap 53, gentoo 115; the data gives 139, 68 / 67 and 118 for
+every sexed bird, or 126, 54 / 53 and 111 with the clutch exclusion).
 
 **Reuse.** On the Adélie penguins grouped by island (`group_column = Island`, recorded with its reason),
 dimorphism is similar on all three colonies (body mass SDI −0.19 to −0.21).

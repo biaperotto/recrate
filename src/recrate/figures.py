@@ -180,3 +180,89 @@ def comparison_chart(images: list[str], adjusted: list[float], as_is: list[float
     fig.savefig(buf, format=fmt, dpi=dpi, facecolor="white", bbox_inches="tight")
     plt.close(fig)
     return buf.getvalue()
+
+
+def published_vs_reproduced(comparison, fmt: str = "png", dpi: int = 200) -> bytes:
+    """One row per compared value: the published value as a ring, the reproduced one as a dot. Values outside
+    tolerance sit on a shaded band and are labelled "outside" (never colour alone). One panel per measure, so
+    measures of different scales never share an axis. Plotted only from the comparison (the run's outputs)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    groups: dict[str, list] = {}
+    for m in comparison.measures:
+        col, _, item = m.measure.partition(" · ")
+        groups.setdefault(col, []).append((item or col, m))
+    rows = sum(len(v) for v in groups.values())
+    fig, axes = plt.subplots(len(groups), 1, figsize=(6.0, 0.9 + 0.32 * rows + 0.45 * len(groups)), squeeze=False,
+                             gridspec_kw={"height_ratios": [len(v) for v in groups.values()]})
+    for ax, (col, items) in zip(axes[:, 0], groups.items()):
+        y = np.arange(len(items))[::-1]
+        for yi, (label, m) in zip(y, items):
+            if not m.within:
+                ax.axhspan(yi - 0.45, yi + 0.45, color=BAND, zorder=0, linewidth=0)
+            lo, hi = sorted((m.reported, m.reproduced))
+            ax.plot([lo, hi], [yi, yi], color=GRID, linewidth=2, zorder=1)
+            ax.scatter([m.reported], [yi], s=70, facecolor="white", edgecolor=SERIES[0], linewidth=2, zorder=3,
+                       label="published" if yi == y[0] else None)
+            ax.scatter([m.reproduced], [yi], s=36, color=SERIES[1], edgecolor="white", linewidth=1.5, zorder=4,
+                       label="reproduced" if yi == y[0] else None)
+        ax.set_yticks(y, [f"{lbl}{'  (outside)' if not m.within else ''}" for lbl, m in items], fontsize=7)
+        for t, (_, m) in zip(ax.get_yticklabels(), items):
+            t.set_color(INK)
+            t.set_fontweight("bold" if not m.within else "normal")
+        ax.set_ylim(-0.6, len(items) - 0.4)
+        ax.set_title(col.replace("_", " ") + f"  ·  tolerance {items[0][1].tolerance_label}", fontsize=8,
+                     color=INK_MUTED, loc="left")
+        ax.tick_params(axis="x", labelsize=7, colors=INK_MUTED, length=0)
+        ax.tick_params(axis="y", length=0)
+        ax.grid(axis="x", color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+        ax.spines["bottom"].set_color(GRID)
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.suptitle(f"Published vs reproduced: {comparison.count} within tolerance", fontsize=9, color=INK, x=0.02,
+                 ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.legend(handles, labels, frameon=False, fontsize=7, loc="upper right", ncol=2, bbox_to_anchor=(0.99, 1.0))
+    buf = io.BytesIO()
+    fig.savefig(buf, format=fmt, dpi=dpi, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def comparison_from_run(run_dir: str | Path):
+    """A run's comparison, read back from the table it recorded (``comparison.csv``), so a figure plots exactly
+    what the run crate says."""
+    import csv
+
+    from .compare import Comparison, MeasureComparison
+
+    path = Path(run_dir) / "comparison.csv"
+    if not path.exists():
+        return None
+    with path.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    return Comparison(measures=[MeasureComparison(r["value"], float(r["published"]), float(r["reproduced"]),
+                                                  float(r["difference"]), float(r["tolerance"]),
+                                                  r["kind"] == "absolute", r["tolerance_source"] or None)
+                                for r in rows])
+
+
+def make_run_figure(run_dir: str | Path, kind: str = "published_vs_reproduced") -> Path:
+    """Make a figure from a run's outputs and record it in the run crate. Returns the image path."""
+    from .runcrate import add_figure
+
+    if kind != "published_vs_reproduced":
+        raise ValueError(f"Unknown figure kind {kind!r}; available: published_vs_reproduced")
+    comp = comparison_from_run(run_dir)
+    if comp is None or not comp.measures:
+        raise ValueError("This run has no comparison with published results to plot.")
+    return add_figure(Path(run_dir), published_vs_reproduced(comp), "published_vs_reproduced.png",
+                      "Published vs reproduced",
+                      f"Each published value (ring) and the reproduced one (dot); {comp.count} within tolerance. "
+                      "Plotted by ReCRATE from this run's outputs.",
+                      made_from=["comparison.csv"])

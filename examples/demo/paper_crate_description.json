@@ -66,8 +66,16 @@
           "format": "text/csv",
           "description": "Per field: count and mean area (µm²)",
           "tolerances": {
-            "count": 0.05,
-            "mean_area": 0.1
+            "count": {
+              "value": 0.05,
+              "source": "paper-stated",
+              "quote": "Repeated acquisitions of the same fields gave counts within 5%, areas within 10% and fractions of large nuclei within 15%."
+            },
+            "mean_area": {
+              "value": 0.1,
+              "source": "paper-stated",
+              "quote": "Repeated acquisitions of the same fields gave counts within 5%, areas within 10% and fractions of large nuclei within 15%."
+            }
           }
         }
       ],
@@ -135,8 +143,16 @@
           "format": "text/csv",
           "description": "Per field: count, median area (µm²), fraction large",
           "tolerances": {
-            "median_area": 0.1,
-            "fraction_large": 0.15
+            "median_area": {
+              "value": 0.1,
+              "source": "paper-stated",
+              "quote": "Repeated acquisitions of the same fields gave counts within 5%, areas within 10% and fractions of large nuclei within 15%."
+            },
+            "fraction_large": {
+              "value": 0.15,
+              "source": "paper-stated",
+              "quote": "Repeated acquisitions of the same fields gave counts within 5%, areas within 10% and fractions of large nuclei within 15%."
+            }
           }
         }
       ],

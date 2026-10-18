@@ -160,10 +160,24 @@
       "value": 0.05
     },
     {
+      "@id": "#count-nuclei-out-results-tolerance-count-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:count",
+      "value": "paper-stated",
+      "description": "\"Repeated acquisitions of the same fields gave counts within 5%, areas within 10% and fractions of large nuclei within 15%.\""
+    },
+    {
       "@id": "#count-nuclei-out-results-tolerance-mean-area",
       "@type": "PropertyValue",
       "name": "tolerance:mean_area",
       "value": 0.1
+    },
+    {
+      "@id": "#count-nuclei-out-results-tolerance-mean-area-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:mean_area",
+      "value": "paper-stated",
+      "description": "\"Repeated acquisitions of the same fields gave counts within 5%, areas within 10% and fractions of large nuclei within 15%.\""
     },
     {
       "@id": "#count-nuclei-out-results",
@@ -180,7 +194,13 @@
           "@id": "#count-nuclei-out-results-tolerance-count"
         },
         {
+          "@id": "#count-nuclei-out-results-tolerance-count-source"
+        },
+        {
           "@id": "#count-nuclei-out-results-tolerance-mean-area"
+        },
+        {
+          "@id": "#count-nuclei-out-results-tolerance-mean-area-source"
         }
       ]
     },
@@ -389,10 +409,24 @@
       "value": 0.1
     },
     {
+      "@id": "#size-distribution-out-results-tolerance-median-area-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:median_area",
+      "value": "paper-stated",
+      "description": "\"Repeated acquisitions of the same fields gave counts within 5%, areas within 10% and fractions of large nuclei within 15%.\""
+    },
+    {
       "@id": "#size-distribution-out-results-tolerance-fraction-large",
       "@type": "PropertyValue",
       "name": "tolerance:fraction_large",
       "value": 0.15
+    },
+    {
+      "@id": "#size-distribution-out-results-tolerance-fraction-large-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:fraction_large",
+      "value": "paper-stated",
+      "description": "\"Repeated acquisitions of the same fields gave counts within 5%, areas within 10% and fractions of large nuclei within 15%.\""
     },
     {
       "@id": "#size-distribution-out-results",
@@ -409,7 +443,13 @@
           "@id": "#size-distribution-out-results-tolerance-median-area"
         },
         {
+          "@id": "#size-distribution-out-results-tolerance-median-area-source"
+        },
+        {
           "@id": "#size-distribution-out-results-tolerance-fraction-large"
+        },
+        {
+          "@id": "#size-distribution-out-results-tolerance-fraction-large-source"
         }
       ]
     },

@@ -18,7 +18,8 @@ def test_crate_card(demo):
     card = load_crate(demo["crate"], "count_nuclei").summary()
     assert card["expects"]["pixel size"] == "0.65 µm"
     assert card["parameters"]["min_size_px"]["scaling"] == "inverse_pixel_area"
-    assert card["tolerances"] == {"count": 0.05, "mean_area": 0.10}
+    assert {k: (v["value"], v["source"]) for k, v in card["tolerances"].items()} == \
+        {"count": (0.05, "paper-stated"), "mean_area": (0.10, "paper-stated")}
 
 
 @pytest.mark.parametrize("method", ["count_nuclei", "size_distribution"])

@@ -9,8 +9,10 @@ def test_cli_end_to_end(demo, tmp_path, capsys):
 
     assert main(["agentify", "--paper", str(demo["paper"]), "--crate", str(demo["crate"]), "--out", agent]) == 0
     out = capsys.readouterr().out
-    assert "count_nuclei [ImageJ Macro Language] validated" in out
-    assert "size_distribution [Python] validated" in out
+    assert "count_nuclei [ImageJ Macro Language] readiness: ready" in out
+    assert "Same numbers     passed       2/2 values within tolerance (paper-stated)" in out
+    assert "size_distribution [Python] readiness: ready" in out
+    assert "verdict: Reproduced: 2 of 2 method(s)" in out
 
     assert main(["ask", agent, "minimum particle size debris"]) == 0
     assert "50 pixels" in capsys.readouterr().out
