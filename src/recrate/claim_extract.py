@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from typing import Callable
 
 from .claims import Claim
@@ -22,7 +21,6 @@ from .drafter import parse_json
 
 KINDS = ("number", "figure")
 REQUIRED = ("claim", "section", "anchor", "paper_says")
-MAX_PAPER_CHARS = 150_000
 
 SYSTEM = """You list the checkable quantitative claims a scientific paper makes, so that each can later
 be compared with a re-run of the paper's code on its data. Only report what the text states. Never
@@ -95,7 +93,7 @@ def extract_claims(paper_text: str, *, respond: Callable[[str], str] | None = No
     ``respond`` takes the composed prompt and returns the model's raw output; when given,
     no API key is needed. Raises ``ValueError`` on output that is not the expected JSON.
     """
-    prompt = INSTRUCTIONS.format(paper=re.sub(r"\s+\n", "\n", paper_text)[:MAX_PAPER_CHARS])
+    prompt = INSTRUCTIONS.format(paper=paper_text)  # unchanged: anchors are later checked against this exact text
     raw = (respond or _call_claude)(prompt)
     try:
         payload = parse_json(raw)

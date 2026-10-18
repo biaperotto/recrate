@@ -67,3 +67,17 @@ def test_requires_an_api_key_only_when_no_respond_given(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(RuntimeError):
         extract_claims("some paper")
+
+
+def test_model_supplied_result_and_id_are_ignored():
+    entry = ('{"claims":[{"claim":"x","section":"s","anchor":"a","paper_says":"1",'
+             '"result":"Reproduced","id":"zz"}]}')
+    (c,) = extract_claims("some paper", respond=lambda _p: entry)
+    assert c.result == "Not checked" and c.id == "c1"
+
+
+def test_paper_text_reaches_the_prompt_unchanged():
+    text = "Line one  \n\n\nLine two   \n  indented\n" + "x" * 200_000
+    seen = []
+    extract_claims(text, respond=lambda p: seen.append(p) or '{"claims": []}')
+    assert text in seen[0]
