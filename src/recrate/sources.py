@@ -35,6 +35,9 @@ WFH_DOI = re.compile(r"10\.48546/workflowhub\.workflow\.(\d+)(?:\.(\d+))?", re.I
 ZEN = re.compile(r"(?:zenodo\.org/(?:records?|deposit)/|10\.5281/zenodo\.)(\d+)", re.I)
 ARXIV = re.compile(r"(?:arxiv\.org/(?:abs|pdf)/|arXiv:\s*)(\d{4}\.\d{4,5}(?:v\d+)?)", re.I)
 DOI = re.compile(r"\b(10\.\d{4,9}/[^\s\"'<>]+[^\s\"'<>.,;)\]])", re.I)
+# medRxiv PDF text runs its "doi:" watermark into the DOI before it (…26350296doi:); a colon is legal inside a
+# DOI, so strip only that exact trailing token, never a character set.
+DOI_WATERMARK = re.compile(r"doi:$", re.I)
 # bioRxiv/medRxiv DOIs read off a URL carry a version suffix (…26350296v2); the registered DOI has no vN.
 BIORXIV_DOI_VERSION = re.compile(r"(10\.\d{4,9}/\d{4}\.\d{2}\.\d{2}\.\d+)v\d+$", re.I)
 REPO = re.compile(r"https?://(?:github\.com|gitlab\.com|codeberg\.org)/[\w.-]+/[\w.-]+", re.I)
@@ -84,7 +87,7 @@ def identify(text: str) -> list[Ref]:
     for m in ARXIV.finditer(text):
         add(m, Ref("arxiv", m.group(1), None, m.group(0)))
     for m in DOI.finditer(text):
-        doi_id = m.group(1)
+        doi_id = DOI_WATERMARK.sub("", m.group(1))
         vm = BIORXIV_DOI_VERSION.match(doi_id)
         if vm:
             doi_id = vm.group(1)  # bioRxiv/medRxiv: drop the URL version suffix (vN), not part of the DOI

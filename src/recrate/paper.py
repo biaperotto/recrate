@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s\"<>,;]+[^\s\"<>,;.)\]])", re.I)
+# medRxiv PDF text runs its "doi:" watermark into the DOI before it (…26350296doi:); strip only that exact token.
+DOI_WATERMARK = re.compile(r"doi:$", re.I)
 REPO_RE = re.compile(
     r"https?://(?:www\.)?(?:github\.com|gitlab\.com|bitbucket\.org|codeberg\.org)/[\w.-]+/[\w.-]+"
     r"|https?://(?:doi\.org/10\.5281/zenodo\.\d+|zenodo\.org/(?:records?|doi)/[\w./-]+)"
@@ -116,7 +118,8 @@ def read_paper(path: str | Path) -> Paper:
     text = extract_text(path)
     flat = re.sub(r"-\n(?=[a-z])", "", text)  # undo hyphenation at line breaks
     flat = re.sub(r"(?<=[/._-])\n", "", flat)  # undo URLs broken across lines
-    dois = _dedupe(list(dict.fromkeys(m.group(1).rstrip(".") for m in DOI_RE.finditer(flat))))
+    found = (DOI_WATERMARK.sub("", m.group(1)).rstrip(".") for m in DOI_RE.finditer(flat))
+    dois = _dedupe(list(dict.fromkeys(found)))
     repos = _dedupe(list(dict.fromkeys(m.group(0).rstrip(".)") for m in REPO_RE.finditer(flat))))
     repos = _rank_repos(repos, flat)
     title = (_pdf_title(path) if path.suffix.lower() == ".pdf" else None) or _guess_title(text)

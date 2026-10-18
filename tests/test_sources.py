@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from recrate.paper import read_paper
 from recrate.sources import from_upload, identify, safe_unzip
 
 
@@ -20,6 +21,24 @@ def test_identify_recognises_identifiers_and_links():
 
 def test_identify_ignores_plain_text():
     assert identify("how is debris removed?") == []
+
+
+def test_doi_from_medrxiv_pdf_text_drops_the_watermark():
+    t = "medRxiv preprint 10.64898/2026.04.07.26350296doi: this version posted"
+    assert [r.id for r in identify(t)] == ["10.64898/2026.04.07.26350296"]
+
+
+def test_doi_ending_in_a_letter_is_not_truncated():
+    assert [r.id for r in identify("see 10.1371/journal.pone.0123456x here")] \
+        == ["10.1371/journal.pone.0123456x"]
+
+
+def test_doi_containing_a_colon_is_kept():
+    assert [r.id for r in identify("10.1234/abc:def ")] == ["10.1234/abc:def"]
+
+
+def test_a_doi_legitimately_ending_in_doi_is_kept():
+    assert [r.id for r in identify("10.1234/abcdoi ")] == ["10.1234/abcdoi"]
 
 
 def test_uploaded_crate_zip_is_found(demo, tmp_path):
@@ -44,3 +63,9 @@ def test_archives_cannot_write_outside_their_folder(tmp_path):
     with pytest.raises(ValueError, match="Unsafe path"):
         safe_unzip(z, tmp_path / "out")
     assert not (tmp_path / "escaped.txt").exists()
+
+
+def test_read_paper_drops_the_watermark_from_a_doi(tmp_path):
+    f = tmp_path / "p.txt"
+    f.write_text("medRxiv preprint 10.64898/2026.04.07.26350296doi: this version posted\n")
+    assert read_paper(f).dois == ["10.64898/2026.04.07.26350296"]
