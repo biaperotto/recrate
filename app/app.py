@@ -84,7 +84,7 @@ def chip(name: str, args: dict | None) -> str:
     """A tool call as the chat shows it: what it does, and the call itself, e.g. reproduce(size_dimorphism_index)."""
     arg = next((str(v) for k, v in (args or {}).items() if k in ("method", "query", "check", "table", "figure")), "")
     return f"↳ {TOOL_LABEL.get(name, name)} · `{name}({arg})`"
-SECTIONS = {"validate": "Reproduce", "reuse": "Reuse", "record": "Record"}
+SECTIONS = {"validate": "Reproduce", "reuse": "Reuse", "record": "Record", "appendix": "Appendix"}
 
 st.html("""<style>
 :root {--bg:#f1efea; --card:#ffffff; --line:#e6e3da; --ink:#14181F; --muted:#6b7472; --accent:#2A78D6;
@@ -916,7 +916,6 @@ def figure_builder(agent: PaperAgent, run_dir: Path, data_dir: Path) -> None:
 
 # ---- Reproduce: does the research reproduce on its own data? ------------------------------------------
 def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> None:
-    env = agent.environment
     report = agent.path / "REPORT.md"
     if report.exists():  # written by the /recrate agent: what can be recreated, and what can't
         with st.expander("Report from the ReCRATE agent", expanded=not agent.methods, icon=":material/smart_toy:"):
@@ -942,6 +941,20 @@ def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> Non
             run = latest(runs, m.name, "reproduce")
             if run and st.toggle("Show the latest reproduction's outputs", key=f"showrep-{m.id}"):
                 results_tab(agent, run, data_dir)
+
+
+# ---- Appendix: the research object's data, environment and source --------------------------------------
+def appendix_section(agent: PaperAgent) -> None:
+    env = agent.environment
+    st.caption("The research object's own data, environment and text — the ground truth the verdict is judged "
+               "against. Nothing here is a run.")
+    for m in agent.methods:
+        spec = agent.spec(m.id)
+        if spec.expected_results and spec.expected_results.exists():
+            with st.expander(f"Published results · {m.name}", icon=":material/table:"):
+                if spec.expected_source:
+                    st.caption(f"From the paper: {spec.expected_source}")
+                st.dataframe(pd.DataFrame(read_rows(spec.expected_results)), hide_index=True, width="stretch")
     if agent.methods:
         from recrate.model import assumptions
 
@@ -1180,8 +1193,8 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
                 if q:
                     c1, c2 = st.columns([6, 1])
                     c1.markdown(f"<div class='quote'>{html.escape(q)}</div>", unsafe_allow_html=True)
-                    if c2.button("Show", key=f"show-{m.id}-{p['name']}", help="Highlight it in the source (Reproduce)"):
-                        ss.highlight, ss._goto = q, "validate"
+                    if c2.button("Show", key=f"show-{m.id}-{p['name']}", help="Highlight it in the source (Appendix)"):
+                        ss.highlight, ss._goto = q, "appendix"
                         st.rerun()
                 if st.toggle("Use my own value", key=f"own-{m.id}-{p['name']}"):
                     c1, c2 = st.columns([1, 2])
@@ -1467,7 +1480,8 @@ def workstation(agent: PaperAgent) -> None:
                                         "finding": f["message"], "fix": f.get("fix", "")} for f in fixes]))
     counts = {"validate": f"Reproduce · {n_ok}/{len(agent.methods)}" if agent.methods else "Reproduce",
               "reuse": "Reuse" + (f" · {len(files)} files" if files else ""),
-              "record": f"Record · {len(runs)}" if runs else "Record"}
+              "record": f"Record · {len(runs)}" if runs else "Record",
+              "appendix": "Appendix"}
     if ss.get("_goto"):  # a jump requested elsewhere (e.g. "Show" in Reuse), applied before the bar is drawn
         ss.section = ss.pop("_goto")
     with st.container(key="sectionbar"):
@@ -1479,14 +1493,16 @@ def workstation(agent: PaperAgent) -> None:
             validate_section(agent, runs, data_dir)
         elif sec == "reuse":
             reuse_section(agent, runs, data_dir, files)
-        else:
+        elif sec == "record":
             run_dir = record_section(agent, runs)
+        else:
+            appendix_section(agent)
     with st.container(key="workfoot"):
         if sec == "validate":
             validate_actions(agent)
         elif sec == "reuse":
             reuse_actions(agent, data_dir, files)
-        else:
+        elif sec == "record":
             record_actions(agent, run_dir)
 
 
