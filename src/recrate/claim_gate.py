@@ -7,7 +7,8 @@ the claim's data source against the data files, with no model involved, mirrorin
 
 1. the anchor is substantive (at least 3 words or 20 characters, so it proves something) and occurs in
    the paper's text as whole words;
-2. the reported value is printed in the paper's text, not as part of a longer number;
+2. the reported value is printed in the paper's text, not as part of a longer number (including a
+   comma-grouped one: ``500`` is not ``1,500``);
 3. the value is printed near an occurrence of the anchor, so the claim's "where in the paper" link points
    at a place that really holds the value;
 4. when the claim names a data source and a data root is given, the file exists under that root and
@@ -50,7 +51,8 @@ def _spans(text: str, needle: str) -> list[tuple[int, int]]:
         return []
     pattern = re.escape(needle)
     if needle[0].isalnum():
-        pattern = r"(?<![\w.])" + pattern if needle[0].isdigit() else r"(?<!\w)" + pattern
+        # a leading digit must not be the tail of a longer number, nor of a comma-grouped one ("1,500")
+        pattern = r"(?<![\w.])(?<!\d,)" + pattern if needle[0].isdigit() else r"(?<!\w)" + pattern
     if needle[-1].isalnum():
         pattern += r"(?!\d|\.\d)" if needle[-1].isdigit() else r"(?!\w)"
     return [m.span() for m in re.finditer(pattern, text)]
@@ -70,11 +72,19 @@ def _value_spans(paper: str, value: str) -> list[tuple[int, int]]:
     spans = []
     # Sign and PDF-minus tolerance ("-0.11" also matches "20.11") is inherited from verify.py, not chosen here.
     for start in number_positions(paper, value):
+        if _after_group_separator(paper, start):
+            continue
         printed = _PLAIN_NUMBER.match(paper, start)
         if printed and given is not None and len(printed.group(1) or "") > given:
             continue
         spans.append((start, printed.end() if printed else start))
     return spans
+
+
+def _after_group_separator(text: str, start: int) -> bool:
+    """Whether ``start`` follows a digit and a comma directly: the tail of a number like ``1,500``.
+    A comma then a space, as in ``68, 72``, is prose, so the number after it stands alone."""
+    return start >= 2 and text[start - 1] == "," and text[start - 2].isdigit()
 
 
 def _near(values: list[tuple[int, int]], anchors: list[tuple[int, int]]) -> bool:

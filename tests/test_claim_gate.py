@@ -206,3 +206,32 @@ def test_a_malformed_data_source_is_not_checkable_not_a_crash(tmp_path):
     for bad in (["d.csv"], "d.csv", {"file": "d.csv", "columns": "A"}):
         out = gate([_c(data_source=bad)], PAPER, tmp_path)
         assert out[0].result == "Not checkable" and out[0].why_not, bad
+
+
+# Thousands separators: a fragment of a comma-grouped number is not the number.
+
+def test_a_fragment_of_a_comma_grouped_number_is_not_printed():
+    for value, printed in (("500", "1,500"), ("068", "1,068"), ("500", "2,500,000")):
+        paper = f"In total we found {printed} papers in the sample."
+        out = gate([_c(anchor="in total we found", paper_says=value)], paper)
+        assert out[0].result == "Not checkable", (value, printed)
+        assert out[0].why_not == "the reported value is not printed in the paper", (value, printed)
+
+
+def test_a_fragment_of_a_comma_grouped_value_with_a_unit_is_not_printed():
+    paper = "In total we found 1,500 (95% CI) papers in the sample."
+    out = gate([_c(anchor="in total we found", paper_says="500 (95% CI)")], paper)
+    assert out[0].result == "Not checkable"
+
+
+def test_a_value_that_itself_contains_a_separator_still_matches():
+    paper = "In total we found 1,500 papers in the sample."
+    assert gate([_c(anchor="in total we found", paper_says="1,500")], paper)[0].result == "Not checked"
+    paper = "In total we found 1,500 (95% CI) papers in the sample."
+    assert gate([_c(anchor="in total we found", paper_says="1,500 (95% CI)")], paper)[0].result == "Not checked"
+
+
+def test_a_value_after_a_comma_in_prose_still_matches():
+    paper = "In total we found 68, 72 and 90 papers in the sample."
+    for value in ("68", "72", "90"):
+        assert gate([_c(anchor="in total we found", paper_says=value)], paper)[0].result == "Not checked", value
