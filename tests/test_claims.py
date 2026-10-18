@@ -45,7 +45,7 @@ def test_rejected_save_names_the_bad_id_and_writes_nothing(tmp_path):
 def test_round_trip_is_lossless_with_everything_populated(tmp_path):
     c = Claim(id="c9", kind="figure", claim="Accuracy ≥ 0.9 on the test split (café set).",
               section="Results/Figure 2", anchor="≥ 0.9", paper_says="0.92",
-              data_gives="0.917", result="Reproduced", why_not="",
+              data_gives="0.917", result="Not checkable", why_not="data not shared",
               data_source={"file": "data/é.csv", "rows": [1, 2]},
               computation={"fn": "accuracy", "args": {"split": "test"}},
               tolerance={"abs": 0.01, "note": "≤ 1 pp"})
