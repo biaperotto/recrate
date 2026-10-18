@@ -11,7 +11,7 @@
 
 ---
 
-[Paper2Agent](https://github.com/jmiao24/Paper2Agent) showed that a paper's code can become an agent: an MCP server whose tools run the paper's methods, each tested against the tutorial it came from, so anyone can apply them by asking. ReCRATE takes that idea and adds what reusing a method safely needs:
+[Paper2Agent](https://github.com/jmiao24/Paper2Agent) (*Nature*, September 2026) showed that a paper's code can become an agent: an MCP server whose tools run the paper's methods, each tested against the tutorial it came from, so anyone can apply them by asking. ReCRATE takes that idea and adds what reusing a method safely needs:
 
 * **Checked against the paper.** A tool that reproduces the authors' tutorial is not yet a check of the paper's results. ReCRATE runs each method on the paper's own data and compares it with the numbers the paper published.
 * **Checked against your data.** A method applied to data unlike the paper's (another pixel size, grouping or sampling rate) can run without errors and still give a wrong answer. ReCRATE checks your data against what the method expects before it runs, and flags results far from the paper's after.
@@ -29,7 +29,7 @@ paper or RO-Crate ──► research object ──────────► ag
                                                     one Workflow Run RO-Crate per run
 ```
 
-1. **Describe.** ReCRATE starts from a published crate (WorkflowHub, Zenodo, a folder), finds one published for the paper, or drafts one from the paper and its code with the `/recrate` agent. A drafted crate stays *draft* until a named person confirms it.
+1. **Describe.** ReCRATE starts from a published crate (WorkflowHub, Zenodo, a folder), finds one published for the paper, or drafts one from the paper and its code with the `/recrate` agent. A drafted crate stays *draft* until a named person confirms it. From a paper, it also tells the authors' own code and data from software they only cite, clones their code (without running it), and reads which languages and packages it uses, with their versions as of publication (Python from PyPI and conda, R from CRAN).
 2. **Reproduce: can I trust this result?** Each method runs on the paper's own data and every output is compared with the published value. The method climbs a ladder: *materials found* → *runs* → *same numbers* (e.g. 9/12) → *same conclusion*. When numbers differ, ReCRATE proposes follow-up checks (an inclusion rule, the rounding, a software or data version), each run and recorded on its own.
 3. **Reuse: what does this method say about my data?** Your data is checked against the method's declared inputs before the run, and the results against the paper's after it. Parameters fall into three groups: adjusted automatically, with the computation shown; needing your decision, with the paper's sentence; and as published.
 4. **Record: who ran what, and how do I cite it?** Every run is a Workflow Run RO-Crate linked to the paper. From it ReCRATE writes a methods paragraph, references (BibTeX, CSL-JSON), figures, and one report page a reviewer can open without installing anything. The research object's own RO-Crate, whether found, supplied, recreated as of publication or drafted, is validated with the RO-Crate validator as soon as it is created (and again whenever it changes), and exports as a zip that records how it was obtained.
@@ -40,7 +40,7 @@ An agent is only as trustworthy as the rules its tools follow. ReCRATE enforces 
 
 * **Numbers come from runs, never from the model.** The model reads, routes and explains. It cannot set a published value, a tolerance or a verdict.
 * **Every claim is traceable.** In a crate drafted from a paper, each parameter quotes the sentence that states it and each published value is checked against the paper's text and tables (`recrate check-description`, no model involved); and every tolerance names its source: `paper-rounding`, `paper-stated` (quoted), `method-noise` or `person` (named, with a reason). No source, no verdict on the numbers.
-* **Verdicts are graded, and a person has the last word.** "Ready" never means "reproduced"; the ladder advances only on evidence from a run. *Same conclusion* is a person's call: the app and CLI require a name, the chat has no tool for it, and over MCP the tool tells the client to ask the user.
+* **Verdicts are graded, and a person has the last word.** "Ready" never means "reproduced"; the ladder advances only on evidence from a run. *Same conclusion* is a person's call: the app and CLI require a name, and over MCP (which the app's Claude chat also uses) the tool records only a verdict the user gives in the conversation.
 * **Nothing changes silently.** A parameter is adjusted only by a declared rule (`scales_with:<data property>^<exponent>`), and any other change needs a reason. Changing what is compared, such as grouping by island instead of species, is recorded as a different question, never as a reproduction.
 * **The record is append-only.** Differing runs, failed runs and follow-up checks stay. Nothing replaces the first result.
 * **The core is field-independent.** Field-specific knowledge lives in profiles that read properties from your files. Three exist today: `generic` (files, formats, table columns), `bioimaging` (calibration, channels, bit depth, object size) and `timeseries` (sampling rate, channels). Outputs declare a kind; scalars and tables are compared today, and other kinds are reported as not checked rather than compared the wrong way. See [docs/domain-profiles.md](docs/domain-profiles.md).
@@ -49,37 +49,37 @@ An agent is only as trustworthy as the rules its tools follow. ReCRATE enforces 
 
 ReCRATE takes the Paper2Agent idea and builds it on FAIR4RS and RO-Crate. It is its own implementation (it does not use Paper2Agent's code), but it covers what Paper2Agent does: the same way of building agents (a coordinator with specialist subagents, each tool tested before delivery) and the same interface (MCP tools that return a message and file paths). On top of that, it changes what a tool is built from and what it guarantees.
 
+🟥 a gap in Paper2Agent · 🟩 how ReCRATE fills it
+
 | | Paper2Agent | ReCRATE |
 | --- | --- | --- |
-| Starts from | A paper and its code repository | The same, or an RO-Crate (found for the paper, supplied, or drafted) |
+| Description of the research | 🟥 Inferred from the code | 🟩 An RO-Crate: found for the paper, supplied, or recreated as of publication, and validated |
+| Starts from | A paper and its code repository | The same, or an RO-Crate |
 | The paper's own environment | Built per paper | Built per paper with `uv` (`recrate env`), and every run records each installed package |
 | Tools come from | The code's tutorials | The paper's reported methods **and** the code's tutorials and examples |
 | A tool is | A typed function, which may take data or just values | The same: typed parameters with their units and the paper's sentence; data optional |
-| Tested against | The tutorials' outputs | The paper's **published results** (or the tutorials' outputs), with sourced tolerances and an independent verifier |
-| Your data | Left to the model | Checked against the method's declared inputs; parameters rescaled only by declared rules |
-| Provenance | Not recorded | A Workflow Run RO-Crate per run, linked to the paper |
-| Where you use it | Claude Code | Claude Desktop, Claude Code or any MCP client (`recrate install-mcp`), and the app's chat on your Claude subscription |
+| Tested against | 🟥 The tutorials' outputs, not the paper's results | 🟩 The paper's **published results**, with sourced tolerances and an independent verifier |
+| Your data | 🟥 Left to the model | 🟩 Checked against the method's declared inputs; parameters rescaled only by declared rules |
+| Provenance | 🟥 Not recorded | 🟩 A Workflow Run RO-Crate per run, linked to the paper |
+| Where you use it | Claude Code | Claude Desktop, Claude Code or any MCP client (`recrate install-mcp`), and the app's chat |
 | How it is built | A pipeline run in Claude Code | The same pipeline (`/recrate`), from Claude Code, `recrate build`, or one button in the app |
 
-## FAIR4RS, principle by principle
+## Why RO-Crate
 
-FAIR4RS asks what makes research software findable, accessible, interoperable and reusable. ReCRATE applies it where reuse happens: to the method being reused, and to each run. This describes the proof of concept, not a certification.
+An [RO-Crate](https://doi.org/10.3233/DS-210053) is one folder with a machine-readable description of what belongs together: this workflow, these parameters, this data, this software, these published results. ReCRATE is built around it:
 
-| Principle | How ReCRATE meets it | Status |
-| --- | --- | --- |
-| **F1** persistent identifiers, per version | Starts from the paper's DOI and the workflow's WorkflowHub or Zenodo identifier, with its version | Done |
-| **F2, F3** rich metadata that includes the identifier | Each run crate names the crate it is `isBasedOn`, the paper it cites, the software and versions that ran | Done |
-| **F4** metadata searchable and indexable | Run crates are JSON-LD; deposit to a registry is manual | Partial |
-| **A1** retrievable by identifier, over open protocols | Sources are fetched by DOI or URL over HTTPS; a published crate is found from the paper's links, WorkflowHub, Zenodo, DataCite or its code | Done |
-| **A1.2** authentication where needed | Data behind access requests is recorded, never fetched | Partial (`/recrate` agent) |
-| **A2** metadata outlive the software | Each run crate keeps a copy of the workflow and all its metadata | Done |
-| **I1** exchange data by community standards | Inputs declare their formats and properties (e.g. OME/ImageJ calibration); your files are checked against them | Done for images, tables, signals |
-| **I2** qualified references to other objects | `isBasedOn`, `citation`, `exampleOfWork`, `conformsTo`; follow-ups link the run they follow | Done |
-| **R1** rich, accurate description | Parameters carry units, scaling rules, roles and the paper's sentence; outputs carry kinds and sourced tolerances | Done |
-| **R1.1** clear licence | Carried into every run crate when the source states one | Partial |
-| **R1.2** detailed provenance | Who ran what, when, on which files (SHA-256), with which parameters and why, checked by whom | Done |
-| **R2** references to the software used | Software and versions per run; versions as of publication, each with how it was determined | Done |
-| **R3** community standards | RO-Crate 1.1, Workflow RO-Crate 1.0, Process and Workflow Run Crate 0.5: all 55 required [validator](https://github.com/crs4/rocrate-validator) checks pass in CI, and 122 of 136 at the recommended level | Done |
+* **In:** the paper's crate, found (WorkflowHub, Zenodo, DataCite, the paper's code), supplied, or recreated from the paper as of its publication. It is validated with the community [RO-Crate validator](https://github.com/crs4/rocrate-validator) as soon as it exists.
+* **Out:** one Workflow Run RO-Crate per run, linked to the paper's crate.
+* **Why it matters:** with a crate, "reproduce" has one meaning: run this workflow on this data and compare with these results. Without one, an agent can only guess.
+
+## Why it is FAIR
+
+* **Findable:** everything starts from and keeps persistent identifiers (DOIs, WorkflowHub and Zenodo IDs, ORCIDs), in JSON-LD that registries can index.
+* **Accessible:** sources are fetched by identifier over HTTPS, and each run crate keeps the workflow and its metadata, so the record outlives the source.
+* **Interoperable:** RO-Crate 1.1, Workflow RO-Crate and Workflow Run Crate, checked by the RO-Crate validator in CI.
+* **Reusable:** licence and authors, data checks, parameters with units and reasons, and full provenance: who ran what, when, on which files (by checksum), with which software versions.
+
+This follows the [FAIR principles for research software (FAIR4RS)](https://doi.org/10.1038/s41597-022-01710-x) as a proof of concept, not a certification. Principle by principle, with what is still partial: [docs/fair4rs.md](docs/fair4rs.md).
 
 ## Examples
 
@@ -121,7 +121,7 @@ Then ask, for example, *"Reproduce this paper"* or *"Check my images in ./data, 
 
 The result is an agent you can use in the app or serve as above. It runs the paper's code on your computer, as Paper2Agent does, so start it only for code you are willing to run. See [docs/architecture.md](docs/architecture.md).
 
-**In the app.** `streamlit run app/app.py`, then open an example. If Claude Code (or its VS Code extension) is installed and signed in, the chat is Claude on your own subscription, with no API key, using only the research object's MCP tools. Otherwise it uses a free local model ([Ollama](https://ollama.com)), Claude with an API key, or simple commands; choose under **Connect**.
+**In the app.** `streamlit run app/app.py`, then press **Start** (or **Try an example**) and give a paper or an RO-Crate. Each research object appears in the **Research Objects** sidebar with its files, its RO-Crate's validation and a download. The chat suggests questions from the paper's content and answers with Claude when Claude Code (or its VS Code extension) is signed in, with no API key; otherwise with a local model ([Ollama](https://ollama.com)), an API key, or simple commands. Choose under **Agent**.
 
 **From the command line**, every step runs without a model:
 
@@ -142,7 +142,7 @@ ReCRATE is a proof of concept, built at the *Reinvent the Wheel* hackathon (Lond
 
 | Today | Next |
 | --- | --- |
-| Python code runs in the paper's own virtual environment (`uv`), with every package recorded; R and shell code use the interpreters on your computer, and nothing is sandboxed | Containers or conda environments, for R, system libraries and isolation |
+| Python code runs in the paper's own virtual environment (`uv`), with every package recorded. R, Quarto and shell code use the interpreters on your computer (R packages are listed with their versions as of publication, but not installed for you), and nothing is sandboxed | R environments built per paper, and containers for isolation |
 | Galaxy runs through ported tools only; other workflows are reported *blocked*, naming the tool | planemo, cwltool, Nextflow and Snakemake |
 | Scalars and tables are compared; `timeseries` is tested on synthetic data only | IoU for label images, tests for distributions, reruns to measure method noise; genomics and single-cell profiles; OME-Zarr, IDR and OMERO sources |
 | Follow-ups for software and data versions are proposed, not run | Running them in pinned environments |

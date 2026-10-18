@@ -99,6 +99,18 @@ def _rank_repos(repos: list[str], text: str) -> list[str]:
     return sorted(repos, key=lambda u: -score(u))
 
 
+def _clean_link(link: str) -> str:
+    """Drop what PDF text glues onto the end of a DOI or URL: a following word ("…26350296doi:", "….August"),
+    a reference number ("…/rplos.20" from "rplos.\n20.") or a trailing full stop."""
+    link = link.rstrip(".")
+    link = re.sub(r"(?<=\d)(?:doi|https?|available|retrieved|accessed):?$", "", link, flags=re.I)
+    link = re.sub(r"\.(?:January|February|March|April|May|June|July|August|September|October|November|December|"
+                  r"[A-Z][a-z]{2,})$", "", link)
+    if re.search(r"github\.com|gitlab\.com|codeberg\.org|bitbucket\.org", link):
+        link = re.sub(r"\.\d{1,3}$", "", link)  # repository names don't end in a reference number
+    return link.rstrip(".")
+
+
 def _dedupe(items: list[str]) -> list[str]:
     """Drop near-duplicates caused by line breaks (extra '-' or a trailing fragment)."""
     out: list[str] = []
@@ -115,9 +127,10 @@ def read_paper(path: str | Path) -> Paper:
     path = Path(path)
     text = extract_text(path)
     flat = re.sub(r"-\n(?=[a-z])", "", text)  # undo hyphenation at line breaks
-    flat = re.sub(r"(?<=[/._-])\n", "", flat)  # undo URLs broken across lines
-    dois = _dedupe(list(dict.fromkeys(m.group(1).rstrip(".") for m in DOI_RE.finditer(flat))))
-    repos = _dedupe(list(dict.fromkeys(m.group(0).rstrip(".)") for m in REPO_RE.finditer(flat))))
+    # undo URLs broken across lines, but not into the next reference's number ("…10620146.\n31. Harris…")
+    flat = re.sub(r"(?<=[/._-])\n(?!\s*\d{1,3}\.\s)", "", flat)
+    dois = _dedupe(list(dict.fromkeys(_clean_link(m.group(1)) for m in DOI_RE.finditer(flat))))
+    repos = _dedupe(list(dict.fromkeys(_clean_link(m.group(0).rstrip(".)")) for m in REPO_RE.finditer(flat))))
     repos = _rank_repos(repos, flat)
     title = (_pdf_title(path) if path.suffix.lower() == ".pdf" else None) or _guess_title(text)
     return Paper(title=title, text=text, source=str(path), dois=dois, repos=repos)

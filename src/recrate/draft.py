@@ -280,6 +280,14 @@ def build_crate(desc: dict[str, Any], out_dir: str | Path, base_dir: str | Path 
         root["citation"] = {"@id": desc["citation"]}
     if desc.get("license"):
         root["license"] = {"@id": desc["license"]}
+        if not any(e.get("@id") == desc["license"] for e in graph):
+            graph.append({"@id": desc["license"], "@type": "CreativeWork", "name": desc["license"].rsplit("/", 1)[-1],
+                          "description": "The licence the description gives for this research."})
+    else:  # RO-Crate 1.1 requires a licence: say plainly that none is known, rather than leave it out
+        from .paper_crate import licence_entity
+
+        graph.append(licence_entity(None, ""))
+        root["license"] = {"@id": "#licence-not-stated"}
     if authors:
         root["author"] = authors
 

@@ -109,8 +109,27 @@ def add_environment(crate_dir: Path, env: Environment) -> None:
     mpath.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+LICENCE_NAMES = {"by": "CC BY", "by-sa": "CC BY-SA", "by-nc": "CC BY-NC", "by-nd": "CC BY-ND", "by-nc-sa": "CC BY-NC-SA",
+                 "by-nc-nd": "CC BY-NC-ND", "zero": "CC0"}
+
+
+def licence_entity(url: str | None, source: str) -> dict[str, Any]:
+    """A contextual entity for the crate's licence (RO-Crate 1.1 requires one): the paper's, from its DOI metadata,
+    or one saying plainly that no licence could be found."""
+    if not url:
+        return {"@id": "#licence-not-stated", "@type": "CreativeWork", "name": "Licence not stated",
+                "description": "No licence could be found for this paper or its materials. Check the publisher's "
+                               "terms before reusing its files."}
+    m = re.search(r"creativecommons\.org/(?:licenses|publicdomain)/([a-z-]+)/(\d\.\d)", url)
+    name = f"{LICENCE_NAMES.get(m.group(1), m.group(1).upper())} {m.group(2)}" if m else url
+    return {"@id": url, "@type": "CreativeWork", "name": name,
+            "description": f"The paper's licence ({source}). It applies to the paper and, unless stated otherwise, to "
+                           "this description of it."}
+
+
 def build_paper_crate(p: Paper, env: Environment, out: Path, code_url: str | None = None,
-                      paper_file: Path | None = None, paper_id: str | None = None) -> Path:
+                      paper_file: Path | None = None, paper_id: str | None = None,
+                      links: list[dict[str, Any]] | None = None, meta: dict[str, Any] | None = None) -> Path:
     """A draft crate describing a paper published without one. Returns the crate folder."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -123,18 +142,39 @@ def build_paper_crate(p: Paper, env: Environment, out: Path, code_url: str | Non
         shutil.copy2(paper_file, out / Path(paper_file).name)
         has_part.append({"@id": Path(paper_file).name})
         graph.append({"@id": Path(paper_file).name, "@type": ["File", "ScholarlyArticle"], "name": p.title,
-                      "about": {"@id": paper_id}})
+                      "about": {"@id": paper_id},
+                      "encodingFormat": {".pdf": "application/pdf", ".md": "text/markdown"}.get(
+                          Path(paper_file).suffix.lower(), "text/plain")})
     graph.append({"@id": paper_id, "@type": "ScholarlyArticle", "name": p.title,
                   **({"datePublished": env.published} if env.published else {}),
                   **({"identifier": paper_id} if p.doi else {})})
     mentions = []
-    if code_url:
-        graph.append({"@id": code_url, "@type": "SoftwareSourceCode", "name": "Code of the paper",
-                      "codeRepository": code_url})
-        mentions.append({"@id": code_url})
+    by_url = {l["url"]: l for l in links or []}
+    code = [l for l in links or [] if l["kind"] == "code"]
+    if code_url and code_url not in by_url:
+        code.insert(0, {"url": code_url, "own": True, "why": "given with the paper"})
+    for l in code:  # the authors' own code, and software they cite: told apart
+        graph.append({"@id": l["url"], "@type": "SoftwareSourceCode", "codeRepository": l["url"],
+                      "name": "Code of the paper" if l["own"] else f"Software cited by the paper ({l['url'].split('/')[-1]})",
+                      "description": l.get("why", "")})
+        mentions.append({"@id": l["url"]})
     for d in data_links(p):
-        graph.append({"@id": d["id"], "@type": "Dataset", "name": f"Data cited by the paper ({d['where']})"})
+        l = by_url.get(d["id"], {})
+        name = l.get("title") or f"Data cited by the paper ({d['where']})"
+        typ = "SoftwareSourceCode" if (l.get("type") or "").lower() == "software" else "Dataset"
+        graph.append({"@id": d["id"], "@type": typ, "name": name,
+                      "description": (f"{'By the authors' if l.get('own') else 'Cited by the paper'} ({d['where']}"
+                                      + (f", {l['type'].lower()}" if l.get("type") else "") + ")."),
+                      **({"contentSize": str(l["bytes"])} if l.get("bytes") else {})})
         mentions.append({"@id": d["id"]})
+    meta = meta or {}
+    licence = licence_entity(meta.get("license"), "from its DOI metadata")
+    graph.append(licence)
+    authors = []
+    for i, a in enumerate(meta.get("authors") or []):  # the paper's authors, with their ORCID when given
+        aid = a.get("orcid") or f"#author-{i}"
+        graph.append({"@id": aid, "@type": "Person", "name": a["name"]})
+        authors.append({"@id": aid})
     graph.append({"@id": "#draft", "@type": "PropertyValue", "name": "draft", "value": True})
     graph.append({"@id": "#domain-profile", "@type": "PropertyValue", "name": "domain profile", "value": "generic"})
     root = {"@id": "./", "@type": "Dataset", "name": p.title,
@@ -142,6 +182,7 @@ def build_paper_crate(p: Paper, env: Environment, out: Path, code_url: str | Non
                            "publication, code and cited data. A draft until a person confirms it.",
             "citation": {"@id": paper_id}, "about": {"@id": paper_id}, "hasPart": has_part, "mentions": mentions,
             "additionalProperty": [{"@id": "#draft"}, {"@id": "#domain-profile"}],
+            "license": {"@id": licence["@id"]}, **({"author": authors} if authors else {}),
             **({"datePublished": env.published} if env.published else {})}
     meta = {"@context": "https://w3id.org/ro/crate/1.1/context",
             "@graph": [{"@id": "ro-crate-metadata.json", "@type": "CreativeWork",

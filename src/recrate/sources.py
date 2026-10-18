@@ -34,12 +34,14 @@ WFH_DOI = re.compile(r"10\.48546/workflowhub\.workflow\.(\d+)(?:\.(\d+))?", re.I
 ZEN = re.compile(r"(?:zenodo\.org/(?:records?|deposit)/|10\.5281/zenodo\.)(\d+)", re.I)
 ARXIV = re.compile(r"(?:arxiv\.org/(?:abs|pdf)/|arXiv:\s*)(\d{4}\.\d{4,5}(?:v\d+)?)", re.I)
 DOI = re.compile(r"\b(10\.\d{4,9}/[^\s\"'<>]+[^\s\"'<>.,;)\]])", re.I)
+# bioRxiv / medRxiv: the URL carries the DOI and a version ("…26350296v2"); the version is not part of the DOI
+PREPRINT = re.compile(r"(?:www\.)?(biorxiv|medrxiv)\.org/content/(10\.\d{4,9}/[\d.]*\d)(v\d+)?(?=[./?#]|$)", re.I)
 REPO = re.compile(r"https?://(?:github\.com|gitlab\.com|codeberg\.org)/[\w.-]+/[\w.-]+", re.I)
 
 
 @dataclass
 class Ref:
-    kind: str  # workflowhub | zenodo | arxiv | doi | repo
+    kind: str  # workflowhub | zenodo | arxiv | preprint | doi | repo
     id: str
     version: str | None = None
     text: str = ""
@@ -48,6 +50,7 @@ class Ref:
     def label(self) -> str:
         return {"workflowhub": f"WorkflowHub workflow {self.id}" + (f" v{self.version}" if self.version else ""),
                 "zenodo": f"Zenodo record {self.id}", "arxiv": f"arXiv {self.id}", "doi": f"DOI {self.id}",
+                "preprint": f"preprint {self.id}" + (f" {self.version}" if self.version else ""),
                 "repo": self.id}[self.kind]
 
 
@@ -78,13 +81,15 @@ def identify(text: str) -> list[Ref]:
         add(m, Ref("workflowhub", m.group(1), m.group(2), m.group(0)))
     for m in ZEN.finditer(text):
         add(m, Ref("zenodo", m.group(1), None, m.group(0)))
+    for m in PREPRINT.finditer(text):  # before DOI: the same text also matches as a DOI, with the version stuck on
+        add(m, Ref("preprint", m.group(2), (m.group(3) or "").lower() or None, m.group(1).lower()))
     for m in ARXIV.finditer(text):
         add(m, Ref("arxiv", m.group(1), None, m.group(0)))
     for m in DOI.finditer(text):
         if m.group(1).lower().startswith("10.48550/arxiv."):
             add(m, Ref("arxiv", m.group(1).split("arXiv.", 1)[-1].split("arxiv.", 1)[-1], None, m.group(0)))
-        else:
-            add(m, Ref("doi", m.group(1), None, m.group(0)))
+        else:  # a version suffix ("…v2", as preprint servers add) is not part of a DOI
+            add(m, Ref("doi", re.sub(r"(?<=\d)v\d+$", "", m.group(1)), None, m.group(0)))
     for m in REPO.finditer(text):
         add(m, Ref("repo", m.group(0).rstrip(".,;:").removesuffix(".git"), None, m.group(0)))
     return refs
@@ -196,6 +201,28 @@ def fetch_arxiv(aid: str, dest: Path) -> Found:
     return Found("paper", f"arXiv {aid}", p, f"https://arxiv.org/abs/{aid}")
 
 
+def fetch_preprint(server: str, doi: str, version: str | None, dest: Path) -> Found:
+    """A bioRxiv or medRxiv preprint: its structured text from Europe PMC when available, else the full-text PDF of
+    the version linked (or the latest), with the title from its DOI."""
+    dest = Path(dest)
+    try:
+        found = fetch_doi(doi, dest)
+        if found.path and found.path.suffix == ".pdf" or (found.notes and "Europe PMC" in found.notes[0]):
+            return found
+    except Exception:  # noqa: BLE001 - the DOI's metadata is optional: the PDF is what matters
+        found = None
+    dest.mkdir(parents=True, exist_ok=True)
+    url = f"https://www.{server}.org/content/{doi}{version or ''}.full.pdf"
+    data, _ = _get(url)
+    if data[:4] != b"%PDF":
+        raise ValueError(f"{server} did not return a PDF for {doi}{version or ''}")
+    p = dest / "paper.pdf"
+    p.write_bytes(data)
+    title = found.label if found else doi
+    return Found("paper", title, p, f"https://doi.org/{doi}",
+                 [f"Full text: the {server} preprint PDF{' (' + version + ')' if version else ''}."])
+
+
 def fetch_doi(doi: str, dest: Path) -> Found:
     """A paper DOI: its reading package when it is open access in Europe PMC (text, tables, figures,
     supplement); else the full text when the publisher links an open PDF; else its metadata and abstract."""
@@ -244,6 +271,8 @@ def fetch(ref: Ref, dest: Path) -> Found:
         return fetch_zenodo(ref.id, dest)
     if ref.kind == "arxiv":
         return fetch_arxiv(ref.id, dest)
+    if ref.kind == "preprint":
+        return fetch_preprint(ref.text or "biorxiv", ref.id, ref.version, dest)
     if ref.kind == "doi":
         return fetch_doi(ref.id, dest)
     if ref.kind == "repo":

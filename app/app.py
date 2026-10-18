@@ -1076,17 +1076,44 @@ def empty_validate(agent: PaperAgent) -> None:
     g = _json.loads((agent.crate_dir / "ro-crate-metadata.json").read_text(encoding="utf-8"))["@graph"] if agent.crate_dir else []
     data = [e for e in g if e.get("@type") == "Dataset" and e["@id"] != "./"]
     code = [e for e in g if e.get("@type") == "SoftwareSourceCode"]
-    st.info("**Nothing to run yet.** ReCRATE recreated this research's RO-Crate from the paper, but the paper alone "
-            "doesn't say how to run its methods: that needs a runnable description (the workflow or script, its "
-            "inputs and parameters, and the published results to compare with).")
+    links = agent.manifest.get("links") or []
+    survey = agent.manifest.get("code_survey")
+    if survey:
+        langs = ", ".join(f"{n} {k}" for k, n in list(survey["languages"].items())[:3]) or "no recognised scripts"
+        st.info(f"**The authors' code is here; its methods aren't tools yet.** ReCRATE found the paper's code and cloned "
+                f"it ({survey['files']} files: {langs}"
+                + (f", {survey['data_files']} data files" if survey.get("data_files") else "") + "). Which code "
+                "produces which published result isn't described yet: **Make runnable** reads the paper and the code, "
+                "and turns each method into a tool, checked against the published results.")
+        survey["missing"] = [n for n in survey.get("needs", []) if not shutil.which(n)]  # checked now, not when built
+        if survey.get("missing"):
+            need = {"Rscript": "R ([cran.r-project.org](https://cran.r-project.org))",
+                    "quarto": "Quarto ([quarto.org](https://quarto.org))", "julia": "Julia", "matlab": "MATLAB",
+                    "python3": "Python"}
+            st.warning("This code needs " + " and ".join(need.get(m, m) for m in survey["missing"]) + ", not installed "
+                       "on this computer. Install it before **Make runnable**, or the methods will be described but "
+                       "not run.")
+    else:
+        st.info("**Nothing to run yet.** ReCRATE recreated this research's RO-Crate from the paper, but found no code "
+                "of the authors to run: its methods can only be re-implemented from the text, and will be said to be.")
     with st.container(border=True):
-        st.markdown("**What the paper gives**")
-        st.markdown(("- Data: " + ", ".join(f"[{e['name'].split('(')[-1].rstrip(')')}]({e['@id']})" for e in data))
-                    if data else "- Data: none linked in the paper")
-        st.markdown(("- Code: " + ", ".join(f"[{e['@id']}]({e['@id']})" for e in code)) if code else
-                    "- Code: no repository linked in the paper")
+        st.markdown("**What the paper links to**")
+        icon = {"code": "💻", "data": "📦", "workflow": "🔁", "model": "🧠"}
+        for l in links:
+            what = l.get("title") or l["url"].split("://", 1)[-1]
+            role = ("the authors' own" if l["own"] else "cited") + (f": {l['why']}" if l.get("why") else "")
+            cloned = " · cloned" if l["url"] == agent.manifest.get("code") else ""
+            extra = f" · {l['type'].lower()}" if l.get("type") else ""
+            st.markdown(f"{icon.get(l['kind'], '🔗')} [{html.escape(what)}]({l['url']}){extra}{cloned}  \n"
+                        f"<span class='muted'>{html.escape(role)}</span>", unsafe_allow_html=True)
+        if not links:
+            st.markdown(("- Data: " + ", ".join(f"[{e['name']}]({e['@id']})" for e in data)) if data else
+                        "- No code or data links found in the paper")
+        if agent.manifest.get("code_error"):
+            st.caption(f"⚠️ Couldn't clone the code: {agent.manifest['code_error']}")
         env = agent.environment
-        st.markdown(f"- Software and models named: {len(env.software) if env else 0} (see *Software environment* below)")
+        st.markdown(f"<span class='muted'>Software and models named: {len(env.software) if env else 0} "
+                    "(see *Software environment* below)</span>", unsafe_allow_html=True)
     build_panel(agent, has_code=bool(code))
 
 

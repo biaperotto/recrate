@@ -79,7 +79,7 @@ crate (e.g. an exclusion the paper states in words), the rounding convention, an
 6. **Publish back** (`record.py`): the run joins the research object's record and is zipped for deposit.
 
 Run crates pass every required check of the RO-Crate validator for RO-Crate 1.1, Workflow RO-Crate 1.0, Process
-Run Crate 0.5 and Workflow Run Crate 0.5 (CI runs it). At the recommended level they pass 122 of 136 checks.
+Run Crate 0.5 and Workflow Run Crate 0.5 (CI runs it). At the recommended level they pass 121 to 123 of 136 checks.
 
 ## One set of functions, three front ends
 

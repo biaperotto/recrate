@@ -358,6 +358,11 @@ def write_run_crate(
         root["citation"] = {"@id": spec.citation}
     if spec.license:
         root["license"] = {"@id": spec.license}
+        lic = next((e for e in spec.raw.get("@graph", []) if e.get("@id") == spec.license), None)
+        graph.append({"@id": spec.license, "@type": "CreativeWork",  # described, as RO-Crate recommends
+                      "name": (lic or {}).get("name") or spec.license.rstrip("/").rsplit("/", 1)[-1],
+                      "description": (lic or {}).get("description") or "The licence of the research this run is "
+                                                                         "based on."})
     graph.append({"@id": "#prop-mode", "@type": "PropertyValue", "name": "recrate mode", "value": mode})
     graph.append({"@id": "#prop-verdict", "@type": "PropertyValue", "name": "recrate verdict", "value": verdict})
     graph.append({"@id": "#prop-method", "@type": "PropertyValue", "name": "recrate method",

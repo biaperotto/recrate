@@ -301,13 +301,43 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
         save_paper(p, out / "paper")
         p = _reading_package(p, Path(paper), out / "paper", manifest, paper_doi, online)
 
-    # 2. The code
+    # 2. What the paper links to (its own code and data, and what it cites), and its own code, cloned
     code_dir = None
-    if repo is None and fetch_code and p is not None:
-        repo = next((r for r in p.repos if any(h in r for h in ("github.com", "gitlab.com", "codeberg.org"))), None)
+    links: list[dict[str, Any]] = []
+    if p is not None:
+        from .links import classify, survey_code, zenodo_title
+
+        links = classify(p)
+        if online:
+            from .sources import get_json
+
+            for link in links:
+                if "zenodo" in link["url"]:
+                    try:
+                        link.update({k: v for k, v in zenodo_title(link["url"], get_json).items() if v})
+                    except Exception:  # noqa: BLE001 - metadata is a nicety
+                        pass
+        manifest["links"] = links
+        own_code = next((l["url"] for l in links if l["kind"] == "code" and l["own"]), None)
+        if repo is None and (fetch_code or (online and not crate)):  # no crate to run from: the authors' code
+            repo = own_code or (next((l["url"] for l in links if l["kind"] == "code"), None) if fetch_code else None)
     if repo:
-        manifest["code"] = _clone(repo, out / "code")
-        code_dir = out / "code"
+        try:
+            manifest["code"] = _clone(repo, out / "code")
+            code_dir = out / "code"
+            from .links import survey_code
+
+            manifest["code_survey"] = survey_code(code_dir)
+            readme = code_dir / (manifest["code_survey"].get("readme") or "README.md")
+            if readme.exists():  # the code's archived, citable release, when its README gives one
+                for doi in dict.fromkeys(re.findall(r"10\.5281/zenodo\.\d+", readme.read_text(errors="replace"))):
+                    url = f"https://doi.org/{doi}"
+                    if all(l["url"] != url for l in links):
+                        links.append({"url": url, "kind": "code", "own": True,
+                                      "why": "the archived release of the code (from its README)"})
+            manifest["links"] = links
+        except Exception as e:  # noqa: BLE001 - the paper is still read; say why the code isn't there
+            manifest["code_error"] = f"{repo}: {e}"
 
     # 3. The crate: supplied, drafted, or none yet
     crate_out = out / "crate"
@@ -363,7 +393,8 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
         env = envmod.environment_for(p.text, when, when_src, code_dir=code_dir, fetch_json=fetch_json)
         if manifest["crate_source"] == "none":
             build_paper_crate(p, env, crate_out, code_url=manifest.get("code"), paper_file=Path(p.source),
-                              paper_id=None if p.doi or not arxiv else f"https://arxiv.org/abs/{arxiv}")
+                              paper_id=None if p.doi or not arxiv else f"https://arxiv.org/abs/{arxiv}",
+                              links=manifest.get("links"), meta=_paper_metadata(own_doi(p, paper_doi), fetch_json))
             manifest["crate_source"] = "recreated from the paper"
         else:
             add_environment(crate_out, env)
@@ -441,6 +472,22 @@ def _reading_package(p: Paper, source: Path, pdir: Path, manifest: dict[str, Any
         n = len(figures_from_pdf(source, pdir / "figures"))
         manifest["paper_text"] = f"PDF text, with {n} embedded image(s) kept" if n else "PDF text"
     return p
+
+
+def _paper_metadata(doi: str | None, fetch_json) -> dict[str, Any]:
+    """The paper's licence and authors (with ORCIDs) from its DOI metadata; empty offline or without a DOI."""
+    if not doi or fetch_json is None:
+        return {}
+    try:
+        csl = fetch_json(f"https://doi.org/{doi}", "application/vnd.citationstyles.csl+json")
+    except Exception:  # noqa: BLE001 - the crate then says the licence is not stated
+        return {}
+    lic = next((l.get("URL") for l in csl.get("license") or [] if l.get("content-version") in (None, "vor", "unspecified")),
+               None) or next((l.get("URL") for l in csl.get("license") or []), None)
+    authors = [{"name": f"{a.get('given', '')} {a.get('family', '')}".strip() or a.get("name", ""),
+                "orcid": (a.get("ORCID") or "").replace("http://", "https://") or None}
+               for a in csl.get("author") or []]
+    return {"license": lic, "authors": [a for a in authors if a["name"]], "publisher": csl.get("publisher")}
 
 
 def own_doi(p: Paper, given: str | None = None) -> str | None:
