@@ -158,6 +158,25 @@ def _save_body(work_dir: Path, content: bytes) -> Path:
     return _save(work_dir, "paper.txt", content)
 
 
+def _biorxiv_full_text(landing_url: str, cache_dir: str | Path | None) -> str | None:
+    """HTML full text of a bioRxiv/medRxiv preprint, or None if it is not available.
+
+    The landing page carries only the abstract; the body lives at ``<landing>.full``.
+    Anchors checked against this text then match the page they link into, which PDF
+    text does not. Any failure (404 for a paper with no HTML full text, a login wall,
+    a stub page) returns None so the caller falls back to the PDF.
+    """
+    url = landing_url if landing_url.endswith(".full") else landing_url.rstrip("/") + ".full"
+    try:
+        resp = http.get(url, accept="text/html,application/xhtml+xml", cache_dir=cache_dir)
+    except http.HttpError:
+        return None
+    parser = _MetaParser()
+    parser.feed(resp.text)
+    text = parser.text
+    return text if len(text) >= MIN_FULLTEXT_CHARS else None
+
+
 def fetch_paper(link: str, work_dir: str | Path, pdf: str | Path | None = None,
                 cache_dir: str | Path | None = http.CACHE_DIR) -> FetchResult:
     """Resolve ``link`` to a paper and its landing page. See the module docstring."""
@@ -196,7 +215,23 @@ def fetch_paper(link: str, work_dir: str | Path, pdf: str | Path | None = None,
         return FetchResult(paper=p, doi=doi or p.doi, landing_url=landing_url, full_text=True, kind=kind,
                            signposting=signposting, pdf_url=pdf_url, message=f"Used supplied PDF {pdf}.")
 
-    # 2. an open PDF advertised by the page (or arXiv's).
+    # 2. bioRxiv/medRxiv: the page's own HTML full text beats the PDF, because anchors
+    #    validated against it match the page they are linked into.
+    if kind == "biorxiv" and resp is not None:
+        full = _biorxiv_full_text(landing_url, cache_dir)
+        if full:
+            path = _save(work_dir, "paper.txt", full.encode("utf-8"))
+            p = read_paper(path)
+            title = metas.metas.get("citation_title") or metas.metas.get("og:title")
+            if title:
+                p.title = title.strip()
+            if doi and doi not in p.dois:
+                p.dois.insert(0, doi)
+            return FetchResult(paper=p, doi=doi or p.doi, landing_url=landing_url, full_text=True, kind=kind,
+                               signposting=signposting, pdf_url=pdf_url,
+                               message="Read the full text from the preprint's HTML page.")
+
+    # 3. an open PDF advertised by the page (or arXiv's).
     if pdf_url:
         try:
             r = http.get(pdf_url, cache_dir=cache_dir)
@@ -209,7 +244,7 @@ def fetch_paper(link: str, work_dir: str | Path, pdf: str | Path | None = None,
         except http.HttpError:
             pass  # fall through to metadata-only
 
-    # 3. metadata / HTML only.
+    # 4. metadata / HTML only.
     if landing_text and len(landing_text) >= MIN_FULLTEXT_CHARS:
         path = _save(work_dir, "paper.txt", landing_text.encode("utf-8"))
         p = read_paper(path)

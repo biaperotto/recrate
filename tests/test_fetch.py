@@ -24,6 +24,26 @@ PAYWALL_PAGE = f"""<html><head>
   <meta name="citation_doi" content="{DOI}">
 </head><body>Access denied.</body></html>"""
 
+MEDRXIV_LANDING = "https://www.medrxiv.org/content/10.1101/2025.03.04.25323000v1"
+MEDRXIV_PDF = MEDRXIV_LANDING + ".full.pdf"
+MEDRXIV_DOI = "10.1101/2025.03.04.25323000"
+
+MEDRXIV_PAGE = f"""<html><head>
+  <meta name="citation_title" content="Data availability in clinical papers">
+  <meta name="citation_doi" content="{MEDRXIV_DOI}">
+  <meta name="citation_pdf_url" content="{MEDRXIV_PDF}">
+</head><body>Abstract only here.</body></html>"""
+
+MEDRXIV_FULL = f"""<html><head>
+  <meta name="citation_title" content="Data availability in clinical papers">
+  <style>.hidden {{ display: none }}</style>
+  <script>var tracking = "not paper text";</script>
+</head><body><article>
+<h1>Data availability in clinical papers</h1>
+<p>Sixty-eight papers reported that data were available on request or in a repository.</p>
+{"".join(f"<p>Paragraph {i}: we screened clinical trial reports and recorded how each stated its data sharing policy.</p>" for i in range(40))}
+</article></body></html>"""
+
 
 def test_classify_link_doi_arxiv_url_local(tmp_path):
     assert fetch.classify_link("10.1234/abc") == ("doi", "10.1234/abc")
@@ -117,3 +137,70 @@ def test_http_cache_saves_a_round_trip(tmp_path, monkeypatch):
     r2 = http.get("https://example.org/data", cache_dir=cache)
     assert r1.content == r2.content == b"payload"
     assert hits["n"] == 1  # second call served from .recrate-cache
+
+
+def test_medrxiv_prefers_full_html_over_pdf(monkeypatch, tmp_path):
+    fake = FakeHTTP()
+    fake.add(MEDRXIV_LANDING, html=MEDRXIV_PAGE)            # advertises citation_pdf_url
+    fake.add(MEDRXIV_LANDING + ".full", html=MEDRXIV_FULL)  # body text lives here
+    fake.add(MEDRXIV_PDF, text="PDF text that must not be used " * 200)
+    monkeypatch.setattr("recrate.http.get", fake.get)
+
+    r = fetch.fetch_paper(MEDRXIV_LANDING, tmp_path)
+
+    assert "Sixty-eight papers reported that data were available" in r.paper.text
+    assert "not paper text" not in r.paper.text          # script/style stripped
+    assert r.full_text is True
+    assert MEDRXIV_PDF not in fake.calls                 # the PDF was never needed
+    assert "HTML" in r.message
+    assert r.paper.title == "Data availability in clinical papers"
+    assert MEDRXIV_DOI in r.paper.dois
+
+
+def test_medrxiv_full_url_built_from_redirected_landing(monkeypatch, tmp_path):
+    fake = FakeHTTP()
+    final = MEDRXIV_LANDING.replace("v1", "v2")
+    fake.add(MEDRXIV_LANDING, html=MEDRXIV_PAGE, final_url=final)
+    fake.add(final + ".full", html=MEDRXIV_FULL)
+    monkeypatch.setattr("recrate.http.get", fake.get)
+
+    r = fetch.fetch_paper(MEDRXIV_LANDING, tmp_path)
+
+    assert final + ".full" in fake.calls
+    assert "Sixty-eight papers" in r.paper.text
+
+
+def test_falls_back_to_pdf_when_no_html_full_text(monkeypatch, tmp_path):
+    fake = FakeHTTP()   # .full is not registered, so it raises HttpError (a 404)
+    fake.add(MEDRXIV_LANDING, html=MEDRXIV_PAGE)
+    fake.add(MEDRXIV_PDF, text="# Data availability\n\nThe PDF body text.")
+    monkeypatch.setattr("recrate.http.get", fake.get)
+
+    r = fetch.fetch_paper(MEDRXIV_LANDING, tmp_path)
+
+    assert MEDRXIV_LANDING + ".full" in fake.calls
+    assert r.full_text is True and "PDF" in r.message
+    assert "The PDF body text" in r.paper.text
+
+
+def test_falls_back_to_pdf_when_html_full_text_is_too_short(monkeypatch, tmp_path):
+    fake = FakeHTTP()
+    fake.add(MEDRXIV_LANDING, html=MEDRXIV_PAGE)
+    fake.add(MEDRXIV_LANDING + ".full", html="<html><body>Login required</body></html>")
+    fake.add(MEDRXIV_PDF, text="# Data availability\n\nThe PDF body text.")
+    monkeypatch.setattr("recrate.http.get", fake.get)
+
+    r = fetch.fetch_paper(MEDRXIV_LANDING, tmp_path)
+
+    assert "The PDF body text" in r.paper.text and "PDF" in r.message
+
+
+def test_full_html_not_requested_for_other_kinds(monkeypatch, tmp_path):
+    fake = FakeHTTP()
+    fake.add(f"https://doi.org/{DOI}", html=PAGE_WITH_PDF, final_url=LANDING)
+    fake.add(PDF, text="# A Fine Paper\n\nFull methods text.")
+    monkeypatch.setattr("recrate.http.get", fake.get)
+
+    fetch.fetch_paper(f"https://doi.org/{DOI}", tmp_path / "work", cache_dir=None)
+
+    assert not any(c.endswith(".full") for c in fake.calls)
