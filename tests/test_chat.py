@@ -136,3 +136,18 @@ def test_suggested_questions_follow_the_content(tmp_path):
     assert qs[0].startswith("What is this research about")
     assert "Why do the size dimorphism index results differ from the paper?" in qs
     assert any(q.startswith("Run the follow-up checks") for q in qs) and len(qs) <= 6
+
+
+def test_two_follow_up_questions_from_what_the_answer_did(tmp_path):
+    from pathlib import Path
+
+    from recrate.agent import agentify
+    from recrate.chat import follow_up_questions
+
+    ex = Path(__file__).resolve().parent.parent / "examples" / "penguins-dimorphism"
+    a = agentify(tmp_path / "p", paper=ex / "paper.pdf", crate=ex / "crate", search_crate=False, online=False)
+    reply = [{"kind": "tool", "name": "reproduce", "args": {"method": "size_dimorphism_index"}}]
+    qs = follow_up_questions(a, reply, asked=set())
+    assert qs == ["Why do the size dimorphism index results differ from the paper?",
+                  "Run the follow-up checks for size dimorphism index: do they explain the difference?"]
+    assert qs[0] not in follow_up_questions(a, reply, asked={qs[0]})  # never one already asked

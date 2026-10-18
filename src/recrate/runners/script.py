@@ -35,14 +35,16 @@ LANGUAGES = {
 }
 
 
-def interpreter(workflow: Path, python: str | Path | None = None) -> tuple[str, str, list[str]]:
+def interpreter(workflow: Path, python: str | Path | None = None,
+                rscript: str | Path | None = None) -> tuple[str, str, list[str]]:
     """(software name, command, version arguments) for a script; raises if the interpreter is missing. ``python``:
     the research object's own environment (env.py), used for Python scripts when it was built."""
     suffix = Path(workflow).suffix.lower()
     if suffix not in LANGUAGES:
         raise RuntimeError(f"No interpreter for {Path(workflow).name} (scripts: .py, .R, .sh, .jl, .m).")
     name, var, default, version = LANGUAGES[suffix]
-    cmd = str(python) if python and suffix == ".py" else os.environ.get(var, default)
+    cmd = (str(python) if python and suffix == ".py" else str(rscript) if rscript and suffix == ".r"
+           else os.environ.get(var, default))
     if not (Path(cmd).exists() or shutil.which(cmd)):
         raise RuntimeError(f"{Path(workflow).name} is {name} code, but {cmd} is not installed here "
                            f"(install it, or set {var} to its path).")
@@ -52,12 +54,13 @@ def interpreter(workflow: Path, python: str | Path | None = None) -> tuple[str, 
 class ScriptRunner(Runner):
     name = "script"
     python: Path | None = None  # the research object's own environment, when built (env.py)
+    rscript: Path | None = None  # its own R (env/r), when built
 
     def run(self, workflow: Path, input_dir: Path, output_dir: Path, params: dict[str, Any],
             channel: int = 0, progress=None) -> RunResult:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        lang, cmd0, version_args = interpreter(workflow, self.python)
+        lang, cmd0, version_args = interpreter(workflow, self.python, self.rscript)
         cmd = [cmd0, str(Path(workflow).resolve()),
                "--input_dir", str(Path(input_dir).resolve()), "--output_dir", str(output_dir.resolve())]
         for k, v in params.items():

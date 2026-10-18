@@ -21,6 +21,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import altair as alt
@@ -29,7 +30,8 @@ import streamlit as st
 
 from recrate.agent import PaperAgent, agentify, revalidate, review_conclusion, runs_own_code
 from recrate.chat import (LOCAL_URL, ChatTools, ClaudeChat, ClaudeCodeChat, LocalChat, OpenAICompatChat,
-                          claude_available, claude_code_binary, local_models, suggested_questions)
+                          claude_available, claude_code_binary, follow_up_questions, local_models,
+                          suggested_questions)
 from recrate.crate import CrateError
 from recrate.figures import Panel, comparison_chart, panel_figure, pixel_size_um
 from recrate.paper import passages
@@ -37,7 +39,7 @@ from recrate.pipeline import check_inputs, run_on_data
 from recrate.profiles.bioimaging import list_images
 from recrate.record import find_runs, headline, publish_back, summarise_record
 from recrate.runcrate import approve, image_reviews, review_image, run_story, summarise_run
-from recrate.sources import fetch, from_upload, identify
+from recrate.sources import fetch, fetch_dataset, from_upload, identify
 from recrate.workspace import (comparable_with_paper, export_bundle, flag_images, methods_markdown, numeric_columns,
                                parameter_sources, read_rows, references_bib, references_csl, whatif)
 
@@ -47,19 +49,24 @@ st.set_page_config(page_title="ReCRATE", page_icon=str(IMG / "favicon.svg"), lay
                    initial_sidebar_state="collapsed")
 
 WH = ROOT / "examples" / "workflowhub-nuclei-segmentation"
+SD = ROOT / "examples" / "stardist-nuclei"
 EXAMPLES = {
     "workflowhub": {"title": "Nuclei segmentation · WorkflowHub #771",
                     "about": "A published Galaxy workflow crate, with public microscopy images from Zenodo.",
                     "tags": ["RO-Crate", "Galaxy", "real data"],
                     "agent": WH / "paper_agent", "build": {"crate": WH / "crate"}, "data": WH / "research-data" / "B2"},
-    "penguins": {"title": "Penguin size dimorphism · PLOS ONE 2014",
-                 "about": "A real paper with open data: its Table 2 recomputed from the data, then reused per island.",
-                 "tags": ["paper + crate", "ecology", "tables"],
-                 "agent": ROOT / "examples" / "penguins-dimorphism" / "paper_agent",
-                 "build": {"paper": ROOT / "examples" / "penguins-dimorphism" / "paper.pdf",
-                           "crate": ROOT / "examples" / "penguins-dimorphism" / "crate",
-                           "paper_doi": "10.1371/journal.pone.0090081"},
-                 "data": ROOT / "examples" / "penguins-dimorphism" / "research-data"},
+    "stardist": {"title": "Cell Detection with Star-convex Polygons · StarDist, arXiv 2018",
+                 "about": "A segmentation preprint with public code, model and data. Reproduce its Table 1, then reuse "
+                          "the same model on a second public nuclei dataset (BBBC039) and compare the segmentations.",
+                 "tags": ["preprint", "Python · TensorFlow", "real data"],
+                 "agent": SD / "paper_agent",
+                 "fetch_paper": "arXiv:1806.03535",  # fetched when opened: the arXiv licence doesn't let us ship it
+                 "build": {"crate": SD / "crate", "paper_doi": "10.48550/arXiv.1806.03535"},
+                 "env": True, "data": None,
+                 "reuse_links": {"label": "BBBC039 (Broad Institute, CC0): 200 U2OS nuclei images, Hoechst, with "
+                                          "ground truth",
+                                 "refs": ["https://data.broadinstitute.org/bbbc/BBBC039/images.zip",
+                                          "https://data.broadinstitute.org/bbbc/BBBC039/masks.zip"]}},
 }
 BADGE = {"validated": ":green-badge[reproduced]", "differs": ":orange-badge[differences found]",
          "failed": ":red-badge[failed]", "not validated": ":gray-badge[not run yet]"}
@@ -175,11 +182,11 @@ h1.hero {font-size: 2.3rem; line-height: 1.15; margin: 0 0 .7rem; font-weight: 7
 .st-key-landing [class*="st-key-get-"] {background: var(--card); border-radius: 14px; min-height: 8.5rem;}
 .st-key-landing .foot {margin-top: 2rem;}
 .st-key-landing a {color: var(--accent);}
-.st-key-suggest {margin: .4rem 0 .2rem;}
-.st-key-suggest button {width: 100%; justify-content: flex-start; text-align: left; border-radius: 12px;
+[class*="st-key-suggest-"] {margin: .4rem 0 .2rem;}
+[class*="st-key-suggest-"] button {width: 100%; justify-content: flex-start; text-align: left; border-radius: 12px;
   background: var(--card); border: 1px solid var(--line); padding: .35rem .7rem; min-height: 0; font-size: .86rem;}
-.st-key-suggest button:hover {border-color: var(--accent); color: var(--accent);}
-.st-key-suggest button p {text-align: left;}
+[class*="st-key-suggest-"] button:hover {border-color: var(--accent); color: var(--accent);}
+[class*="st-key-suggest-"] button p {text-align: left;}
 section[data-testid="stSidebar"] {background: var(--card); border-right: 1px solid var(--line);}
 /* the sidebar's open button sits inside the top bar, at its left end, instead of floating over its corner */
 [data-testid="stExpandSidebarButton"] {position: fixed; top: calc(.9rem + 29px); left: calc(1.4rem + 10px); z-index: 1001;}
@@ -188,6 +195,16 @@ section[data-testid="stSidebar"] {background: var(--card); border-right: 1px sol
 .st-key-topbar [data-testid="stMarkdown"], .st-key-topbar [data-testid="stMarkdownContainer"] {margin: 0;}
 section[data-testid="stSidebar"] h3 {margin-bottom: 0;}
 section[data-testid="stSidebar"] .tree {font-size: .8rem;}
+/* smooth page changes: no grey "stale" fade while the next page is computed, and the new page fades in while its
+   cards settle to their height, instead of jumping */
+[data-stale="true"], .stale-element {opacity: 1 !important; transition: none !important;}
+@keyframes rc-in {from {opacity: 0; transform: translateY(6px);} to {opacity: 1; transform: none;}}
+.st-key-landing {animation: rc-in .3s ease-out both;}
+.element-container:has(.rc-mark), [data-testid="stElementContainer"]:has(.rc-mark) {display: none;}
+.stApp:has(.rc-entering) [data-testid="stMain"] {transition: opacity .3s ease-out;}
+.stApp[data-test-script-state="running"]:has(.rc-entering) [data-testid="stMain"],
+.stApp[data-test-script-state="rerunRequested"]:has(.rc-entering) [data-testid="stMain"] {opacity: 0; transition: none;}
+.steps-line {white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .8rem; color: var(--muted);}
 </style>""")
 
 # The divider between the chat and the workstation: drag to resize, double-click to reset.
@@ -341,6 +358,7 @@ def make_engine(agent: PaperAgent, tools: ChatTools):
 # ---- building the agent ----------------------------------------------------------------------
 def load_agent(path: Path, data: Path | None = None) -> None:
     ss.agent_dir = str(path)
+    ss.chat_mark = len(ss.get("history", []))  # the conversation about this research object starts here
     ros = [d for d in ss.get("session_ros", []) if d != str(Path(path).resolve())]
     ss.session_ros = ros + [str(Path(path).resolve())]  # it now appears under Research Objects
     agent = PaperAgent.load(path)
@@ -402,21 +420,33 @@ def paper_doi(paper: dict | None) -> str | None:
 
 def open_example(key: str) -> None:
     ex = EXAMPLES[key]
+    ss.entering = True  # the workspace appears once complete, not piece by piece
     built = (ex["agent"] / "environment.json").exists()
-    if built and ex["build"].get("paper_doi") and not (ex["agent"] / "paper" / "index.md").exists() \
+    if built and ex["build"].get("paper") and "links" not in PaperAgent.load(ex["agent"]).manifest \
             and not os.environ.get("RECRATE_OFFLINE"):
-        built = False  # built before reading packages: rebuild to get the paper's tables and figures
+        built = False  # built before ReCRATE looked for the paper's code and data: rebuild
     if built and any(not m.ladder for m in PaperAgent.load(ex["agent"]).methods):
         built = False  # built before the verdict ladder
     if not built:  # missing, or built by an older ReCRATE
-        with st.spinner("Building the example: reading the crate and reproducing each method…"):
-            agentify(ex["agent"], **ex["build"])
+        with st.spinner("Building the example: reading it, finding its code and data, reproducing what can run…"):
+            build = dict(ex["build"])
+            if ex.get("fetch_paper"):
+                build["paper"] = fetch(identify(ex["fetch_paper"])[0], Path(ex["agent"]).parent / "paper-download").path
+            agentify(ex["agent"], **build, validate="none" if ex.get("env") else "all")
+    if ex.get("env") and not (Path(ex["agent"]) / "env" / "recrate-env.json").exists():
+        from recrate.env import build_env
+
+        with st.spinner("Installing the paper's software in its own environment (first time only)…"):
+            build_env(ex["agent"], log=lambda *_: None)
+        with st.spinner("Reproducing the paper's results…"):
+            revalidate(ex["agent"])
     load_agent(ex["agent"], ex["data"])
     ss.ro = {"example": key}
     ss._goto = "validate"
     a = PaperAgent.load(ex["agent"])
     say(f"Opened **{a.card()['title']}**. {a.card()['verdict']} "
-        "Its example data is selected for **Reuse**. Ask me anything, or try *reproduce*, *check my data*, *run*.")
+        + ("Its example data is selected for **Reuse**. " if ex["data"] else "")
+        + "Ask me anything about it.")
 
 
 def add_sources(text: str, files: list) -> list[str]:
@@ -544,18 +574,34 @@ def context_card(agent: PaperAgent) -> None:
                 + "</div>", unsafe_allow_html=True)
 
 
-def suggestions(agent: PaperAgent) -> None:
-    """Questions to start from, chosen from what this research object contains; one click sends one."""
-    asked = {m["parts"][0]["text"] for m in ss.history if m["role"] == "user" and m.get("parts")}
-    qs = [q for q in suggested_questions(agent, limit=8) if q not in asked][:4]
+def asked_questions() -> set[str]:
+    return {m["parts"][0]["text"] for m in ss.history if m["role"] == "user" and m.get("parts")}
+
+
+def chat_started() -> bool:
+    """Whether the person has asked anything since this research object was opened."""
+    return any(m["role"] == "user" for m in ss.history[ss.get("chat_mark", 0):])
+
+
+def question_buttons(qs: list[str], key: str, title: str) -> None:
     if not qs:
         return
-    with st.container(key="suggest"):
-        st.markdown("<div class='eyebrow'>Try asking</div>", unsafe_allow_html=True)
+    with st.container(key=f"suggest-{key}"):
+        st.markdown(f"<div class='eyebrow'>{title}</div>", unsafe_allow_html=True)
         for i, q in enumerate(qs):
-            if st.button(q, key=f"suggest-{i}-{abs(hash(q)) % 10**6}", icon=":material/chat_bubble:"):
+            if st.button(q, key=f"suggest-{key}-{i}-{abs(hash(q)) % 10**6}", icon=":material/chat_bubble:"):
                 ss.picked_question = q
                 st.rerun()
+
+
+def suggestions(agent: PaperAgent) -> None:
+    """Before the conversation: questions to start from, chosen from what this research object contains. Once it has
+    started: two questions that follow from the last answer, under it."""
+    asked = asked_questions()
+    if not chat_started():
+        question_buttons([q for q in suggested_questions(agent, limit=8) if q not in asked][:4], "start", "Try asking")
+    elif ss.history and ss.history[-1]["role"] == "assistant":
+        question_buttons(follow_up_questions(agent, ss.history[-1]["parts"], asked), "next", "Ask next")
 
 
 def chat_card() -> None:
@@ -637,6 +683,7 @@ def chat_card() -> None:
                 ss.tools.progress = None
                 bar.empty()
     ss.history.append(reply)
+    st.rerun()  # show the reply in place, with the questions that follow from it
     st.rerun()
 
 
@@ -688,8 +735,8 @@ def run_inputs(run_dir: Path, data_dir: Path) -> Path:
 
 def overlay_source(overlay: Path, run_dir: Path, data_dir: Path) -> Path | None:
     stem = overlay.name.removesuffix("_overlay.png")
-    for base in (run_dir / "inputs", data_dir):
-        for suf in (".tif", ".tiff"):
+    for base in (run_dir / "inputs", data_dir, run_dir / "inputs" / "images", data_dir / "images"):
+        for suf in (".tif", ".tiff", ".png"):
             if (base / f"{stem}{suf}").exists():
                 return base / f"{stem}{suf}"
     return None
@@ -775,28 +822,36 @@ def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None
         other, lab1, lab2, ref_rows = reported, "This run", "Published", None
     else:
         same, why = comparable_with_paper(spec, run_inputs(run_dir, data_dir))
+        keyed = bool(reported and rows) and not w and "image" not in rows[0] and \
+            [list(r.values())[0] for r in reported] == [list(r.values())[0] for r in rows]  # same rows (e.g. IoU)
         if not same:
-            st.caption(f"ℹ️ {why}")
-            reported = None
+            st.caption(f"ℹ️ {why}" + (" Shown beside yours: the paper's values on its own data, to see how the "
+                                      "method transfers." if keyed else ""))
+            reported = reported if keyed else None
         used = {p["name"]: p["value"] for p in run_story(run_dir)["parameters"]}
         changed = [f"{k} {v}" for k, v in used.items() if k in spec.default_params() and str(spec.default_params()[k]) != v]
         lab1 = "Your run" + (f" ({', '.join(changed)})" if changed else "")
         lab2 = "Published values unchanged (" + ", ".join(f"{k} {v}" for k, v in spec.default_params().items()
                                                          if str(v) != used.get(k)) + ")"
         other, ref_rows = (w["rows"] if w else None), reported
+        if keyed:
+            other, ref_rows, lab2 = reported, None, "The paper's data (published)"
     metrics = numeric_columns(rows)
     if not metrics:
         st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
         return
     metric = st.segmented_control("Measure", metrics, default=metrics[0], key=f"metric-{s['run']}",
                                   label_visibility="collapsed") or metrics[0]
+    if s["mode"] != "reproduce" and not other and rows and f"{metric}_true" in rows[0]:  # ground truth in your data
+        other, lab2 = [{**r, metric: r[f"{metric}_true"]} for r in rows], "Ground truth (in your data)"
     mean = lambda rr: sum(float(r[metric]) for r in rr if r.get(metric)) / max(1, len(rr))  # noqa: E731
     c = st.columns(3)
     c[0].metric("This run" if s["mode"] == "reproduce" else "Your run", f"{mean(rows):.4g}", border=True, help=lab1)
     if s["mode"] == "reproduce" and other:
         c[1].metric("Published", f"{mean(other):.4g}", border=True)
     elif other:
-        c[1].metric("Published values", f"{mean(other):.4g}", delta=f"{mean(other) - mean(rows):+.3g}",
+        c[1].metric(lab2.split(" (")[0] if lab2.startswith(("The paper's data", "Ground truth")) else "Published values",
+                    f"{mean(other):.4g}", delta=f"{mean(other) - mean(rows):+.3g}",
                     delta_color="off", border=True, help=lab2)
     if ref_rows:
         c[2].metric("Published data", f"{mean(ref_rows):.4g}", border=True, help="Reported on the published data")
@@ -839,11 +894,41 @@ def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None
     with st.expander("Table"):
         st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     ovs = sorted((run_dir / "outputs" / "overlays").glob("*.png"))
+    paper_ovs = paper_overlays(agent, s) if ovs and s["mode"] != "reproduce" else []
+    if paper_ovs:
+        with st.expander("The paper's data next to yours", expanded=True):
+            side_by_side(paper_ovs, ovs, rows, s["run"])
     if ovs:
         with st.expander(f"Review each result ({len(ovs)})"):
             review(agent, run_dir, ovs, rows, spec, data_dir)
         with st.expander("Make a figure"):
             figure_builder(agent, run_dir, data_dir)
+
+
+def paper_overlays(agent: PaperAgent, s: dict) -> list[Path]:
+    """The segmentations of the latest reproduction of this method, on the paper's own data."""
+    for d in sorted((p for p in agent.runs_dir.glob("*") if p.is_dir()), reverse=True):
+        if d.name.endswith("-reuse") or not (d / "outputs" / "overlays").is_dir():
+            continue
+        r = summarise_run(d)
+        if r["mode"] == "reproduce" and r["method"] == s["method"]:
+            return sorted((d / "outputs" / "overlays").glob("*.png"))
+    return []
+
+
+def side_by_side(paper: list[Path], yours: list[Path], rows: list[dict], run: str) -> None:
+    """One image of the paper's data and one of yours, segmented by the same method with the same settings."""
+    name = lambda o: o.name.removesuffix("_overlay.png")  # noqa: E731
+    c1, c2 = st.columns(2)
+    a = c1.selectbox("The paper's data", paper, format_func=name, key=f"sbs-p-{run}")
+    b = c2.selectbox("Your data", yours, format_func=name, key=f"sbs-y-{run}")
+    c1.image(str(a), width="stretch")
+    c2.image(str(b), width="stretch")
+    row = next((r for r in rows if Path(r.get("image") or "").stem == name(b)), None)
+    if row:
+        c2.caption(" · ".join(f"{k.replace('_', ' ')} {v}" for k, v in row.items() if k != "image"))
+    st.caption("Outlines: the nuclei the method found. Same model and thresholds on both sides; look for merged or "
+               "split nuclei, and for missed dim ones.")
 
 
 def review(agent, run_dir: Path, ovs: list[Path], rows: list[dict], spec, data_dir: Path) -> None:
@@ -1096,8 +1181,7 @@ def empty_validate(agent: PaperAgent) -> None:
     else:
         st.info("**Nothing to run yet.** ReCRATE recreated this research's RO-Crate from the paper, but found no code "
                 "of the authors to run: its methods can only be re-implemented from the text, and will be said to be.")
-    with st.container(border=True):
-        st.markdown("**What the paper links to**")
+    with st.expander(f"What the paper links to ({len(links)})", icon=":material/link:"):
         icon = {"code": "💻", "data": "📦", "workflow": "🔁", "model": "🧠"}
         for l in links:
             what = l.get("title") or l["url"].split("://", 1)[-1]
@@ -1123,12 +1207,16 @@ def build_panel(agent: PaperAgent, has_code: bool = True) -> None:
     from recrate import build as builder
 
     s = builder.state(agent.path)
-    with st.container(border=True):
-        st.markdown("**Make its methods runnable** · Claude, on your subscription")
+    with st.expander("Make its methods runnable", icon=":material/build:",
+                     expanded=s["state"] == "running" or not agent.methods):
         if s["state"] == "running":
             build_progress(str(agent.path))
             return
-        if s["state"] in {"done", "failed", "stopped"}:
+        if s["state"] == "incomplete":
+            reached = s.get("stages") or builder.stages_done(agent.path)
+            st.warning(f"The last build stopped after stage *{reached[-1] if reached else 'none'}* "
+                       f"({len(reached)} of 10). Press **Make runnable** again to continue from there.")
+        elif s["state"] in {"done", "failed", "stopped"}:
             (st.success if s["state"] == "done" else st.warning)(f"Last build: {s['state']}.")
             if s.get("result"):
                 with st.expander("What the agent reported"):
@@ -1136,17 +1224,21 @@ def build_panel(agent: PaperAgent, has_code: bool = True) -> None:
         st.caption("Like Paper2Agent: Claude sets up the paper's own environment, turns its methods and its code's "
                    "tutorials into tools, runs each on the published data and tests it. ReCRATE adds the checks: "
                    "every parameter quoted from the paper, every result compared with the published one, an "
-                   "independent verifier. It takes 10 to 60 minutes."
+                   "independent verifier."
                    + ("" if has_code else " This paper links no code, so Claude can only implement what the text "
                       "describes, and will say so."))
         if not claude_code_binary():
             st.info("Needs Claude Code (or its VS Code extension), signed in to your Claude account.")
             return
+        depth = st.radio("How much", ["quick", "full"], horizontal=True, key=f"build-depth-{agent.name}",
+                         format_func={"quick": "Quick: the main results, up to 3 methods (about 10–20 min)",
+                                      "full": "Full: every method and the code's tutorials (can take an hour or more)"}.get,
+                         label_visibility="collapsed")
         trust = st.checkbox("I understand this downloads and runs the paper's code on this computer.",
                             key=f"trust-build-{agent.name}")
         if st.button("Make runnable", type="primary", disabled=not trust, icon=":material/build:",
                      key=f"build-{agent.name}"):
-            builder.build(agent.path, wait=False)
+            builder.build(agent.path, wait=False, quick=depth == "quick")
             note_for_chat("Started making the methods runnable (the /recrate agent, in the background).")
             st.rerun()
         with st.expander("Or run it yourself in a terminal"):
@@ -1161,10 +1253,28 @@ def build_progress(agent_dir: str) -> None:
     if s["state"] != "running":  # finished: reload so the new methods appear
         load_agent(Path(agent_dir), ss.tools.data_dir if "tools" in ss else None)
         st.rerun(scope="app")
-    steps = builder.events(agent_dir, last=12)
-    st.markdown(f"**Running** since {str(s.get('started', ''))[11:16]} UTC · {len(steps)} recent step(s)")
-    for e in steps:
-        st.caption(e)
+    from datetime import datetime, timezone
+
+    events = builder.events(agent_dir, last=30)
+    steps = [e for e in events if e.startswith("↳")]
+    note = next((e for e in reversed(events) if not e.startswith("↳")), "")
+    reached = builder.stages_done(agent_dir)
+    try:
+        t0 = datetime.fromisoformat(s["started"])
+        since = f"since {t0.astimezone().strftime('%H:%M')} ({int((datetime.now(timezone.utc) - t0).total_seconds() // 60)} min)"
+    except (KeyError, ValueError):
+        since = ""
+    now = {None: "Setting up", "setup": "Reading the paper, and surveying its code, data and environment",
+           "read": "Surveying its code, data and environment", "survey": "Reading the paper",
+           "plan": "Making each method runnable", "implement": "Assembling the RO-Crate",
+           "assemble": "Checking every quote and published value against the paper", "check": "Reproducing each method",
+           "validate": "Verifying every claim independently", "verify": "Delivering: report, server check, package",
+           }.get(reached[-1] if reached else None, "Working")
+    st.markdown(f"**{now}** · running {since} · {len(reached)} of 10 stages done")
+    line = "  ‹  ".join(html.escape(short(e, 70)) for e in reversed(steps[-6:]))  # newest first, on one line
+    st.markdown(f"<div class='steps-line' title='{html.escape(chr(10).join(steps[-12:]))}'>{line}</div>"
+                + (f"<div class='steps-line muted'>{html.escape(short(note, 160))}</div>" if note else ""),
+                unsafe_allow_html=True)
     st.caption("You can keep using the app; this updates by itself.")
 
 
@@ -1200,16 +1310,37 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
     if not agent.methods:
         st.info("No runnable method yet: see **Reproduce**.")
         return
-    unproven = [m.name for m in agent.methods if m.status != "validated"]
+    unproven = [m.name for m in agent.methods if m.status in ("differs", "failed")]
     if unproven:
         st.warning(f"**{', '.join(unproven)}** did not reproduce the paper's results (see **Reproduce**). You can "
                    "still reuse it, but use its results with care.")
     st.markdown("<div class='eyebrow'>1 · Your data</div>", unsafe_allow_html=True)
     with st.container(border=True):
-        mode = st.segmented_control("Data", ["Upload files", "A folder on this computer"], key="data_mode",
-                                    default="A folder on this computer" if tools.data_dir else "Upload files",
-                                    label_visibility="collapsed")
-        if mode == "A folder on this computer":
+        suggested = EXAMPLES.get(ss.get("ro", {}).get("example", ""), {}).get("reuse_links")
+        mode = st.segmented_control("Data", ["Upload files", "A folder on this computer", "From a link"], key="data_mode",
+                                    default="A folder on this computer" if tools.data_dir else
+                                    "From a link" if suggested else "Upload files", label_visibility="collapsed")
+        if mode == "From a link":
+            if suggested:
+                st.caption(f"Suggested for this paper: **{suggested['label']}**. Same imaging modality, different lab "
+                           "and microscope, with its own ground truth.")
+            refs = st.text_area("Links", value="\n".join(suggested["refs"]) if suggested else "",
+                                placeholder="A Zenodo DOI or record link, or direct links to files or .zip archives, "
+                                            "one per line", height=90, label_visibility="collapsed",
+                                help="Zips are unpacked side by side (images.zip and masks.zip give images/ and "
+                                     "masks/). Data behind a login is never fetched: download it and give the folder.")
+            if st.button("Fetch the data", icon=":material/download:", disabled=not refs.strip()):
+                import hashlib
+
+                key = hashlib.sha1(refs.strip().encode()).hexdigest()[:12]  # fetched once, kept for later sessions
+                dest = Path.home() / ".cache" / "recrate" / "datasets" / key
+                try:
+                    with st.spinner("Downloading and unpacking…"):
+                        tools.data_dir = fetch_dataset(refs.splitlines(), dest)
+                    st.rerun()
+                except Exception as e:  # noqa: BLE001 - network problems are reported, not raised
+                    st.error(f"Couldn't fetch the data: {e}")
+        elif mode == "A folder on this computer":
             folder = st.text_input("Folder", value=str(tools.data_dir or ""), placeholder="/path/to/your/data",
                                    help="Nothing is copied: best for large datasets.", label_visibility="collapsed")
             if folder and Path(folder).expanduser().is_dir() and Path(folder).expanduser() != tools.data_dir:
@@ -1366,17 +1497,49 @@ def role(rel: str) -> str | None:
     return next((label for pat, label in ROLE if re.search(pat, rel)), None)
 
 
+TREE_DEPTH, TREE_ITEMS = 4, 25  # a large repository (thousands of folders) stays quick to draw
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _tree_cached(root: str, bucket: int) -> str:
+    root_p = Path(root)
+    return _tree(root_p, root_p, 0, {})
+
+
 def tree_html(root: Path, d: Path, depth: int = 0) -> str:
+    """The folder tree of a research object. Redrawn at most every 30 s: a running build changes the folder
+    all the time, and the tree only reads the folders it shows."""
+    return _tree_cached(str(d), int(time.time() // 30))
+
+
+def _tree(root: Path, d: Path, depth: int, counts: dict[Path, int]) -> str:
     items = sorted([p for p in d.iterdir() if p.name not in HIDE and not p.name.startswith(".")],
                    key=lambda p: (p.is_file(), {"crate": 0, "paper": 1, "source-crate": 2}.get(p.name, 9), p.name))
     out = []
-    for f in [p for p in items if p.is_dir()]:
-        n = sum(1 for x in f.rglob("*") if x.is_file())
+    folders = [p for p in items if p.is_dir()]
+    for f in folders[:TREE_ITEMS]:
+        if depth == 0 and f.name == "env":  # the paper's own environment: thousands of files, described, not listed
+            info = ""
+            rec = f / "recrate-env.json"
+            if rec.exists():
+                e = json.loads(rec.read_text(encoding="utf-8"))
+                info = f" Python {e.get('python_version', '?')} · {len(e.get('packages', []))} packages"
+            out.append(f"<div class='f'>📁 env<span class='tag'>environment</span><span class='n'>{html.escape(info)}"
+                       "</span></div>")
+            continue
+        try:
+            n = sum(1 for x in os.scandir(f) if not x.name.startswith("."))  # what's directly inside: cheap
+        except OSError:
+            n = 0
         tag = FOLDER_LABEL.get(f.name) if depth > 0 else None
         title = FOLDER_LABEL.get(f.name, f.name) if depth == 0 else f.name
+        inner = (_tree(root, f, depth + 1, counts) if depth + 1 < TREE_DEPTH
+                 else f"<div class='n'>… {n} more inside</div>")
         out.append(f"<details{' open' if depth == 0 and f.name == 'crate' else ''}><summary>📁 {html.escape(title)}"
                    + (f"<span class='tag'>{tag}</span>" if tag and tag != f.name else "")
-                   + f" <span class='n'>{n}</span></summary><div>{tree_html(root, f, depth + 1)}</div></details>")
+                   + f" <span class='n'>{n}</span></summary><div>{inner}</div></details>")
+    if len(folders) > TREE_ITEMS:
+        out.append(f"<div class='n'>… {len(folders) - TREE_ITEMS} more folders</div>")
     files = [p for p in items if p.is_file()]
     for f in files[:20]:
         r = role(f.relative_to(root).as_posix())
@@ -1591,8 +1754,13 @@ def record_section(agent: PaperAgent, runs: list[dict]) -> Path | None:
     with st.expander("Files of this research object"):
         root = agent.path
         st.markdown(f"<div class='tree'>{tree_html(root, root)}</div>", unsafe_allow_html=True)
-        files = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()
-                       and not any(part in HIDE or part.startswith(".") for part in p.relative_to(root).parts))
+        files = []
+        for d, dirs, names in os.walk(root):  # pruned as it goes: never into .git or the hidden folders
+            dirs[:] = sorted(x for x in dirs if x not in HIDE and not x.startswith("."))
+            files += [(Path(d) / n).relative_to(root).as_posix() for n in sorted(names)
+                      if n not in HIDE and not n.startswith(".")]
+            if len(files) > 3000:
+                break
         pick = st.selectbox("Preview a file", files, index=None, placeholder="Preview a file…",
                             label_visibility="collapsed")
         if pick:
@@ -1722,9 +1890,8 @@ def landing() -> None:
                     "on them, checks your data before you reuse the method, and records every run.</p>",
                     unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1])
-        if c1.button("Start", type="primary", width="stretch", icon=":material/arrow_forward:", key="go"):
-            ss.landing = False
-            st.rerun()
+        c1.button("Start", type="primary", width="stretch", icon=":material/arrow_forward:", key="go",
+                  on_click=lambda: ss.update(landing=False, entering=True))  # one run; shown once complete
         with c2.popover("Try an example", width="stretch", icon=":material/science:"):
             for key, ex in EXAMPLES.items():
                 st.markdown(f"**{ex['title']}**  \n<span class='muted'>{ex['about']}</span>", unsafe_allow_html=True)
@@ -1809,6 +1976,9 @@ def topbar() -> None:
 
 
 # ---- page ---------------------------------------------------------------------------------------------
+# A page change (welcome page → workspace, opening an example) is shown once the new page is complete: this marker
+# tells the CSS to keep the page hidden while that one run computes, then fade it in. Later runs carry no marker.
+st.html(f"<span class='rc-mark {'rc-entering' if ss.pop('entering', False) else 'rc-settled'}'></span>")
 if ss.get("engine_choice") not in AGENTS:
     ss.engine_choice = default_agent()
 sidebar()

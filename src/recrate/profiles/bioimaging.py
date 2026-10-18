@@ -103,10 +103,14 @@ def to_um(value: float | None, unit: str | None) -> float | None:
 
 
 def list_images(data_path: Path) -> list[Path]:
+    """The images of a dataset: in the folder itself, or in its images/ subfolder (with masks/ beside it)."""
     data_path = Path(data_path)
     if data_path.is_file():
         return [data_path] if data_path.suffix.lower() in IMAGE_SUFFIXES else []
-    return sorted(p for p in data_path.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
+    found = sorted(p for p in data_path.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
+    if not found and (data_path / "images").is_dir():
+        found = sorted(p for p in (data_path / "images").iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
+    return found
 
 
 def read_image_metadata(path: Path) -> dict[str, Any]:
@@ -296,6 +300,11 @@ class BioimagingProfile(DomainProfile):
             return
         (pd, ps), (md, ms) = stats(paper), stats(files)
         exp, obs = f"{', '.join(sorted(pd))}, range {ps:.4g}", f"{', '.join(sorted(md))}, range {ms:.4g}"
+        if str(spec.data_input.prop("intensity") or "").startswith("normalised"):  # the method rescales each image
+            report.items.append(CheckItem("Bit depth / intensity", exp, obs, OK,
+                                          "" if pd == md else "Different bit depth, but the method normalises each "
+                                                              "image's intensity, so it doesn't matter."))
+            return
         if pd != md:
             report.items.append(CheckItem("Bit depth / intensity", exp, obs, WARN,
                                           "Different bit depth from the paper's images: intensity-based settings "

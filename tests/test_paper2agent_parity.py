@@ -81,10 +81,45 @@ def test_build_runs_the_recrate_agent_and_reports_progress(tmp_path):
                                                             "input": {"command": "recrate env /x"}}]}},
              {"type": "assistant", "message": {"content": [{"type": "text", "text": "All methods reproduce."}]}},
              {"type": "result", "subtype": "success", "result": "Done: 1 method reproduces.", "session_id": "s1"}]
-    fake.write_text(f"#!{sys.executable}\nimport sys\nassert sys.argv[2].startswith('/recrate ')\n"
+    record_stages = ("import json, pathlib\nagent = pathlib.Path(sys.argv[2].split(' ', 1)[1].removesuffix(' quick'))\n"
+                     "(agent / 'work').mkdir(exist_ok=True)\n(agent / 'work' / 'state.json').write_text(json.dumps("
+                     "{'events': [{'stage': s} for s in ['setup', 'read', 'survey', 'plan', 'implement', 'assemble',"
+                     " 'check', 'validate', 'verify', 'deliver']]}))\n")
+    fake.write_text(f"#!{sys.executable}\nimport sys\nassert sys.argv[2].startswith('/recrate ')\n" + record_stages
                     + "".join(f"print({json.dumps(json.dumps(x))})\n" for x in lines))
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     assert build(a.path, wait=True, binary=str(fake)) == 0
     s = state(a.path)
     assert s["state"] == "done" and s["result"] == "Done: 1 method reproduces." and s["session"] == "s1"
+    assert s["stages"][-1] == "deliver"  # done means delivered, not just that Claude Code exited
+    assert s["quick"] is True  # quick by default: at most 3 methods
     assert events(a.path) == ["↳ Bash: recrate env /x", "All methods reproduce."]
+
+
+def test_a_build_that_stops_early_is_resumed_then_called_incomplete(tmp_path):
+    """Claude Code exits when its turn ends: a pass that stops early is resumed, and is never called done."""
+    import stat
+    import sys
+
+    from recrate.build import build, state
+
+    a = _agent(tmp_path)
+    fake = tmp_path / "claude"
+    calls = tmp_path / "calls.txt"
+    # each pass records one more stage, and stops before delivery
+    fake.write_text(f"""#!{sys.executable}
+import json, pathlib, sys
+open({str(calls)!r}, 'a').write(' '.join(sys.argv) + '\\n')
+n = len(open({str(calls)!r}).read().splitlines())
+agent = pathlib.Path({str(a.path)!r})
+(agent / 'work').mkdir(exist_ok=True)
+stages = ['setup', 'read', 'survey', 'plan'][:n]
+(agent / 'work' / 'state.json').write_text(json.dumps({{'events': [{{'stage': s}} for s in stages]}}))
+print(json.dumps({{'type': 'result', 'subtype': 'success', 'result': 'waiting for subagents', 'session_id': 's1'}}))
+""")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    assert build(a.path, wait=True, binary=str(fake)) == 1
+    args = calls.read_text().splitlines()
+    assert len(args) == 4 and "--resume s1" in args[1] and "unattended" in args[0]  # resumed, told to wait
+    s = state(a.path)
+    assert s["state"] == "incomplete" and s["stages"] == ["setup", "read", "survey", "plan"]

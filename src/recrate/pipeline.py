@@ -10,6 +10,7 @@ Follow-up checks of a reproduction that differs are in followup.py; they run thr
 
 from __future__ import annotations
 
+import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -91,10 +92,16 @@ def execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: str
     if spec.workflow_path is None or not spec.workflow_path.exists():
         raise CrateError("The crate's workflow file is missing.")
     run = get_runner(runner, spec.workflow_language, spec.workflow_path)
-    if run.name in {"script", "notebook"}:
-        from .env import env_python
+    from .env import env_python, env_rscript
 
-        run.python = env_python(spec.path.parent)  # the research object's own environment, when built
+    agent_dir = spec.path.parent
+    if run.name in {"script", "notebook"}:
+        run.python = env_python(agent_dir)  # the research object's own environment, when built
+    if run.name == "script":
+        run.rscript = env_rscript(agent_dir)
+    if run.name == "quarto" and env_rscript(agent_dir):  # Quarto runs R code with the paper's own R
+        r_bin = env_rscript(agent_dir).parent
+        run.env_vars = {"QUARTO_R": str(r_bin / "R"), "PATH": f"{r_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
     with tempfile.TemporaryDirectory(prefix="recrate-") as tmp:
         work = Path(tmp)
         result = run.run(spec.workflow_path, data, work / "out", params, channel=channel, progress=progress)

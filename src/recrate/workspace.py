@@ -44,7 +44,11 @@ def numeric_columns(rows: list[dict[str, str]]) -> list[str]:
         except (TypeError, ValueError):
             return False
     skip = {"pixel_size"}
-    return [c for c in (rows[0] if rows else {}) if c not in skip and all(num(r[c]) for r in rows)]
+    cols = [c for c in (rows[0] if rows else {}) if c not in skip and all(num(r[c]) for r in rows)]
+    first = next(iter(rows[0]), None) if rows else None
+    if cols and cols[0] == first and len(cols) > 1 and len({r[first] for r in rows}) == len(rows):
+        cols = cols[1:]  # the first column names the rows (e.g. an IoU threshold): a key, not a measure
+    return cols
 
 
 def whatif(spec: MethodSpec, data: Path, params: dict[str, Any], runner: str = "auto", channel: int = 0,

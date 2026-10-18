@@ -193,7 +193,12 @@ def cmd_review(a) -> int:
 def cmd_env(a) -> int:
     from .env import build_env
 
-    rec = build_env(a.agent, python=a.python, extra=a.extra or None)
+    if a.r:
+        from .env import build_r_env
+
+        build_r_env(a.agent)
+        return 0
+    rec = build_env(a.agent, python=a.python, extra=a.extra or None, rebuild=a.rebuild)
     return 0 if rec["ok"] else 1
 
 
@@ -203,7 +208,7 @@ def cmd_build(a) -> int:
     if a.status:
         print(describe_build(a.agent))
         return 0
-    return build(a.agent, wait=True)
+    return build(a.agent, wait=True, quick=not a.full)
 
 
 def cmd_install_mcp(a) -> int:
@@ -463,15 +468,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     from .install import CLIENTS
 
-    s = sub.add_parser("env", help="Build the research object's own Python environment from its code (uv)")
+    s = sub.add_parser("env", help="Build the research object's own environment: Python (uv), or R with --r")
     s.add_argument("agent")
     s.add_argument("--python", help="Python version (default 3.11)")
     s.add_argument("--extra", nargs="*", help="Extra packages to install")
+    s.add_argument("--r", action="store_true", help="Build the R side (env/r): R and the code's packages, conda-forge")
+    s.add_argument("--rebuild", action="store_true", help="Delete the environment and start again")
     s.set_defaults(func=cmd_env)
 
     s = sub.add_parser("build", help="Make a paper's methods runnable: the /recrate agent, run by Claude Code")
     s.add_argument("agent", help="A research object folder (recrate agentify --paper ... first)")
     s.add_argument("--status", action="store_true", help="Show the progress of a running or finished build")
+    s.add_argument("--full", action="store_true", help="Every method and the code's tutorials (default: quick, at "
+                                                        "most 3 methods, about 10 to 20 minutes)")
     s.set_defaults(func=cmd_build)
 
     s = sub.add_parser("install-mcp", help="Register an agent with Claude Desktop, Claude Code or any MCP client")

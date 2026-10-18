@@ -81,6 +81,8 @@ def build_ladder(spec, comparison=None, error: str | None = None, blocked: str |
         runs = step(NOT_CHECKED, "Not run yet.")
 
     numbers = step(NOT_CHECKED, "No run compared with the published results yet.")
+    if not has_results and ran:
+        numbers = step(NOT_CHECKED, "The paper publishes no results for this method to compare with.")
     if comparison is not None and comparison.measures:
         n = len(comparison.measures)
         ok = sum(1 for m in comparison.measures if m.within)
@@ -127,23 +129,30 @@ def verdict_sentence(ladders: dict[str, dict[str, dict[str, str]]]) -> str:
     if not ladders:
         return "Nothing to reproduce yet: no runnable method."
     names = list(ladders)
+    # a method that runs but has no published numbers is not a failed reproduction: it is said apart
+    nothing = [m for m in names if ladders[m]["runs"]["status"] == PASSED
+               and ladders[m]["numbers"]["status"] == NOT_CHECKED and "no results" in ladders[m]["numbers"]["reason"]]
+    note = (f" {', '.join(nothing)} runs; the paper publishes no numbers to compare it with." if nothing else "")
+    names = [m for m in names if m not in nothing]
+    if not names:
+        return f"Runs, nothing to compare: {', '.join(nothing)} runs, and the paper publishes no numbers for it."
     passed = [m for m in names if ladders[m]["numbers"]["status"] == PASSED]
     differs = [m for m in names if ladders[m]["numbers"]["status"] in (PARTIAL, FAILED)]
     failed = [m for m in names if ladders[m]["runs"]["status"] == FAILED]
     if len(passed) == len(names):
-        return f"Reproduced: {len(names)} of {len(names)} method(s) give the published numbers within tolerance."
+        return f"Reproduced: {len(names)} of {len(names)} method(s) give the published numbers within tolerance.{note}"
     if failed and not passed and not differs:
         m = failed[0]
-        return f"Not reproduced: {m} did not run ({ladders[m]['runs']['reason']})."
+        return f"Not reproduced: {m} did not run ({ladders[m]['runs']['reason']}).{note}"
     if differs and len(names) == 1:
         m = differs[0]
-        return f"Partly reproduced: {m} has {ladders[m]['numbers']['reason']}"
+        return f"Partly reproduced: {m} has {ladders[m]['numbers']['reason']}{note}"
     if differs:
         counts = "; ".join(f"{m} {ladders[m]['numbers']['reason'].split(' ')[0]}" for m in differs[:4])
         more = f" and {len(differs) - 4} more" if len(differs) > 4 else ""
         return (f"Partly reproduced: {len(passed)} of {len(names)} methods match in full. Values within tolerance: "
-                f"{counts}{more}.")
-    return f"Not checked yet: {len(passed)} of {len(names)} method(s) reproduced so far."
+                f"{counts}{more}.{note}")
+    return f"Not checked yet: {len(passed)} of {len(names)} method(s) reproduced so far.{note}"
 
 
 # ---- output kinds ---------------------------------------------------------------------------------------------

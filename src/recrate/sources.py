@@ -304,3 +304,75 @@ def from_upload(path: Path, dest: Path) -> Found:
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(path, dest / path.name)
     return Found("data", path.name, dest)
+
+
+# ---- datasets to reuse a method on ------------------------------------------------------------------------
+
+DATASET_LIMIT = 2 * 2 ** 30  # 2 GB: larger data is read in place, from a folder, not downloaded
+
+
+def _download(url: str, dest: Path, limit: int = DATASET_LIMIT, progress=None) -> Path:
+    """Stream ``url`` to ``dest`` (never more than ``limit`` bytes)."""
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=120, context=_ssl_context()) as r, dest.open("wb") as fh:
+        total = int(r.headers.get("Content-Length") or 0)
+        if total > limit:
+            raise ValueError(f"{url} is {total / 2**30:.1f} GB, over the {limit / 2**30:.0f} GB limit: download it "
+                             "yourself and point ReCRATE at the folder.")
+        done = 0
+        while chunk := r.read(1 << 20):
+            done += len(chunk)
+            if done > limit:
+                raise ValueError(f"{url} is over the {limit / 2**30:.0f} GB limit.")
+            fh.write(chunk)
+            if progress:
+                progress(done, total)
+    return dest
+
+
+def dataset_root(folder: Path) -> Path:
+    """The folder a method should read: the one with the most images (or with images/ and masks/ inside)."""
+    from collections import Counter
+
+    exts = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".csv", ".tsv", ".nii", ".gz", ".h5", ".zarr"}
+    counts = Counter(p.parent for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in exts
+                     and "__MACOSX" not in p.parts)
+    if not counts:
+        return folder
+    named = [d for d in counts if d.name.lower() in {"images", "imgs", "raw"}]
+    if named:  # images/ (with masks/ beside it): the method reads the folder that holds both
+        return max(named, key=lambda d: counts[d]).parent
+    return counts.most_common(1)[0][0]
+
+
+def fetch_dataset(refs: list[str], dest: Path, progress=None) -> Path:
+    """Fetch the data to reuse a method on: Zenodo records (by DOI or link) or direct links to files or zips.
+    Zips are unpacked (safely) side by side, so ``images.zip`` and ``masks.zip`` give ``images/`` and ``masks/``.
+    Returns the folder to run on. Data behind a login is never fetched: give a folder instead.
+    Fetching the same links into the same folder again downloads nothing."""
+    dest = Path(dest)
+    refs = [r.strip() for r in refs if r.strip()]
+    marker = dest / ".recrate-fetched"
+    if marker.exists() and marker.read_text(encoding="utf-8").splitlines() == refs:
+        return dataset_root(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    downloads = dest / ".downloads"
+    downloads.mkdir(exist_ok=True)
+    for ref in refs:
+        ids = identify(ref)
+        files: list[tuple[str, str]] = []
+        if ids and ids[0].kind == "zenodo":
+            rec = _json(f"https://zenodo.org/api/records/{ids[0].id}")
+            files = [(f["key"], f["links"]["self"]) for f in rec.get("files", [])]
+        else:
+            files = [(Path(urllib.parse.urlparse(ref).path).name or "data", ref)]
+        for name, url in files:
+            target = _download(url, downloads / name, progress=progress)
+            if zipfile.is_zipfile(target):
+                safe_unzip(target, dest)
+            else:
+                shutil.copy2(target, dest / name)
+    shutil.rmtree(downloads, ignore_errors=True)
+    shutil.rmtree(dest / "__MACOSX", ignore_errors=True)
+    marker.write_text("\n".join(refs), encoding="utf-8")
+    return dataset_root(dest)

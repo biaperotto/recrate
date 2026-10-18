@@ -1,0 +1,999 @@
+{
+  "@context": "https://w3id.org/ro/crate/1.1/context",
+  "@graph": [
+    {
+      "@id": "ro-crate-metadata.json",
+      "@type": "CreativeWork",
+      "conformsTo": {
+        "@id": "https://w3id.org/ro/crate/1.1"
+      },
+      "about": {
+        "@id": "./"
+      }
+    },
+    {
+      "@id": "./",
+      "@type": "Dataset",
+      "name": "Cell Detection with Star-convex Polygons",
+      "description": "Schmidt, Weigert, Broaddus & Myers (2018), MICCAI; preprint arXiv:1806.03535. StarDist detects cell nuclei in fluorescence microscopy images as star-convex polygons. Crate described by ReCRATE from the paper and its code: the paper's own trained model (StarDist 2D_paper_dsb2018), its test images with ground truth (the DSB2018 subset the authors released), and Table 1's average precision.",
+      "mainEntity": {
+        "@id": "workflows/stardist_ap.py"
+      },
+      "hasPart": [
+        {
+          "@id": "workflows/requirements.txt"
+        },
+        {
+          "@id": "workflows/stardist_ap.py"
+        },
+        {
+          "@id": "data/stardist-ap/"
+        },
+        {
+          "@id": "expected/stardist-ap.csv"
+        },
+        {
+          "@id": "workflows/segment_nuclei.py"
+        },
+        {
+          "@id": "data/segment-nuclei/"
+        }
+      ],
+      "additionalProperty": [
+        {
+          "@id": "#domain-profile"
+        },
+        {
+          "@id": "#draft"
+        }
+      ],
+      "conformsTo": [
+        {
+          "@id": "https://w3id.org/workflowhub/workflow-ro-crate/1.0"
+        }
+      ],
+      "identifier": "https://arxiv.org/abs/1806.03535#recrate",
+      "datePublished": "2018-06-09",
+      "citation": {
+        "@id": "https://arxiv.org/abs/1806.03535"
+      },
+      "license": {
+        "@id": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "author": [
+        {
+          "@id": "#author-0"
+        },
+        {
+          "@id": "#author-1"
+        },
+        {
+          "@id": "#author-2"
+        },
+        {
+          "@id": "#author-3"
+        }
+      ]
+    },
+    {
+      "@id": "https://w3id.org/workflowhub/workflow-ro-crate/1.0",
+      "@type": "CreativeWork",
+      "name": "Workflow RO-Crate",
+      "version": "1.0"
+    },
+    {
+      "@id": "workflows/requirements.txt",
+      "@type": "File",
+      "name": "Python requirements of the workflows",
+      "encodingFormat": "text/plain"
+    },
+    {
+      "@id": "#software-0",
+      "@type": "SoftwareApplication",
+      "name": "stardist",
+      "softwareVersion": "0.9.2"
+    },
+    {
+      "@id": "#software-1",
+      "@type": "SoftwareApplication",
+      "name": "tensorflow",
+      "softwareVersion": "2.21.0"
+    },
+    {
+      "@id": "#language-python",
+      "@type": "ComputerLanguage",
+      "name": "Python"
+    },
+    {
+      "@id": "#stardist-ap-in-data-dimensions",
+      "@type": "PropertyValue",
+      "name": "dimensions",
+      "value": "2D"
+    },
+    {
+      "@id": "#stardist-ap-in-data-channels",
+      "@type": "PropertyValue",
+      "name": "channels",
+      "value": 1
+    },
+    {
+      "@id": "#stardist-ap-in-data-intensity",
+      "@type": "PropertyValue",
+      "name": "intensity",
+      "value": "normalised per image (percentiles 1 to 99.8)"
+    },
+    {
+      "@id": "#stardist-ap-in-data",
+      "@type": "FormalParameter",
+      "name": "input_dir",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "image/tiff",
+      "description": "images/ (fluorescence, one nucleus channel) and masks/ (ground-truth labels, the same names)",
+      "additionalProperty": [
+        {
+          "@id": "#stardist-ap-in-data-dimensions"
+        },
+        {
+          "@id": "#stardist-ap-in-data-channels"
+        },
+        {
+          "@id": "#stardist-ap-in-data-intensity"
+        }
+      ]
+    },
+    {
+      "@id": "#stardist-ap-in-prob-role",
+      "@type": "PropertyValue",
+      "name": "role",
+      "value": "fixed"
+    },
+    {
+      "@id": "#stardist-ap-in-prob-quote",
+      "@type": "PropertyValue",
+      "name": "quote",
+      "value": "We only consider polygons associated with pixels above an object probability threshold as candidates"
+    },
+    {
+      "@id": "#stardist-ap-in-prob",
+      "@type": "FormalParameter",
+      "name": "prob_thresh",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Float",
+      "description": "Object probability threshold for candidate polygons (the model's published thresholds)",
+      "defaultValue": "0.417819",
+      "additionalProperty": [
+        {
+          "@id": "#stardist-ap-in-prob-role"
+        },
+        {
+          "@id": "#stardist-ap-in-prob-quote"
+        }
+      ]
+    },
+    {
+      "@id": "#stardist-ap-in-nms-role",
+      "@type": "PropertyValue",
+      "name": "role",
+      "value": "fixed"
+    },
+    {
+      "@id": "#stardist-ap-in-nms-quote",
+      "@type": "PropertyValue",
+      "name": "quote",
+      "value": "We perform common, greedy non-maximum suppression"
+    },
+    {
+      "@id": "#stardist-ap-in-nms",
+      "@type": "FormalParameter",
+      "name": "nms_thresh",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Float",
+      "description": "Overlap threshold of the non-maximum suppression (the model's published thresholds)",
+      "defaultValue": "0.5",
+      "additionalProperty": [
+        {
+          "@id": "#stardist-ap-in-nms-role"
+        },
+        {
+          "@id": "#stardist-ap-in-nms-quote"
+        }
+      ]
+    },
+    {
+      "@id": "#stardist-ap-out-ap-kind",
+      "@type": "PropertyValue",
+      "name": "kind",
+      "value": "table"
+    },
+    {
+      "@id": "#stardist-ap-out-ap-tolerance-abs-ap",
+      "@type": "PropertyValue",
+      "name": "tolerance_abs:ap",
+      "value": 5e-05
+    },
+    {
+      "@id": "#stardist-ap-out-ap-tolerance-abs-ap-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:ap",
+      "value": "paper-rounding",
+      "description": "Table 1 prints four decimals: half a unit of the last decimal"
+    },
+    {
+      "@id": "#stardist-ap-out-ap",
+      "@type": "FormalParameter",
+      "name": "results",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "text/csv",
+      "description": "Average precision at each IoU threshold",
+      "additionalProperty": [
+        {
+          "@id": "#stardist-ap-out-ap-kind"
+        },
+        {
+          "@id": "#stardist-ap-out-ap-tolerance-abs-ap"
+        },
+        {
+          "@id": "#stardist-ap-out-ap-tolerance-abs-ap-source"
+        }
+      ]
+    },
+    {
+      "@id": "workflows/stardist_ap.py",
+      "@type": [
+        "File",
+        "SoftwareSourceCode",
+        "ComputationalWorkflow"
+      ],
+      "name": "stardist_ap",
+      "programmingLanguage": {
+        "@id": "#language-python"
+      },
+      "softwareRequirements": [
+        {
+          "@id": "#software-0"
+        },
+        {
+          "@id": "#software-1"
+        }
+      ],
+      "input": [
+        {
+          "@id": "#stardist-ap-in-data"
+        },
+        {
+          "@id": "#stardist-ap-in-prob"
+        },
+        {
+          "@id": "#stardist-ap-in-nms"
+        }
+      ],
+      "output": [
+        {
+          "@id": "#stardist-ap-out-ap"
+        }
+      ],
+      "description": "Table 1, DSB2018: average precision of StarDist at IoU thresholds 0.5 to 0.9, with the model trained in the paper, on the paper's 50 test images and their manual annotations."
+    },
+    {
+      "@id": "data/stardist-ap/",
+      "@type": "Dataset",
+      "name": "Example data from the paper (stardist_ap)",
+      "hasPart": [],
+      "exampleOfWork": {
+        "@id": "#stardist-ap-in-data"
+      }
+    },
+    {
+      "@id": "expected/stardist-ap.csv",
+      "@type": "File",
+      "name": "Results reported in the paper (stardist_ap)",
+      "encodingFormat": "text/csv",
+      "exampleOfWork": {
+        "@id": "#stardist-ap-out-ap"
+      }
+    },
+    {
+      "@id": "#segment-nuclei-in-images-dimensions",
+      "@type": "PropertyValue",
+      "name": "dimensions",
+      "value": "2D"
+    },
+    {
+      "@id": "#segment-nuclei-in-images-channels",
+      "@type": "PropertyValue",
+      "name": "channels",
+      "value": 1
+    },
+    {
+      "@id": "#segment-nuclei-in-images-intensity",
+      "@type": "PropertyValue",
+      "name": "intensity",
+      "value": "normalised per image (percentiles 1 to 99.8)"
+    },
+    {
+      "@id": "#segment-nuclei-in-images",
+      "@type": "FormalParameter",
+      "name": "input_dir",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "image/tiff",
+      "description": "Fluorescence images of nuclei, one channel (in the folder or in images/); optional ground truth in masks/",
+      "additionalProperty": [
+        {
+          "@id": "#segment-nuclei-in-images-dimensions"
+        },
+        {
+          "@id": "#segment-nuclei-in-images-channels"
+        },
+        {
+          "@id": "#segment-nuclei-in-images-intensity"
+        }
+      ]
+    },
+    {
+      "@id": "#segment-nuclei-in-prob-role",
+      "@type": "PropertyValue",
+      "name": "role",
+      "value": "fixed"
+    },
+    {
+      "@id": "#segment-nuclei-in-prob-quote",
+      "@type": "PropertyValue",
+      "name": "quote",
+      "value": "We only consider polygons associated with pixels above an object probability threshold as candidates"
+    },
+    {
+      "@id": "#segment-nuclei-in-prob",
+      "@type": "FormalParameter",
+      "name": "prob_thresh",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Float",
+      "description": "Object probability threshold for candidate polygons (the model's published thresholds)",
+      "defaultValue": "0.417819",
+      "additionalProperty": [
+        {
+          "@id": "#segment-nuclei-in-prob-role"
+        },
+        {
+          "@id": "#segment-nuclei-in-prob-quote"
+        }
+      ]
+    },
+    {
+      "@id": "#segment-nuclei-in-nms-role",
+      "@type": "PropertyValue",
+      "name": "role",
+      "value": "fixed"
+    },
+    {
+      "@id": "#segment-nuclei-in-nms-quote",
+      "@type": "PropertyValue",
+      "name": "quote",
+      "value": "We perform common, greedy non-maximum suppression"
+    },
+    {
+      "@id": "#segment-nuclei-in-nms",
+      "@type": "FormalParameter",
+      "name": "nms_thresh",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Float",
+      "description": "Overlap threshold of the non-maximum suppression (the model's published thresholds)",
+      "defaultValue": "0.5",
+      "additionalProperty": [
+        {
+          "@id": "#segment-nuclei-in-nms-role"
+        },
+        {
+          "@id": "#segment-nuclei-in-nms-quote"
+        }
+      ]
+    },
+    {
+      "@id": "#segment-nuclei-in-scale-scaling",
+      "@type": "PropertyValue",
+      "name": "scaling",
+      "value": "scales_with:pixel size^1"
+    },
+    {
+      "@id": "#segment-nuclei-in-scale-unit",
+      "@type": "PropertyValue",
+      "name": "unit",
+      "value": "dimensionless"
+    },
+    {
+      "@id": "#segment-nuclei-in-scale",
+      "@type": "FormalParameter",
+      "name": "scale",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Float",
+      "description": "Resize factor before prediction, so nuclei have the size in pixels the model was trained on: 2 for images whose pixels are twice the paper's",
+      "defaultValue": "1.0",
+      "additionalProperty": [
+        {
+          "@id": "#segment-nuclei-in-scale-scaling"
+        },
+        {
+          "@id": "#segment-nuclei-in-scale-unit"
+        }
+      ]
+    },
+    {
+      "@id": "#segment-nuclei-out-seg-kind",
+      "@type": "PropertyValue",
+      "name": "kind",
+      "value": "table"
+    },
+    {
+      "@id": "#segment-nuclei-out-seg",
+      "@type": "FormalParameter",
+      "name": "results",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "text/csv",
+      "description": "Per image: count, mean area in pixels; with ground truth, its count and AP at IoU 0.5",
+      "additionalProperty": [
+        {
+          "@id": "#segment-nuclei-out-seg-kind"
+        }
+      ]
+    },
+    {
+      "@id": "workflows/segment_nuclei.py",
+      "@type": [
+        "File",
+        "SoftwareSourceCode",
+        "ComputationalWorkflow"
+      ],
+      "name": "segment_nuclei",
+      "programmingLanguage": {
+        "@id": "#language-python"
+      },
+      "softwareRequirements": [
+        {
+          "@id": "#software-0"
+        },
+        {
+          "@id": "#software-1"
+        }
+      ],
+      "input": [
+        {
+          "@id": "#segment-nuclei-in-images"
+        },
+        {
+          "@id": "#segment-nuclei-in-prob"
+        },
+        {
+          "@id": "#segment-nuclei-in-nms"
+        },
+        {
+          "@id": "#segment-nuclei-in-scale"
+        }
+      ],
+      "output": [
+        {
+          "@id": "#segment-nuclei-out-seg"
+        }
+      ],
+      "description": "StarDist nuclei segmentation with the paper's model, for any fluorescence nuclei images: each image's nuclei (label masks), their number and mean size; with ground truth beside the images (masks/), also its average precision at IoU 0.5."
+    },
+    {
+      "@id": "data/segment-nuclei/",
+      "@type": "Dataset",
+      "name": "Example data from the paper (segment_nuclei)",
+      "hasPart": [
+        {
+          "@id": "data/segment-nuclei/0bda515e370294ed94efd36bd53782288acacb040c171df2ed97fd691fc9d8fe.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/0bf4b144167694b6846d584cf52c458f34f28fcae75328a2a096c8214e01c0d0.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/1b6044e4858a9b7cee9b0028d8e54fbc8fb72e6c4424ab5b9f3859bfc72b33c5.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/1c2f9e121fc207efff79d46390df1a740566b683ff56a96d8cabe830a398dd2e.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/1db1cddf28e305c9478519cfac144eee2242183fe59061f1f15487e925e8f5b5.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/1f9e429c12f4477221b5b855a5f494fda2ef6d064ff75b061ffaf093e91758c5.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/2817299fd3b88670e86a9db5651ba24333c299d1d41e5491aabfcd95aee84174.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/2cfa857e63be1b418c91ad5ea1f8d136fd1b80fc856e1d4277274c3dea28011c.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/33618678c167c5e07be02c49d0c43bcd90493ba5d83110a631409a4d3ccc1e51.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/3477024fd843e46097840360f9cdee24b76bf5c593ed27a9aee7a5728a06aa51.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/3582166ee20755856adf4882a8bfacb616fce4247911605a109c4862de421bcd.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/3bfd6bb152310f93daa6f4e1867c10572946e874b3a30c9ba8e0fcdeb590300b.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/43cf6b2ec0b0745ac2b87b4d8780f62e9050d3f5d50a1fcefa42d166191e84c6.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/4d40de30a3db3bc4f241cb7f48e8497c11e8f20a99bf55788bdce17242029745.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/4dbbb275960ab9e4ec2c66c8d3000f7c70c8dce5112df591b95db84e25efa6e9.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/547ef286ee5f4e5dce533e982e6992ada67b7d727fdd3cfa6576f24c631a7ae6.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/57b49733c5a3c268b013553635a826e6a1b10e699bbd19c3b842375fe0adf344.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/5953af5080d981b554529971903d8bee9871457a4361b51f04ba04f43793dd8f.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/5ddbfba2519484316e4b7ccabfa605e6e6fd96c3d87ac8cdfd2c134571a15311.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/5f9d29d6388c700f35a3c29fa1b1ce0c1cba6667d05fdb70bd1e89004dcf71ed.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/602f267432e7a573e1092f1cf48135c82d0fbc8722bc028b9330ec801a40bb18.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/608ff81c8a0c8b622f6648a9c7f935d85f0c503f515ef2ac3728387be1953ee8.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/6bd18a218d25247dc456aed124c066a6397fb93086e860e4d04014bfa9c9555d.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/79dfcbc9361edd3a1ffe81a5bdaa22a197ad1341f3fa64b86a646c2607d6b324.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/7d40ea6ead1bec903f26d9046d291aedcb12a584b4d3b337ea252b34c7d86072.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/84e642d75ae6ece8147272418b6fe13d04db8d076fe306c4acedc329fceab564.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/89be66f88612aae541f5843abcd9c015832b5d6c54a28103b3019f7f38df8a6d.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/8fdc34509a0c3721f7b5e235c8a93e1f553343aa17ad103a1e89e3509a3e1570.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/9520aff4efe87bd8f3901652fa2dde9b4bc9c679325966145ce00c1ca33f35de.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/9ebcfaf2322932d464f15b5662cae4d669b2d785b8299556d73fffcae8365d32.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/a5e695fce80dc03efb6665a9ec14500ab47f4ee9f6437531388dd3cc32c90db1.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/a6e81120d1cb9f71f8a25f90a5d56c4b714a642fc496a705e38921fd90a3f69c.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/afa272dc01825d4b929b3bfc79a10f68dd3c163c450d858b964d1ce0bc93e131.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/b560dba92fbf2af785739efced50d5866c86dc4dada9be3832138bef4c3524d2.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/b61d3fb0d0ebbee018346e0adeff9e9178f33aa95262779b3c196f93b4ace895.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/b6edad733399c83c8eb7a59c0d37b54e10cc0d59894e39ff843884d84f61dee1.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/bde3727f3a9e8b2b58f383ebc762b2157eb50cdbff23e69b025418b43967556b.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/bf7691b0a79811fa068b7408cbce636a73f01ef9e971a95da1a2d96df73782b6.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/c304a1fdf3bca2f4b4580d2cac59942e2224a7678001bf5ed9d9852f57708932.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/c9f305be17312bdb9530fb4f1adc6d29730ddbe0e74730cbf031de174bf437b7.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/d8607b21411c9c8ab532faaeba15f8818a92025897950f94ee4da4f74f53660a.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/e321cfa987e77c21373a0f8b1236c83d6636306949a82a7f5b07fc0838e7777f.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/e5a7b8a9924b26b3abf039255a8a3bb00258f4966f68ff3349560b4350af9367.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/e66f25e175abab08ecb4e5f6859db64a211e0ddffb262d7e727b9d9bd4aad2d2.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/ec486143ecfec847c22cd8cbc207d85312bcf38e61c9b9a805e0d12add62da8d.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/ee927e8255096971ddae1bd975cf80c4ad7c847c82d0b5f5dd2ddfe5407007ee.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/eeb142344e9de3250ab748f93940bf06be70d5078337680998468a134a101698.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/f26f4c2c70c38fe12e00d5a814d5116691f2ca548908126923fd76ddd665ed24.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/feffce59a1a3eb0a6a05992bb7423c39c7d52865846da36d89e2a72c379e5398.tif"
+        },
+        {
+          "@id": "data/segment-nuclei/ff599c7301daa1f783924ac8cbe3ce7b42878f15a39c2d19659189951f540f48.tif"
+        }
+      ],
+      "exampleOfWork": {
+        "@id": "#segment-nuclei-in-images"
+      }
+    },
+    {
+      "@id": "data/segment-nuclei/0bda515e370294ed94efd36bd53782288acacb040c171df2ed97fd691fc9d8fe.tif",
+      "@type": "File",
+      "name": "0bda515e370294ed94efd36bd53782288acacb040c171df2ed97fd691fc9d8fe.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/0bf4b144167694b6846d584cf52c458f34f28fcae75328a2a096c8214e01c0d0.tif",
+      "@type": "File",
+      "name": "0bf4b144167694b6846d584cf52c458f34f28fcae75328a2a096c8214e01c0d0.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/1b6044e4858a9b7cee9b0028d8e54fbc8fb72e6c4424ab5b9f3859bfc72b33c5.tif",
+      "@type": "File",
+      "name": "1b6044e4858a9b7cee9b0028d8e54fbc8fb72e6c4424ab5b9f3859bfc72b33c5.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/1c2f9e121fc207efff79d46390df1a740566b683ff56a96d8cabe830a398dd2e.tif",
+      "@type": "File",
+      "name": "1c2f9e121fc207efff79d46390df1a740566b683ff56a96d8cabe830a398dd2e.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/1db1cddf28e305c9478519cfac144eee2242183fe59061f1f15487e925e8f5b5.tif",
+      "@type": "File",
+      "name": "1db1cddf28e305c9478519cfac144eee2242183fe59061f1f15487e925e8f5b5.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/1f9e429c12f4477221b5b855a5f494fda2ef6d064ff75b061ffaf093e91758c5.tif",
+      "@type": "File",
+      "name": "1f9e429c12f4477221b5b855a5f494fda2ef6d064ff75b061ffaf093e91758c5.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/2817299fd3b88670e86a9db5651ba24333c299d1d41e5491aabfcd95aee84174.tif",
+      "@type": "File",
+      "name": "2817299fd3b88670e86a9db5651ba24333c299d1d41e5491aabfcd95aee84174.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/2cfa857e63be1b418c91ad5ea1f8d136fd1b80fc856e1d4277274c3dea28011c.tif",
+      "@type": "File",
+      "name": "2cfa857e63be1b418c91ad5ea1f8d136fd1b80fc856e1d4277274c3dea28011c.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/33618678c167c5e07be02c49d0c43bcd90493ba5d83110a631409a4d3ccc1e51.tif",
+      "@type": "File",
+      "name": "33618678c167c5e07be02c49d0c43bcd90493ba5d83110a631409a4d3ccc1e51.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/3477024fd843e46097840360f9cdee24b76bf5c593ed27a9aee7a5728a06aa51.tif",
+      "@type": "File",
+      "name": "3477024fd843e46097840360f9cdee24b76bf5c593ed27a9aee7a5728a06aa51.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/3582166ee20755856adf4882a8bfacb616fce4247911605a109c4862de421bcd.tif",
+      "@type": "File",
+      "name": "3582166ee20755856adf4882a8bfacb616fce4247911605a109c4862de421bcd.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/3bfd6bb152310f93daa6f4e1867c10572946e874b3a30c9ba8e0fcdeb590300b.tif",
+      "@type": "File",
+      "name": "3bfd6bb152310f93daa6f4e1867c10572946e874b3a30c9ba8e0fcdeb590300b.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/43cf6b2ec0b0745ac2b87b4d8780f62e9050d3f5d50a1fcefa42d166191e84c6.tif",
+      "@type": "File",
+      "name": "43cf6b2ec0b0745ac2b87b4d8780f62e9050d3f5d50a1fcefa42d166191e84c6.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/4d40de30a3db3bc4f241cb7f48e8497c11e8f20a99bf55788bdce17242029745.tif",
+      "@type": "File",
+      "name": "4d40de30a3db3bc4f241cb7f48e8497c11e8f20a99bf55788bdce17242029745.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/4dbbb275960ab9e4ec2c66c8d3000f7c70c8dce5112df591b95db84e25efa6e9.tif",
+      "@type": "File",
+      "name": "4dbbb275960ab9e4ec2c66c8d3000f7c70c8dce5112df591b95db84e25efa6e9.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/547ef286ee5f4e5dce533e982e6992ada67b7d727fdd3cfa6576f24c631a7ae6.tif",
+      "@type": "File",
+      "name": "547ef286ee5f4e5dce533e982e6992ada67b7d727fdd3cfa6576f24c631a7ae6.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/57b49733c5a3c268b013553635a826e6a1b10e699bbd19c3b842375fe0adf344.tif",
+      "@type": "File",
+      "name": "57b49733c5a3c268b013553635a826e6a1b10e699bbd19c3b842375fe0adf344.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/5953af5080d981b554529971903d8bee9871457a4361b51f04ba04f43793dd8f.tif",
+      "@type": "File",
+      "name": "5953af5080d981b554529971903d8bee9871457a4361b51f04ba04f43793dd8f.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/5ddbfba2519484316e4b7ccabfa605e6e6fd96c3d87ac8cdfd2c134571a15311.tif",
+      "@type": "File",
+      "name": "5ddbfba2519484316e4b7ccabfa605e6e6fd96c3d87ac8cdfd2c134571a15311.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/5f9d29d6388c700f35a3c29fa1b1ce0c1cba6667d05fdb70bd1e89004dcf71ed.tif",
+      "@type": "File",
+      "name": "5f9d29d6388c700f35a3c29fa1b1ce0c1cba6667d05fdb70bd1e89004dcf71ed.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/602f267432e7a573e1092f1cf48135c82d0fbc8722bc028b9330ec801a40bb18.tif",
+      "@type": "File",
+      "name": "602f267432e7a573e1092f1cf48135c82d0fbc8722bc028b9330ec801a40bb18.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/608ff81c8a0c8b622f6648a9c7f935d85f0c503f515ef2ac3728387be1953ee8.tif",
+      "@type": "File",
+      "name": "608ff81c8a0c8b622f6648a9c7f935d85f0c503f515ef2ac3728387be1953ee8.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/6bd18a218d25247dc456aed124c066a6397fb93086e860e4d04014bfa9c9555d.tif",
+      "@type": "File",
+      "name": "6bd18a218d25247dc456aed124c066a6397fb93086e860e4d04014bfa9c9555d.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/79dfcbc9361edd3a1ffe81a5bdaa22a197ad1341f3fa64b86a646c2607d6b324.tif",
+      "@type": "File",
+      "name": "79dfcbc9361edd3a1ffe81a5bdaa22a197ad1341f3fa64b86a646c2607d6b324.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/7d40ea6ead1bec903f26d9046d291aedcb12a584b4d3b337ea252b34c7d86072.tif",
+      "@type": "File",
+      "name": "7d40ea6ead1bec903f26d9046d291aedcb12a584b4d3b337ea252b34c7d86072.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/84e642d75ae6ece8147272418b6fe13d04db8d076fe306c4acedc329fceab564.tif",
+      "@type": "File",
+      "name": "84e642d75ae6ece8147272418b6fe13d04db8d076fe306c4acedc329fceab564.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/89be66f88612aae541f5843abcd9c015832b5d6c54a28103b3019f7f38df8a6d.tif",
+      "@type": "File",
+      "name": "89be66f88612aae541f5843abcd9c015832b5d6c54a28103b3019f7f38df8a6d.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/8fdc34509a0c3721f7b5e235c8a93e1f553343aa17ad103a1e89e3509a3e1570.tif",
+      "@type": "File",
+      "name": "8fdc34509a0c3721f7b5e235c8a93e1f553343aa17ad103a1e89e3509a3e1570.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/9520aff4efe87bd8f3901652fa2dde9b4bc9c679325966145ce00c1ca33f35de.tif",
+      "@type": "File",
+      "name": "9520aff4efe87bd8f3901652fa2dde9b4bc9c679325966145ce00c1ca33f35de.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/9ebcfaf2322932d464f15b5662cae4d669b2d785b8299556d73fffcae8365d32.tif",
+      "@type": "File",
+      "name": "9ebcfaf2322932d464f15b5662cae4d669b2d785b8299556d73fffcae8365d32.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/a5e695fce80dc03efb6665a9ec14500ab47f4ee9f6437531388dd3cc32c90db1.tif",
+      "@type": "File",
+      "name": "a5e695fce80dc03efb6665a9ec14500ab47f4ee9f6437531388dd3cc32c90db1.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/a6e81120d1cb9f71f8a25f90a5d56c4b714a642fc496a705e38921fd90a3f69c.tif",
+      "@type": "File",
+      "name": "a6e81120d1cb9f71f8a25f90a5d56c4b714a642fc496a705e38921fd90a3f69c.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/afa272dc01825d4b929b3bfc79a10f68dd3c163c450d858b964d1ce0bc93e131.tif",
+      "@type": "File",
+      "name": "afa272dc01825d4b929b3bfc79a10f68dd3c163c450d858b964d1ce0bc93e131.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/b560dba92fbf2af785739efced50d5866c86dc4dada9be3832138bef4c3524d2.tif",
+      "@type": "File",
+      "name": "b560dba92fbf2af785739efced50d5866c86dc4dada9be3832138bef4c3524d2.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/b61d3fb0d0ebbee018346e0adeff9e9178f33aa95262779b3c196f93b4ace895.tif",
+      "@type": "File",
+      "name": "b61d3fb0d0ebbee018346e0adeff9e9178f33aa95262779b3c196f93b4ace895.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/b6edad733399c83c8eb7a59c0d37b54e10cc0d59894e39ff843884d84f61dee1.tif",
+      "@type": "File",
+      "name": "b6edad733399c83c8eb7a59c0d37b54e10cc0d59894e39ff843884d84f61dee1.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/bde3727f3a9e8b2b58f383ebc762b2157eb50cdbff23e69b025418b43967556b.tif",
+      "@type": "File",
+      "name": "bde3727f3a9e8b2b58f383ebc762b2157eb50cdbff23e69b025418b43967556b.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/bf7691b0a79811fa068b7408cbce636a73f01ef9e971a95da1a2d96df73782b6.tif",
+      "@type": "File",
+      "name": "bf7691b0a79811fa068b7408cbce636a73f01ef9e971a95da1a2d96df73782b6.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/c304a1fdf3bca2f4b4580d2cac59942e2224a7678001bf5ed9d9852f57708932.tif",
+      "@type": "File",
+      "name": "c304a1fdf3bca2f4b4580d2cac59942e2224a7678001bf5ed9d9852f57708932.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/c9f305be17312bdb9530fb4f1adc6d29730ddbe0e74730cbf031de174bf437b7.tif",
+      "@type": "File",
+      "name": "c9f305be17312bdb9530fb4f1adc6d29730ddbe0e74730cbf031de174bf437b7.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/d8607b21411c9c8ab532faaeba15f8818a92025897950f94ee4da4f74f53660a.tif",
+      "@type": "File",
+      "name": "d8607b21411c9c8ab532faaeba15f8818a92025897950f94ee4da4f74f53660a.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/e321cfa987e77c21373a0f8b1236c83d6636306949a82a7f5b07fc0838e7777f.tif",
+      "@type": "File",
+      "name": "e321cfa987e77c21373a0f8b1236c83d6636306949a82a7f5b07fc0838e7777f.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/e5a7b8a9924b26b3abf039255a8a3bb00258f4966f68ff3349560b4350af9367.tif",
+      "@type": "File",
+      "name": "e5a7b8a9924b26b3abf039255a8a3bb00258f4966f68ff3349560b4350af9367.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/e66f25e175abab08ecb4e5f6859db64a211e0ddffb262d7e727b9d9bd4aad2d2.tif",
+      "@type": "File",
+      "name": "e66f25e175abab08ecb4e5f6859db64a211e0ddffb262d7e727b9d9bd4aad2d2.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/ec486143ecfec847c22cd8cbc207d85312bcf38e61c9b9a805e0d12add62da8d.tif",
+      "@type": "File",
+      "name": "ec486143ecfec847c22cd8cbc207d85312bcf38e61c9b9a805e0d12add62da8d.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/ee927e8255096971ddae1bd975cf80c4ad7c847c82d0b5f5dd2ddfe5407007ee.tif",
+      "@type": "File",
+      "name": "ee927e8255096971ddae1bd975cf80c4ad7c847c82d0b5f5dd2ddfe5407007ee.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/eeb142344e9de3250ab748f93940bf06be70d5078337680998468a134a101698.tif",
+      "@type": "File",
+      "name": "eeb142344e9de3250ab748f93940bf06be70d5078337680998468a134a101698.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/f26f4c2c70c38fe12e00d5a814d5116691f2ca548908126923fd76ddd665ed24.tif",
+      "@type": "File",
+      "name": "f26f4c2c70c38fe12e00d5a814d5116691f2ca548908126923fd76ddd665ed24.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/feffce59a1a3eb0a6a05992bb7423c39c7d52865846da36d89e2a72c379e5398.tif",
+      "@type": "File",
+      "name": "feffce59a1a3eb0a6a05992bb7423c39c7d52865846da36d89e2a72c379e5398.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "data/segment-nuclei/ff599c7301daa1f783924ac8cbe3ce7b42878f15a39c2d19659189951f540f48.tif",
+      "@type": "File",
+      "name": "ff599c7301daa1f783924ac8cbe3ce7b42878f15a39c2d19659189951f540f48.tif",
+      "encodingFormat": "image/tiff"
+    },
+    {
+      "@id": "#domain-profile",
+      "@type": "PropertyValue",
+      "name": "domain profile",
+      "value": "bioimaging"
+    },
+    {
+      "@id": "#draft",
+      "@type": "PropertyValue",
+      "name": "draft",
+      "value": true
+    },
+    {
+      "@id": "#author-0",
+      "@type": "Person",
+      "name": "Uwe Schmidt"
+    },
+    {
+      "@id": "#author-1",
+      "@type": "Person",
+      "name": "Martin Weigert"
+    },
+    {
+      "@id": "#author-2",
+      "@type": "Person",
+      "name": "Coleman Broaddus"
+    },
+    {
+      "@id": "#author-3",
+      "@type": "Person",
+      "name": "Gene Myers"
+    },
+    {
+      "@id": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "@type": "CreativeWork",
+      "name": "",
+      "description": "The licence the description gives for this research."
+    }
+  ]
+}

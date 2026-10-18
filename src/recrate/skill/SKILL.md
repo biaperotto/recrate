@@ -1,7 +1,7 @@
 ---
 name: recrate
 description: Recreate a piece of published research as a validated ReCRATE research object. From a paper (PDF, DOI, arXiv link) or an RO-Crate, coordinate specialist subagents that read the paper and its code, describe each method so it can run, run it on the published data, compare with the published results, and independently verify every claim; deliver an RO-Crate, a report and an MCP agent. Use when asked to agentify a paper, make a paper's methods runnable, or reproduce or validate a paper with ReCRATE.
-argument-hint: <paper PDF, DOI, arXiv link, RO-Crate, or ReCRATE agent folder>
+argument-hint: <paper PDF, DOI, arXiv link, RO-Crate, or ReCRATE agent folder> [quick]
 ---
 
 # Recreate a piece of research with ReCRATE
@@ -28,6 +28,20 @@ The rules every agent follows, and that you enforce:
 **Resuming.** If `<agent>/work/state.json` exists, run `recrate workflow-check <agent>` first: it lists the stages
 done and the next one, and flags a file changed since it was recorded. Continue from the next stage; redo a stage
 whose outputs changed.
+
+## Quick mode
+
+If `$ARGUMENTS` ends with the word `quick`, keep the whole run short (about 10 to 20 minutes), and say so in every
+specialist's prompt by adding this paragraph to it:
+
+> **Quick mode.** Work only on the methods named in the plan (at most 3). Fetch only the data those methods need, and
+> nothing over 500 MB. Build the environment and check that the code's main modules load; do not run or render every
+> script, notebook or report, only those the planned methods use. Do not survey tutorials.
+
+In quick mode: plan at most **3 methods**, the ones the paper's main results (abstract, main tables) rest on; skip
+tutorial-derived tools; allow **one** repair round per method. Everything else works as below (quotes, published
+values, tolerances with sources, an independent verifier, the deliver checks). In `REPORT.md`, list what quick mode
+left out, so a full run (`/recrate <agent>` without `quick`) can add it.
 
 ## 0. Set up
 

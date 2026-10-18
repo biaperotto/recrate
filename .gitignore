@@ -15,3 +15,6 @@ examples/workflowhub-nuclei-segmentation/paper_agent/
 examples/penguins-dimorphism/paper_agent/
 examples/workflowhub-nuclei-segmentation/my-data-half-resolution/
 *.bak-*
+examples/medrxiv-inferential-reproducibility/paper_agent/
+examples/stardist-nuclei/paper_agent/
+examples/stardist-nuclei/paper-download/

@@ -46,6 +46,7 @@ class EngineRunner(Runner):
     """Common shape: copy the workflow's folder, run the engine's command there, collect results.csv."""
 
     tool = ""  # the command that must be installed
+    env_vars: dict[str, str] = {}  # e.g. which R a Quarto document runs with
     software = ""  # its name, as recorded
     version_args: list[str] = ["--version"]
     install_hint = ""
@@ -72,7 +73,7 @@ class EngineRunner(Runner):
             cmd = self.command(wf, Path(input_dir).resolve(), output_dir, params, work)
             started = now_iso()
             proc = subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=TIMEOUT,
-                                  env={**os.environ, "RECRATE_OUTPUT_DIR": str(output_dir)})
+                                  env={**os.environ, **self.env_vars, "RECRATE_OUTPUT_DIR": str(output_dir)})
             ended = now_iso()
             (output_dir / f"{self.name}.log").write_text((proc.stdout + "\n" + proc.stderr)[-200000:], encoding="utf-8")
             if proc.returncode != 0:

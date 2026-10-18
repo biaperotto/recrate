@@ -29,8 +29,12 @@ def test_hardware_fits():
 def test_scripts_by_language(tmp_path, monkeypatch):
     assert isinstance(get_runner(language="R", workflow=Path("a.R")), ScriptRunner)
     assert isinstance(get_runner(workflow=Path("run.sh")), ScriptRunner)
+    assert isinstance(get_runner(language="Julia", workflow=Path("a.jl")), ScriptRunner)
+    monkeypatch.setenv("RECRATE_JULIA", str(tmp_path / "no-such-julia"))
+    with pytest.raises(RuntimeError, match="not installed"):
+        interpreter(Path("a.jl"))
     with pytest.raises(RuntimeError, match="no runner"):
-        get_runner(language="Julia", workflow=Path("a.jl"))
+        get_runner(language="Fortran", workflow=Path("model.f90"))
     monkeypatch.setenv("RECRATE_RSCRIPT", str(tmp_path / "no-such-Rscript"))
     with pytest.raises(RuntimeError, match="RECRATE_RSCRIPT"):
         interpreter(Path("a.R"))

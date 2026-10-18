@@ -169,9 +169,10 @@ def diagnose(spec: MethodSpec) -> tuple[str, list[str]]:
     from .profiles import get_profile
     from .runners import readiness
 
-    from .env import env_python
+    from .env import env_python, env_rscript
 
-    blocked = readiness(spec.workflow_language, spec.workflow_path, env_python(spec.path.parent))
+    blocked = readiness(spec.workflow_language, spec.workflow_path, env_python(spec.path.parent),
+                        env_rscript(spec.path.parent))
     if blocked:
         return "blocked", [blocked]
     gaps = []
@@ -206,8 +207,6 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
             blocked = st.detail = st.gaps[0]
         elif spec.needs_data and not (spec.example_data and spec.example_data.exists()):
             st.detail = "No example data in the crate."
-        elif not (spec.expected_results and spec.expected_results.exists()):
-            st.detail = "No reported results in the crate to compare with."
         elif validate == "none" or (validate == "safe" and runs_own_code(m["language"])):
             st.detail = ("Not run yet: validating executes the workflow's own code. "
                          "Run it when you trust the source.")
@@ -215,7 +214,8 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
             try:
                 r = reproduce(spec, runs_dir, runner=runner, agent=who)
                 comparison = r.comparison
-                st.detail = r.comparison.headline() if r.comparison else ""
+                st.detail = r.comparison.headline() if r.comparison else \
+                    "Ran on the published data; the paper publishes no results for this method to compare with."
                 st.run_crate = str(r.run_dir)
             except Exception as e:  # noqa: BLE001 - report any failure as the method's status
                 error = st.detail = f"{type(e).__name__}: {e}"

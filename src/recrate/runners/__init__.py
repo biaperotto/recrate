@@ -67,7 +67,8 @@ def get_runner(name: str = "auto", language: str | None = None, workflow: Path |
                        "notebooks; Snakemake, Nextflow and CWL workflows; ImageJ macros; Galaxy imaging workflows).")
 
 
-def readiness(language: str | None, workflow: Path | None, python: Path | None = None) -> str | None:
+def readiness(language: str | None, workflow: Path | None, python: Path | None = None,
+              rscript: Path | None = None) -> str | None:
     """None when this computer can run the workflow; otherwise why not, naming what is missing.
 
     Built from the runners actually available: a Galaxy workflow is ready only when every tool its results need
@@ -89,7 +90,7 @@ def readiness(language: str | None, workflow: Path | None, python: Path | None =
         from .script import interpreter
 
         try:
-            interpreter(Path(workflow), python)
+            interpreter(Path(workflow), python, rscript)
         except RuntimeError as e:
             return str(e)
     if runner.name in ENGINES:
@@ -101,7 +102,7 @@ def readiness(language: str | None, workflow: Path | None, python: Path | None =
         if runner.name == "quarto" and re.search(r"```\{r[ ,}]", Path(workflow).read_text(errors="replace")):
             import shutil
 
-            if not shutil.which("Rscript"):  # an R document also needs R
+            if not (rscript or shutil.which("Rscript")):  # an R document also needs R
                 return "Needs R (Rscript), not installed here: install R (cran.r-project.org)."
     return None
 

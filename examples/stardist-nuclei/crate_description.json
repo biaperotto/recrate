@@ -1,0 +1,170 @@
+{
+  "name": "Cell Detection with Star-convex Polygons",
+  "description": "Schmidt, Weigert, Broaddus & Myers (2018), MICCAI; preprint arXiv:1806.03535. StarDist detects cell nuclei in fluorescence microscopy images as star-convex polygons. Crate described by ReCRATE from the paper and its code: the paper's own trained model (StarDist 2D_paper_dsb2018), its test images with ground truth (the DSB2018 subset the authors released), and Table 1's average precision.",
+  "identifier": "https://arxiv.org/abs/1806.03535#recrate",
+  "citation": "https://arxiv.org/abs/1806.03535",
+  "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "authors": [
+    "Uwe Schmidt",
+    "Martin Weigert",
+    "Coleman Broaddus",
+    "Gene Myers"
+  ],
+  "datePublished": "2018-06-09",
+  "profile": "bioimaging",
+  "draft": true,
+  "methods": [
+    {
+      "name": "stardist_ap",
+      "description": "Table 1, DSB2018: average precision of StarDist at IoU thresholds 0.5 to 0.9, with the model trained in the paper, on the paper's 50 test images and their manual annotations.",
+      "workflow": {
+        "file": "workflows/stardist_ap.py",
+        "language": "Python",
+        "software": [
+          {
+            "name": "stardist",
+            "version": "0.9.2"
+          },
+          {
+            "name": "tensorflow",
+            "version": "2.21.0"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "id": "in-data",
+          "name": "input_dir",
+          "type": "File",
+          "format": "image/tiff",
+          "description": "images/ (fluorescence, one nucleus channel) and masks/ (ground-truth labels, the same names)",
+          "properties": {
+            "dimensions": {
+              "value": "2D"
+            },
+            "channels": {
+              "value": 1
+            },
+            "intensity": {
+              "value": "normalised per image (percentiles 1 to 99.8)"
+            }
+          }
+        },
+        {
+          "id": "in-prob",
+          "name": "prob_thresh",
+          "type": "Float",
+          "default": 0.417819,
+          "role": "fixed",
+          "description": "Object probability threshold for candidate polygons (the model's published thresholds)",
+          "quote": "We only consider polygons associated with pixels above an object probability threshold as candidates"
+        },
+        {
+          "id": "in-nms",
+          "name": "nms_thresh",
+          "type": "Float",
+          "default": 0.5,
+          "role": "fixed",
+          "description": "Overlap threshold of the non-maximum suppression (the model's published thresholds)",
+          "quote": "We perform common, greedy non-maximum suppression"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "out-ap",
+          "name": "results",
+          "type": "File",
+          "format": "text/csv",
+          "kind": "table",
+          "description": "Average precision at each IoU threshold",
+          "abs_tolerances": {
+            "ap": {
+              "value": 5e-05,
+              "source": "paper-rounding",
+              "note": "Table 1 prints four decimals: half a unit of the last decimal"
+            }
+          }
+        }
+      ],
+      "example_data": "crate/data/stardist-ap",
+      "expected": "crate/expected/stardist-ap.csv",
+      "expected_source": "Table 1 of the paper, DSB2018, StarDist (Ours) row"
+    },
+    {
+      "name": "segment_nuclei",
+      "description": "StarDist nuclei segmentation with the paper's model, for any fluorescence nuclei images: each image's nuclei (label masks), their number and mean size; with ground truth beside the images (masks/), also its average precision at IoU 0.5.",
+      "workflow": {
+        "file": "workflows/segment_nuclei.py",
+        "language": "Python",
+        "software": [
+          {
+            "name": "stardist",
+            "version": "0.9.2"
+          },
+          {
+            "name": "tensorflow",
+            "version": "2.21.0"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "id": "in-images",
+          "name": "input_dir",
+          "type": "File",
+          "format": "image/tiff",
+          "description": "Fluorescence images of nuclei, one channel (in the folder or in images/); optional ground truth in masks/",
+          "properties": {
+            "dimensions": {
+              "value": "2D"
+            },
+            "channels": {
+              "value": 1
+            },
+            "intensity": {
+              "value": "normalised per image (percentiles 1 to 99.8)"
+            }
+          }
+        },
+        {
+          "id": "in-prob",
+          "name": "prob_thresh",
+          "type": "Float",
+          "default": 0.417819,
+          "role": "fixed",
+          "description": "Object probability threshold for candidate polygons (the model's published thresholds)",
+          "quote": "We only consider polygons associated with pixels above an object probability threshold as candidates"
+        },
+        {
+          "id": "in-nms",
+          "name": "nms_thresh",
+          "type": "Float",
+          "default": 0.5,
+          "role": "fixed",
+          "description": "Overlap threshold of the non-maximum suppression (the model's published thresholds)",
+          "quote": "We perform common, greedy non-maximum suppression"
+        },
+        {
+          "id": "in-scale",
+          "name": "scale",
+          "type": "Float",
+          "default": 1.0,
+          "unit": "dimensionless",
+          "scaling": "scales_with:pixel size^1",
+          "description": "Resize factor before prediction, so nuclei have the size in pixels the model was trained on: 2 for images whose pixels are twice the paper's"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "out-seg",
+          "name": "results",
+          "type": "File",
+          "format": "text/csv",
+          "kind": "table",
+          "description": "Per image: count, mean area in pixels; with ground truth, its count and AP at IoU 0.5"
+        }
+      ],
+      "example_data": "crate/data/segment-nuclei"
+    }
+  ]
+}

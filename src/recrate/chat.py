@@ -560,6 +560,48 @@ def suggested_questions(agent: PaperAgent, limit: int = 6) -> list[str]:
     return picked[:limit]
 
 
+def follow_up_questions(agent: PaperAgent, reply_parts: list[dict[str, Any]], asked: set[str], n: int = 2) -> list[str]:
+    """Two questions that follow from the last answer: what it ran decides what is worth asking next (a difference
+    leads to its follow-up checks, a check of your data to running on it...). Never one already asked."""
+    from .followup import propose
+
+    tools = [p for p in reply_parts if p.get("kind") == "tool"]
+    names = [t["name"] for t in tools]
+    method_id = next((t.get("args", {}).get("method") for t in reversed(tools) if t.get("args", {}).get("method")),
+                     None) or (agent.methods[0].name if agent.methods else None)
+    m = next((x for x in agent.methods if method_id in (x.id, x.name)), None)
+    name = (m.name if m else method_id or "this method").replace("_", " ")
+    out: list[str] = []
+    if "reproduce" in names and m is not None:
+        if m.status == "differs":
+            out += [f"Why do the {name} results differ from the paper?",
+                    f"Run the follow-up checks for {name}: do they explain the difference?"]
+        else:
+            out += [f"Will {name} work on my data? What should I check first?", "Make the report page for this research."]
+    if "followup_checks" in names and m is not None:
+        f = next((x for x in propose(agent.spec(m.id)) if x.runnable), None)
+        if f:
+            out.append(f"Run the check '{f.title}' for {name}.")
+        out.append(f"Plot the published and reproduced values for {name}.")
+    if "run_followup_check" in names:
+        out += [f"Plot the published and reproduced values for {name}.", "Make the report page for this research."]
+    if "check_my_data" in names:
+        out += [f"Run {name} on my data, with the adjustments.", f"Which parameters of {name} need my decision?"]
+    if "run_on_my_data" in names:
+        out += ["How do my results compare with what the paper reported?", "Write the methods paragraph for this run."]
+    if {"make_figure", "report_page"} & set(names):
+        out += ["Export the RO-Crate of this research.", "What does the paper not say, that had to be assumed?"]
+    out += suggested_questions(agent, limit=12)  # then the content-based ones, in order
+    seen, picked = set(asked), []
+    for q in out:
+        if q not in seen:
+            seen.add(q)
+            picked.append(q)
+        if len(picked) == n:
+            break
+    return picked
+
+
 def claude_code_binary() -> str | None:
     """The Claude Code program: ``RECRATE_CLAUDE``, ``claude`` on the PATH, or the one bundled with the Claude Code
     extension for VS Code or Cursor. It signs in with the person's Claude subscription, so no API key is needed."""

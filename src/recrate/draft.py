@@ -135,6 +135,14 @@ def build_crate(desc: dict[str, Any], out_dir: str | Path, base_dir: str | Path 
         (out_dir / wf_rel).parent.mkdir(parents=True, exist_ok=True)
         if wf_src.exists() and wf_src.resolve() != (out_dir / wf_rel).resolve():
             shutil.copy2(wf_src, out_dir / wf_rel)
+        req = wf_src.parent / "requirements.txt"  # the workflow's dependencies travel with it
+        if req.exists() and req.resolve() != ((out_dir / wf_rel).parent / "requirements.txt").resolve():
+            shutil.copy2(req, (out_dir / wf_rel).parent / "requirements.txt")
+            rel = ((Path(wf_rel).parent / "requirements.txt").as_posix())
+            if all(h["@id"] != rel for h in has_part):
+                has_part.append({"@id": rel})
+                graph.append({"@id": rel, "@type": "File", "name": "Python requirements of the workflows",
+                              "encodingFormat": "text/plain"})
         has_part.append({"@id": wf_rel})
         workflow_ids.append(wf_rel)
 
