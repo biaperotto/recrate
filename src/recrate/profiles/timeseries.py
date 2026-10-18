@@ -20,7 +20,7 @@ from statistics import median
 from typing import Any
 
 from ..crate import MethodSpec
-from .base import FAIL, OK, WARN, CheckItem, CheckReport, DomainProfile, rescale
+from .base import FAIL, OK, WARN, CheckItem, CheckReport, DomainProfile, Field, rescale, unstated_scale
 
 RATE_REL_TOL = 0.05
 
@@ -49,6 +49,11 @@ def read_signal(path: Path, time_column: str | None = None) -> dict[str, Any]:
 class TimeseriesProfile(DomainProfile):
     name = "timeseries"
     description = "Signals as tables: time column, sampling rate, channels; window parameters rescaled in time."
+    field = Field(
+        label="Recordings", data_noun="recordings", scale="sampling rate", scale_check="Sampling rate",
+        scale_question="How does your sampling rate compare with the research's?",
+        scale_ratio_label="Your sampling rate ÷ the research's",
+        scale_help="2 means you record twice as many samples per second (e.g. 200 Hz against 100 Hz).")
 
     def inspect(self, data_path: Path) -> dict[str, Any]:
         return {"files": [read_signal(f) for f in sorted(Path(data_path).glob("*.csv"))]}
@@ -61,7 +66,7 @@ class TimeseriesProfile(DomainProfile):
         return []
 
     def check(self, spec: MethodSpec, data_path: Path, params: dict[str, Any] | None = None,
-              pixel_ratio: float | None = None) -> CheckReport:
+              scale_ratio: float | None = None) -> CheckReport:
         data_path = Path(data_path)
         params = dict(params or spec.default_params())
         report = CheckReport(profile=self.name, data_path=data_path)
@@ -97,10 +102,8 @@ class TimeseriesProfile(DomainProfile):
         obs = sum(rates) / len(rates)
         exp = d.properties.get("sampling rate")
         if exp is None:
-            scaled = [p.name for p in spec.value_inputs if (p.scaling_rule or ("",))[0] == "sampling rate"]
-            report.items.append(CheckItem("Sampling rate", "not stated", f"{obs:g} Hz", WARN if scaled else OK,
-                                          f"{', '.join(scaled)} counted in samples, and the research states no "
-                                          "sampling rate: results may not be comparable." if scaled else ""))
+            unstated_scale(spec, params, report, self.field, scale_ratio, observed=f"{obs:g} Hz",
+                           same_tol=RATE_REL_TOL)
         else:
             exp_hz = float(exp.value)
             if abs(obs - exp_hz) <= RATE_REL_TOL * exp_hz:

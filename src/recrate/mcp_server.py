@@ -45,6 +45,7 @@ from .agent import PaperAgent, review_conclusion, revalidate
 from .draft import build_crate
 from .methods import methods_paragraph
 from .pipeline import check_inputs, reproduce, run_on_data
+from .profiles import fields_of
 from .record import find_runs, headline, publish_back, summarise_record
 from .runcrate import approve
 
@@ -97,7 +98,7 @@ def typed_method_tool(spec, method_id: str, run):
             description=f"File or folder with the user's data. Expected: {d.description or d.format or 'see describe_method'}")]))
     for p in spec.value_inputs:
         arg = re.sub(r"\W+", "_", p.name).strip("_") or "value"
-        if arg in names or arg in {"data_path", "who", "reason", "pixel_ratio", "auto_adjust", "channel"}:
+        if arg in names or arg in {"data_path", "who", "reason", "scale_ratio", "auto_adjust", "channel"}:
             arg += "_param"
         names[arg] = p.name
         typ = _PY_TYPES.get((p.type or "").lower(), str)
@@ -110,16 +111,20 @@ def typed_method_tool(spec, method_id: str, run):
                    description="Why any value differs from the published one (required then; recorded)")]),
                inspect.Parameter("who", kw, default="anonymous", annotation=Annotated[str, Field(
                    description="The person running it, recorded in the run crate")])]
+    from .profiles import get_profile
+
+    fld = get_profile(spec.profile).field
+    if spec.needs_data and fld.scale:  # only fields whose parameters depend on a scale (pixel size, sampling rate)
+        params += [inspect.Parameter("scale_ratio", kw, default=None, annotation=Annotated[float | None, Field(
+                       description=f"Your {fld.scale} / the research's, only when the research states none")])]
     if spec.needs_data:
-        params += [inspect.Parameter("pixel_ratio", kw, default=None, annotation=Annotated[float | None, Field(
-                       description="Your pixel size / the research's, only when the research states none")]),
-                   inspect.Parameter("auto_adjust", kw, default=True, annotation=bool)]
+        params += [inspect.Parameter("auto_adjust", kw, default=True, annotation=bool)]
     published = spec.default_params()
 
     def tool(**kwargs):
         data = kwargs.pop("data_path", None)
         reason, who = kwargs.pop("reason", ""), kwargs.pop("who", "anonymous")
-        ratio, adjust = kwargs.pop("pixel_ratio", None), kwargs.pop("auto_adjust", True)
+        ratio, adjust = kwargs.pop("scale_ratio", None), kwargs.pop("auto_adjust", True)
         types = {q.name: q.type for q in spec.value_inputs}
         changes = {names[k]: v for k, v in kwargs.items() if v is not None and k in names
                    and _coerce(v, types[names[k]]) != published.get(names[k])}
@@ -142,7 +147,8 @@ def build_server(agent_dir: str | Path) -> FastMCP:
         "Answer questions from the paper using search_paper and cite the passages. "
         "Its methods are available as tools:\n" + method_lines + "\n"
         "Before running a method on the user's data, call check_my_data and explain every warning "
-        "(for example a pixel size difference and the parameter rescaling it implies). "
+        + next((f"(for example a {f.scale} different from the research's, and the parameter rescaling it implies). "
+                for f in fields_of(agent) if f.scale), "and every difference from the research's data. ") +
         "Never invent numbers: report what the tools return. Each run is recorded as a run crate. "
         "Never mark the 'same conclusion' step yourself: ask the user and record their answer with review_conclusion."
     ))
@@ -178,7 +184,8 @@ def build_server(agent_dir: str | Path) -> FastMCP:
     def search_paper(query: str, k: int = 5) -> list[dict[str, Any]]:
         return agent.search(query, k)
 
-    @mcp.tool(description="Describe one method: what it expects as input (format, pixel size, channels), "
+    @mcp.tool(description="Describe one method: what it expects as input (format, and the properties that matter "
+                          "for its field), "
                           "its parameters and defaults, the software, and the tolerances used for checking.")
     def describe_method(method: str) -> dict[str, Any]:
         from .model import assumptions
@@ -191,12 +198,13 @@ def build_server(agent_dir: str | Path) -> FastMCP:
                           "Returns ok / warn / fail per check, and the parameters in three groups: adjusted "
                           "automatically (with the computation), needing the user's decision (with why), and as "
                           "published. Explain the second group to the user before running.")
-    def check_my_data(method: str, data_path: str, pixel_ratio: float | None = None) -> dict[str, Any]:
-        """pixel_ratio: the user's pixel size / the research's, only when the research states none."""
+    def check_my_data(method: str, data_path: str, scale_ratio: float | None = None) -> dict[str, Any]:
+        """scale_ratio: the user's scale (pixel size, sampling rate...) / the research's, only when the research
+        states none."""
         from .model import parameter_plan
 
         spec = agent.spec(method)
-        r = check_inputs(spec, data_path, pixel_ratio=pixel_ratio)
+        r = check_inputs(spec, data_path, scale_ratio=scale_ratio)
         return {"status": r.status, "can_run": r.can_run, "checks": r.as_rows(),
                 "adjustments": [a.__dict__ for a in r.adjustments],
                 "parameters": parameter_plan(spec, r)}
@@ -218,14 +226,14 @@ def build_server(agent_dir: str | Path) -> FastMCP:
                 "headline": headline, "run_crate": str(out.run_dir.resolve())}
 
     def _run(method: str, data_path: str | None, who: str, auto_adjust: bool, channel: int,
-             changes: dict[str, Any] | None, reason: str, pixel_ratio: float | None = None) -> dict[str, Any]:
+             changes: dict[str, Any] | None, reason: str, scale_ratio: float | None = None) -> dict[str, Any]:
         from .runcrate import summarise_run
 
         if changes and not reason.strip():
             return {"message": "Changing a parameter needs a reason (pass reason=...); it is recorded in the run crate.",
                     "artifacts": []}
         out = run_on_data(agent.spec(method), data_path, _runs(), runner=RUNNER, agent=who, auto_adjust=auto_adjust,
-                          channel=channel, pixel_ratio=pixel_ratio,
+                          channel=channel, scale_ratio=scale_ratio,
                           overrides={k: (v, reason) for k, v in (changes or {}).items()} or None)
         return {"message": summarise_run(out.run_dir)["headline"], "artifacts": _run_artifacts(out.run_dir),
                 "checks": out.check.as_rows() if out.check else [], "parameters_used": out.params,
@@ -233,13 +241,13 @@ def build_server(agent_dir: str | Path) -> FastMCP:
                 "run_crate": str(out.run_dir.resolve())}
 
     @mcp.tool(description="Run a method of the paper on the user's data after checking it. Applies and records "
-                          "adjustments (e.g. rescaling size parameters for a different pixel size); stops if a "
+                          "adjustments (e.g. rescaling a parameter for a different pixel size or sampling rate); stops if a "
                           "check fails. 'parameters' changes values (with a 'reason', recorded). data_path is not "
                           "needed for methods that take only values.")
     def run_on_my_data(method: str, data_path: str | None = None, who: str = "anonymous", auto_adjust: bool = True,
                        channel: int = 0, parameters: dict[str, Any] | None = None, reason: str = "",
-                       pixel_ratio: float | None = None) -> dict[str, Any]:
-        return _run(method, data_path, who, auto_adjust, channel, parameters, reason, pixel_ratio)
+                       scale_ratio: float | None = None) -> dict[str, Any]:
+        return _run(method, data_path, who, auto_adjust, channel, parameters, reason, scale_ratio)
 
     # One typed tool per method, like Paper2Agent's tools: each parameter is an argument with its type, unit, the
     # paper's sentence and its published value as the default.
@@ -322,6 +330,37 @@ def build_server(agent_dir: str | Path) -> FastMCP:
         path = make_run_figure(Path(run_crate), kind)
         return {"message": f"Figure '{kind}' plotted from {Path(run_crate).name} and recorded in its run crate.",
                 "artifacts": _artifacts((kind.replace("_", " "), path))}
+
+    @mcp.tool(description="The paper's figures a method's latest reproduction redrew from the published data, each "
+                          "with the original (from the paper's reading package) and its caption, as images. Ask the "
+                          "user whether they show the same thing; record it with review_figure.")
+    def recreated_figures(method: str) -> list:
+        from .paper_figures import recreated
+
+        m = next((x for x in agent.methods if method in (x.name, x.id)), None)
+        if m is None or not m.run_crate:
+            return [f"No reproduction of {method} yet."]
+        out: list = []
+        for f in recreated(Path(m.run_crate), agent.path / "paper"):
+            out.append(f"{f['label']}: {f['caption']}" + (f" (reviewed: {f['review']['value']})" if f["review"] else ""))
+            if f["original"]:
+                out += ["The paper:", Image(path=str(f["original"]))]
+            out += ["Recreated:", Image(path=str(f["recreated"]))]
+        return out or [f"{method} redraws none of the paper's figures."]
+
+    @mcp.tool(description="Record a person's judgement of a recreated figure against the paper's: verdict same, "
+                          "differs or can't tell, with why. Only a person may judge: ask the user, never decide.")
+    def review_figure(method: str, figure: str, who: str, verdict: str, note: str = "") -> str:
+        from .paper_figures import recreated
+        from .paper_figures import review_figure as record
+
+        m = next((x for x in agent.methods if method in (x.name, x.id)), None)
+        f = next((x for x in recreated(Path(m.run_crate), agent.path / "paper")
+                  if x["label"].lower() == figure.lower().strip()), None) if m and m.run_crate else None
+        if f is None:
+            return f"{method} didn't recreate {figure}."
+        record(Path(m.run_crate), who, f["recreated"].name, verdict, note)
+        return f"Recorded: {f['label']} judged '{verdict}' by {who}."
 
     # ---- records ----------------------------------------------------------------------
     @mcp.tool(name="review_conclusion", description="Record a person's answer to the last step of the verdict ladder for a method: does its "

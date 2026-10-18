@@ -42,12 +42,12 @@ def _schema(props: dict[str, Any], required: list[str] | None = None) -> dict[st
 
 
 _METHOD = {"type": "string", "description": "Method name, as listed by about_paper."}
-_DATA = {"type": "string", "description": "Folder with the images. Omit to use the files the user uploaded."}
+_DATA = {"type": "string", "description": "Folder with the user's data. Omit to use the files the user uploaded."}
 _RUN = {"type": "string", "description": "Run crate folder or run name, as returned by reproduce/run_on_my_data. "
                                          "Omit for the latest run in this conversation."}
 
-_RATIO = {"type": "number", "description": "The user's pixel size divided by the research's, only when the "
-          "research states no pixel size and the user knows how theirs compares (e.g. 2 for 2×2 binning)"}
+_RATIO = {"type": "number", "description": "Only when the research doesn't state the scale its parameters depend on "
+          "(e.g. pixel size, sampling rate) and the user says how theirs compares: theirs ÷ the research's"}
 TOOLS: list[dict[str, Any]] = [
     {"name": "about_paper", "description": "Title, DOI, crate source, and the paper's methods with their "
                                            "reproduction status (the verdict ladder) against the paper's reported results.",
@@ -55,8 +55,9 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "search_paper", "description": "Search the paper's text; returns the most relevant passages. Use it "
                                             "to quote the paper when answering.",
      "input_schema": _schema({"query": {"type": "string"}, "k": {"type": "integer", "default": 4}}, ["query"])},
-    {"name": "describe_method", "description": "One method's card: expected input (format, pixel size, channels), "
-                                               "parameters and defaults, software, tolerances.",
+    {"name": "describe_method", "description": "One method's card: what its input must look like (format, and the "
+                                               "properties that matter for its field), parameters and defaults, "
+                                               "software, tolerances.",
      "input_schema": _schema({"method": _METHOD}, ["method"])},
     {"name": "list_tables", "description": "The paper's tables (label, caption). Read one with get_table.",
      "input_schema": _schema({})},
@@ -67,19 +68,19 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "show_figure", "description": "Show one of the paper's figures to the user, by label (e.g. 'Figure 3'); "
                                            "returns its caption.",
      "input_schema": _schema({"figure": {"type": "string"}}, ["figure"])},
-    {"name": "list_my_files", "description": "The files the user uploaded in this conversation, with their "
-                                             "image metadata (pixel size, channels, dimensions).",
+    {"name": "list_my_files", "description": "The user's data files, with what ReCRATE reads from them for "
+                                             "the methods' field (e.g. pixel size for images, columns for tables).",
      "input_schema": _schema({})},
     {"name": "check_my_data", "description": "Check whether the user's data fits a method (domain profile checks). "
                                              "Returns ok / warn / fail per check and parameter adjustments.",
-     "input_schema": _schema({"method": _METHOD, "data_path": _DATA, "pixel_ratio": _RATIO}, ["method"])},
+     "input_schema": _schema({"method": _METHOD, "data_path": _DATA, "scale_ratio": _RATIO}, ["method"])},
     {"name": "reproduce", "description": "Run a method on the paper's own data and compare with the paper's "
                                          "reported results. Writes a run crate.",
      "input_schema": _schema({"method": _METHOD}, ["method"])},
     {"name": "run_on_my_data", "description": "Run a method on the user's data after checking it. Applies and "
                                               "records adjustments (e.g. rescaling size parameters for a different "
-                                              "pixel size); stops if a check fails. Writes a run crate.",
-     "input_schema": _schema({"method": _METHOD, "data_path": _DATA, "pixel_ratio": _RATIO,
+                                              "pixel size or sampling rate); stops if a check fails. Writes a run crate.",
+     "input_schema": _schema({"method": _METHOD, "data_path": _DATA, "scale_ratio": _RATIO,
                               "auto_adjust": {"type": "boolean", "default": True},
                               "channel": {"type": "integer", "default": 0, "description": "0-based channel"},
                               "overrides": {"type": "object", "description": (
@@ -99,8 +100,9 @@ TOOLS: list[dict[str, Any]] = [
                              ["pixel_size"])},
     {"name": "methods_text", "description": "A methods paragraph written from a run crate, ready to paste.",
      "input_schema": _schema({"run": _RUN})},
-    {"name": "approve_run", "description": "Record that the user looked at a run's overlays and accepted or "
-                                           "rejected the result. Only call this when the user says so.",
+    {"name": "approve_run", "description": "Record that the user looked at a run's results (and overlays, for "
+                                           "images) and accepted or rejected them. Only call this when the user says "
+                                           "so.",
      "input_schema": _schema({"run": _RUN, "accepted": {"type": "boolean"}, "note": {"type": "string"}},
                              ["accepted"])},
     {"name": "create_output_crate", "description": "Package a run as an output RO-Crate (zip) the user can "
@@ -126,6 +128,15 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "make_figure", "description": "Plot the published vs reproduced values of a reproduction from its "
                                            "run's outputs, and record the figure in its run crate.",
      "input_schema": _schema({"run": _RUN})},
+    {"name": "recreated_figures", "description": "The paper's figures a method's latest reproduction redrew, each "
+                                                 "shown next to the original with its caption and review. Whether "
+                                                 "they show the same thing is for the user to say (review_figure).",
+     "input_schema": _schema({"method": _METHOD}, ["method"])},
+    {"name": "review_figure", "description": "Record the user's judgement of a recreated figure against the paper's: "
+                                             "same, differs or can't tell, and why. Only when the user says so.",
+     "input_schema": _schema({"method": _METHOD, "figure": {"type": "string", "description": "e.g. Figure 3"},
+                              "verdict": {"type": "string", "enum": ["same", "differs", "can't tell"]},
+                              "note": {"type": "string"}}, ["method", "figure", "verdict"])},
 ]
 
 
@@ -240,17 +251,26 @@ class ChatTools:
                             "caption": f"{f['label']}: {f['caption']}"}])
 
     def t_list_my_files(self) -> ToolResult:
-        from .profiles.bioimaging import list_images, read_image_metadata
+        from .profiles import get_profile
 
         d = self.current_data()
-        files = [read_image_metadata(f) for f in list_images(d)] if d.exists() else []
-        rows = [{k: m.get(k) for k in ("file", "format", "dimensions", "channels", "pixel_size", "unit")}
-                for m in files]
+        names = list(dict.fromkeys(self.agent.spec(m.id).profile for m in self.agent.methods)) or ["generic"]
+        rows: list[dict[str, Any]] = []
+        for name in names:  # read as each method's field reads it: image metadata, table columns, sampling rate...
+            try:
+                files = get_profile(name).inspect(d).get("files", []) if d.exists() else []
+            except Exception:  # noqa: BLE001 - files this field can't read are listed by the others
+                files = []
+            for f in files:
+                row = {k: (", ".join(map(str, v)) if isinstance(v, list) else v) for k, v in f.items()
+                       if k not in ("shape",)}
+                if not any(r.get("file") == row.get("file") for r in rows):
+                    rows.append(row)
         return ToolResult(json.dumps({"folder": str(d), "files": rows}, default=str),
                           [{"type": "table", "rows": rows}] if rows else [])
 
-    def t_check_my_data(self, method: str, data_path: str | None = None, pixel_ratio: float | None = None) -> ToolResult:
-        r = check_inputs(self.agent.spec(method), self._data(data_path), pixel_ratio=pixel_ratio)
+    def t_check_my_data(self, method: str, data_path: str | None = None, scale_ratio: float | None = None) -> ToolResult:
+        r = check_inputs(self.agent.spec(method), self._data(data_path), scale_ratio=scale_ratio)
         adj = [a.__dict__ for a in r.adjustments]
         payload = {"status": r.status, "can_run": r.can_run, "checks": r.as_rows(), "adjustments": adj}
         return ToolResult(json.dumps(payload, default=str),
@@ -279,12 +299,12 @@ class ChatTools:
 
     def t_run_on_my_data(self, method: str, data_path: str | None = None, auto_adjust: bool = True,
                          channel: int = 0, overrides: dict[str, Any] | None = None,
-                         pixel_ratio: float | None = None) -> ToolResult:
+                         scale_ratio: float | None = None) -> ToolResult:
         ov = {k: (v["value"], v.get("reason") or "chosen by the user") if isinstance(v, dict) else
               (v, "chosen by the user") for k, v in (overrides or {}).items()}
         out = run_on_data(self.agent.spec(method), self._data(data_path), self.agent.runs_dir, runner=self.runner,
                           agent=self.who, auto_adjust=auto_adjust, channel=channel, overrides=ov,
-                          progress=self.progress, pixel_ratio=pixel_ratio)
+                          progress=self.progress, scale_ratio=scale_ratio)
         self.last_run = out.run_dir
         csv_text = (out.run_dir / "outputs" / "results.csv").read_text(encoding="utf-8")
         lines = csv_text.splitlines()
@@ -385,6 +405,38 @@ class ChatTools:
                           [{"type": "figure", "path": str(path), "caption": "Published vs reproduced, plotted from "
                                                                             "this run's outputs"}])
 
+    def _recreated(self, method: str) -> tuple[Path, list[dict[str, Any]]]:
+        from .paper_figures import recreated
+
+        m = next((x for x in self.agent.methods if method in (x.name, x.id)), None)
+        if m is None or not m.run_crate or not Path(m.run_crate).exists():
+            raise ValueError(f"No reproduction of {method} yet: reproduce it first.")
+        return Path(m.run_crate), recreated(Path(m.run_crate), self.agent.path / "paper")
+
+    def t_recreated_figures(self, method: str) -> ToolResult:
+        _, figs = self._recreated(method)
+        if not figs:
+            raise ValueError(f"{method} redraws none of the paper's figures.")
+        att: list[dict[str, Any]] = []
+        for f in figs:
+            if f["original"]:
+                att.append({"type": "figure", "path": str(f["original"]), "caption": f"{f['label']}, the paper"})
+            att.append({"type": "figure", "path": str(f["recreated"]), "caption": f"{f['label']}, recreated"})
+        info = [{"figure": f["label"], "caption": f["caption"], "original_available": bool(f["original"]),
+                 "review": f["review"]} for f in figs]
+        return ToolResult(json.dumps(info, ensure_ascii=False, default=str), att)
+
+    def t_review_figure(self, method: str, figure: str, verdict: str, note: str = "") -> ToolResult:
+        from .paper_figures import review_figure
+
+        run, figs = self._recreated(method)
+        f = next((x for x in figs if x["label"].lower() == figure.lower().strip() or x["recreated"].name == figure), None)
+        if f is None:
+            raise ValueError(f"{method} didn't recreate {figure}.")
+        review_figure(run, self.who, f["recreated"].name, verdict, note)
+        msg = f"Recorded: {f['label']} judged '{verdict}' by {self.who}."
+        return ToolResult(json.dumps({"message": msg}), [{"type": "note", "text": msg}])
+
     def t_reproducibility_record(self) -> ToolResult:
         if not self.agent.has_methods:
             return ToolResult(json.dumps({"headline": "No runnable method yet, so no runs.", "runs": []}))
@@ -399,6 +451,28 @@ class ChatTools:
 # ("text", str) | ("tool", name, input) | ("result", name, ToolResult)
 
 
+def tools_for(agent: PaperAgent) -> list[dict[str, Any]]:
+    """The tools for this research object's fields: no pixel sizes or channels for a paper analysing tables."""
+    import copy
+
+    from .profiles import fields_of
+
+    fields = fields_of(agent)
+    scale = any(f.scale for f in fields)
+    images = any(f.scale == "pixel size" for f in fields)
+    out = []
+    for t in copy.deepcopy(TOOLS):
+        if t["name"] == "set_pixel_size" and not images:
+            continue
+        props = t["input_schema"].get("properties", {})
+        if not scale:
+            props.pop("scale_ratio", None)
+        if not any(f.visual for f in fields):
+            props.pop("channel", None)
+        out.append(t)
+    return out
+
+
 def system_prompt(agent: PaperAgent, max_paper_chars: int = MAX_PAPER_CHARS) -> str:
     title = agent.manifest.get("title", agent.name)
     doi = agent.manifest.get("doi")
@@ -407,33 +481,38 @@ def system_prompt(agent: PaperAgent, max_paper_chars: int = MAX_PAPER_CHARS) -> 
     paper = agent.paper.text if agent.paper else ""
     paper_block = (f"\n\n<paper>\n{paper}\n</paper>" if paper and len(paper) <= max_paper_chars
                    else "\n\nThe paper is long: use search_paper to read the relevant parts.")
+    from .profiles import fields_of
+
+    fields = fields_of(agent)  # how to talk about this research's data: images, recordings, tables...
+    noun = " and ".join(dict.fromkeys(f.data_noun for f in fields)) or "data"
+    example = next((f" (for example a {f.scale} different from the research's, and why a parameter that depends on "
+                    "it is rescaled)" for f in fields if f.scale), "")
     return (
         f"You are the paper agent for '{title}'{f' ({doi})' if doi else ''}, inside the ReCRATE app. "
-        "The user talks to the paper: they ask about it, reproduce its results, upload their own images "
+        f"The user talks to the paper: they ask about it, reproduce its results, bring their own {noun} "
         "and run its methods on them, and export run records as RO-Crates.\n\n"
         f"Methods (each is a tool-backed workflow, reproduced against the paper's reported results):\n{methods}\n\n"
         "How to work:\n"
         "- Answer questions from the paper and quote the relevant sentence. Say so when the paper does not say.\n"
         "- Never invent numbers. Every result comes from a tool; report what the tools return.\n"
         "- Before running a method on the user's files, call check_my_data and explain each warning and "
-        "parameter adjustment in plain terms (for example a pixel size difference and why a size threshold is "
-        "rescaled). If a check fails, explain what to fix and do not run.\n"
+        f"parameter adjustment in plain terms{example}. If a check fails, explain what to fix and do not run.\n"
         "- Uploaded files are used by default when data_path is omitted.\n"
-        "- After a run, summarise the results briefly, ask the user to look at the overlays, and offer to "
+        "- After a run, summarise the results briefly, ask the user to check them, and offer to "
         "create the output RO-Crate (create_output_crate) and a methods paragraph.\n"
         "- After a run with adjustments, offer compare_paper_parameters to show what the paper's values "
         "unchanged would give.\n"
         "- A reproduction that differs is a finding about the published result, not a failure: name each "
         "value that differs (published vs recomputed, and the tolerance) and say how many reproduce.\n"
-        "- If the research states no pixel size and a parameter is in pixels, ask the user how their pixel size "
-        "compares with the research's and pass pixel_ratio; never guess it.\n"
-        "- If images have no pixel size, ask the user for it (from the microscope or acquisition software) and "
-        "call set_pixel_size with what they say; never guess it.\n"
+        + "".join(f"- If the research doesn't state the {f.scale} and a parameter depends on it, ask the user how "
+                  f"theirs compares with the research's and pass scale_ratio; never guess it.\n"
+                  for f in fields if f.scale)
+        + "".join(f"- {h}\n" for f in fields for h in f.hints) +
         "- If the user wants a different parameter value, pass it in overrides with their reason.\n"
         "- Only call approve_run when the user says the result looks right or wrong.\n"
-        "- The app also has a workspace (fit, parameters, results, per-image review, figures, crate, export): "
+        "- The app also has a workspace (fit, parameters, results, review, figures, crate, export): "
         "point the user to it when useful.\n"
-        "- The app shows tool outputs (tables, overlays, download buttons) to the user, so don't repeat whole "
+        "- The app shows tool outputs (tables, figures, download buttons) to the user, so don't repeat whole "
         "tables; point out what matters. Keep answers short."
         + paper_block
     )
@@ -468,7 +547,7 @@ class ClaudeChat:
                 model=self.model,
                 max_tokens=16000,
                 system=self.system,
-                tools=TOOLS,
+                tools=tools_for(agent),
                 messages=self.messages,
                 output_config={"effort": "medium"},
                 betas=["server-side-fallback-2026-07-01"],
@@ -747,7 +826,7 @@ class OpenAICompatChat:
         self.agent, self.tools, self.model = agent, tools, model
         self.url, self.api_key = base_url.rstrip("/") + "/chat/completions", api_key
         self.tool_defs = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
-                                                            "parameters": t["input_schema"]}} for t in TOOLS]
+                                                            "parameters": t["input_schema"]}} for t in tools_for(agent)]
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt(agent, max_paper_chars)}]
 
     def send(self, text: str, max_steps: int = 8) -> Iterator[tuple]:

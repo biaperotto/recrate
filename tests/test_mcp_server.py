@@ -87,6 +87,11 @@ async def _exercise(call, agent_dir: Path, tools: set[str], called: dict) -> dic
     meta = json.loads((Path(rep["run_crate"]) / "ro-crate-metadata.json").read_text())
     assert any(e["@id"] == "outputs/figures/published_vs_reproduced.png" for e in meta["@graph"])
 
+    _, figs = await call("recreated_figures", {"method": m.id})  # this workflow redraws none of a paper's figures
+    assert "none of the paper's figures" in str(figs)
+    _, nofig = await call("review_figure", {"method": m.id, "figure": "Figure 1", "who": "MCP test", "verdict": "same"})
+    assert "didn't recreate" in str(nofig)
+
     _, fu = await call("followup_checks", {"method": m.id})
     assert {f["id"] for f in fu["proposed"]} >= {"software-version", "data-version"}
     _, nope = await call("run_followup_check", {"method": m.id, "check": "software-version"})

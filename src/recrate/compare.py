@@ -99,7 +99,8 @@ class Comparison:
             if not bad:
                 return f"Reproduced: {n} of {n} values within tolerance"
             return (f"Found {len(bad)} of {n} published values that the research's own data doesn't give "
-                    f"(the other {n - len(bad)} reproduce within tolerance): " + "; ".join(m.describe() for m in bad))
+                    + (f"(the other {n - len(bad)} reproduce within tolerance): " if len(bad) < n else ": ")
+                    + "; ".join(m.describe() for m in bad))
         if not bad and not self.missing_images:
             return "Reproduced: " + "; ".join(m.describe() for m in self.measures)
         return "Found a difference from the published result: " + "; ".join(m.describe() for m in self.measures)

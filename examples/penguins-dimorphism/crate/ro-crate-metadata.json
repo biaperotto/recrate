@@ -30,6 +30,15 @@
           "@id": "expected/size-dimorphism-index.csv"
         },
         {
+          "@id": "workflows/isotope_figures.py"
+        },
+        {
+          "@id": "data/isotope-signatures/"
+        },
+        {
+          "@id": "expected/isotope-signatures.csv"
+        },
+        {
           "@id": "paper.pdf"
         }
       ],
@@ -372,6 +381,180 @@
       }
     },
     {
+      "@id": "#software-1",
+      "@type": "SoftwareApplication",
+      "name": "matplotlib",
+      "softwareVersion": "3"
+    },
+    {
+      "@id": "#isotope-signatures-iso-in-table-columns",
+      "@type": "PropertyValue",
+      "name": "columns",
+      "value": "Species,Sex,Date Egg,Delta 13 C (o/oo),Delta 15 N (o/oo)"
+    },
+    {
+      "@id": "#isotope-signatures-iso-in-table",
+      "@type": "FormalParameter",
+      "name": "input_dir",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "text/csv",
+      "description": "One row per individual: species, sex, egg date (for the year) and both isotope values",
+      "additionalProperty": [
+        {
+          "@id": "#isotope-signatures-iso-in-table-columns"
+        }
+      ]
+    },
+    {
+      "@id": "#isotope-signatures-iso-in-keep-role",
+      "@type": "PropertyValue",
+      "name": "role",
+      "value": "free"
+    },
+    {
+      "@id": "#isotope-signatures-iso-in-keep",
+      "@type": "FormalParameter",
+      "name": "keep_rows",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "Text",
+      "description": "Inclusion rule: rows to keep, as 'Column=Value' conditions separated by ';' (empty: every sexed individual)",
+      "defaultValue": "",
+      "additionalProperty": [
+        {
+          "@id": "#isotope-signatures-iso-in-keep-role"
+        }
+      ]
+    },
+    {
+      "@id": "#isotope-signatures-iso-out-tolerance-abs-n-d13c",
+      "@type": "PropertyValue",
+      "name": "tolerance_abs:n_d13c",
+      "value": 0.0
+    },
+    {
+      "@id": "#isotope-signatures-iso-out-tolerance-abs-n-d13c-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:n_d13c",
+      "value": "paper-stated",
+      "description": "\"based on sample sizes exactly following analyses\"; the captions of Figures 3, 4 and 5 print the sample sizes; counts are compared exactly"
+    },
+    {
+      "@id": "#isotope-signatures-iso-out-tolerance-abs-n-d15n",
+      "@type": "PropertyValue",
+      "name": "tolerance_abs:n_d15n",
+      "value": 0.0
+    },
+    {
+      "@id": "#isotope-signatures-iso-out-tolerance-abs-n-d15n-source",
+      "@type": "PropertyValue",
+      "name": "tolerance_source:n_d15n",
+      "value": "paper-stated",
+      "description": "\"based on sample sizes exactly following analyses\"; the captions of Figures 3, 4 and 5 print the sample sizes; counts are compared exactly"
+    },
+    {
+      "@id": "#isotope-signatures-iso-out",
+      "@type": "FormalParameter",
+      "name": "results",
+      "conformsTo": {
+        "@id": "https://bioschemas.org/profiles/FormalParameter/1.0-RELEASE"
+      },
+      "additionalType": "File",
+      "encodingFormat": "text/csv",
+      "description": "Sample sizes per species (as printed in the captions); the figures are in figures/",
+      "additionalProperty": [
+        {
+          "@id": "#isotope-signatures-iso-out-tolerance-abs-n-d13c"
+        },
+        {
+          "@id": "#isotope-signatures-iso-out-tolerance-abs-n-d13c-source"
+        },
+        {
+          "@id": "#isotope-signatures-iso-out-tolerance-abs-n-d15n"
+        },
+        {
+          "@id": "#isotope-signatures-iso-out-tolerance-abs-n-d15n-source"
+        }
+      ]
+    },
+    {
+      "@id": "#isotope-signatures-followup-0",
+      "@type": "PropertyValue",
+      "name": "followup",
+      "value": "{\"title\": \"Exclude pairs that did not complete their clutch\", \"kind\": \"inclusion rule\", \"changes\": {\"keep_rows\": \"Clutch Completion=Yes\"}, \"why\": \"The paper excludes pairs whose second egg was never observed; the published data records this as Clutch Completion = No.\", \"quote\": \"some pairs were excluded from statistical analyses because a final egg was never observed at the nest\"}",
+      "description": "Exclude pairs that did not complete their clutch"
+    },
+    {
+      "@id": "workflows/isotope_figures.py",
+      "@type": [
+        "File",
+        "SoftwareSourceCode",
+        "ComputationalWorkflow"
+      ],
+      "name": "isotope_signatures",
+      "programmingLanguage": {
+        "@id": "#language-python"
+      },
+      "softwareRequirements": [
+        {
+          "@id": "#software-0"
+        },
+        {
+          "@id": "#software-1"
+        }
+      ],
+      "input": [
+        {
+          "@id": "#isotope-signatures-iso-in-table"
+        },
+        {
+          "@id": "#isotope-signatures-iso-in-keep"
+        }
+      ],
+      "output": [
+        {
+          "@id": "#isotope-signatures-iso-out"
+        }
+      ],
+      "description": "Mean δ13C and δ15N stable isotope signatures of males and females, per year and species, with ± 1 SE (Figures 3, 4 and 5 of the paper). Redrawn from the published data: the figures are written as figures/figure-3.png, figure-4.png and figure-5.png, and the sample sizes the captions print are compared.",
+      "additionalProperty": [
+        {
+          "@id": "#isotope-signatures-followup-0"
+        }
+      ]
+    },
+    {
+      "@id": "data/isotope-signatures/",
+      "@type": "Dataset",
+      "name": "Example data from the paper (isotope_signatures)",
+      "hasPart": [
+        {
+          "@id": "data/isotope-signatures/penguins_raw.csv"
+        }
+      ],
+      "exampleOfWork": {
+        "@id": "#isotope-signatures-iso-in-table"
+      }
+    },
+    {
+      "@id": "data/isotope-signatures/penguins_raw.csv",
+      "@type": "File",
+      "name": "penguins_raw.csv"
+    },
+    {
+      "@id": "expected/isotope-signatures.csv",
+      "@type": "File",
+      "name": "Results reported in the paper (isotope_signatures)",
+      "encodingFormat": "text/csv",
+      "exampleOfWork": {
+        "@id": "#isotope-signatures-iso-out"
+      }
+    },
+    {
       "@id": "#domain-profile",
       "@type": "PropertyValue",
       "name": "domain profile",
@@ -406,6 +589,12 @@
       "@id": "#author-2",
       "@type": "Person",
       "name": "William R. Fraser"
+    },
+    {
+      "@id": "https://spdx.org/licenses/CC-BY-4.0",
+      "@type": "CreativeWork",
+      "name": "CC-BY-4.0",
+      "description": "The licence the description gives for this research."
     }
   ]
 }

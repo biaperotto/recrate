@@ -15,6 +15,7 @@ Retrieved 2026-10-17.
 | `crate/test-data/` | Test input (200×200, 16-bit), expected label image, overlay, and count (**20 nuclei**) | same | MIT |
 | `research-data/B2/` | 3 of the 9 full fields of well B2 (1344×1024, 16-bit, DAPI) | [Zenodo 10.5281/zenodo.3362976](https://doi.org/10.5281/zenodo.3362976) | CC-BY-4.0 |
 | `fetch_data.sh` | Downloads whole wells from Zenodo (`./fetch_data.sh B2 B3`) | | |
+| `reuse-bbbc039/` | 6 of BBBC039's 200 images (U2OS nuclei, Hoechst, 520×696, 16-bit) with their ground-truth masks in `ground-truth/`, for **Reuse** | [BBBC039](https://bbbc.broadinstitute.org/BBBC039), Broad Bioimage Benchmark Collection | CC0 |
 | `make_half_resolution.py` | Makes `my-data-half-resolution/`: the B2 fields at half resolution (2×2 averaged), for the reuse example | derived from `research-data/B2` | CC-BY-4.0 |
 
 ## The workflow
@@ -63,3 +64,13 @@ published count and label image exactly (`tests/test_galaxy.py`).
 
 Still missing: a pixel size. Neither the test image nor the Zenodo images carry one and the record doesn't state
 it, so sizes stay in pixels. Take it from the acquisition metadata rather than assuming one.
+
+## Reuse on another lab's images: BBBC039
+
+`reuse-bbbc039/` is what the example opens with under **Reuse**: the same 6 BBBC039 images as the StarDist example
+(every 33rd in name order), from another lab and microscope, denser than the research images. With the workflow's
+published settings unchanged it finds **472 nuclei against 627** in the ground truth (87/110, 101/142, 5/7, 106/136,
+82/104, 91/128 per image). A smaller filter doesn't close the gap (filter size 2: 485; 1: 528): the workflow has no
+step that splits touching nuclei, so on dense images neighbours merge. ReCRATE shows this rather than fixing it:
+because the folder has a `ground-truth/` with masks named like the images, each run reports `count_true` next to
+`count`, and the app plots them side by side.

@@ -35,7 +35,7 @@ def validate(run_dir: Path, out: Path) -> dict:
 def test_run_crates_validate(tmp_path):
     a = agentify(tmp_path / "agent", crate=EXAMPLE / "crate", validate="none")
     runs = [reproduce(a.spec(), a.runs_dir, agent="test").run_dir,
-            run_on_data(a.spec(), EXAMPLE / "research-data" / "B2", a.runs_dir, agent="test", pixel_ratio=2).run_dir]
+            run_on_data(a.spec(), EXAMPLE / "research-data" / "B2", a.runs_dir, agent="test", scale_ratio=2).run_dir]
     make_run_figure(runs[0])
     review_conclusion(runs[0], "Test Person", "yes", "same count")
     for i, run in enumerate(runs):

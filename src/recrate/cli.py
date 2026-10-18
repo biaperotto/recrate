@@ -247,7 +247,7 @@ def cmd_check(a) -> int:
     from .model import parameter_plan
 
     spec = _agent(a.target).spec(a.method)
-    report = check_inputs(spec, a.data, pixel_ratio=a.pixel_ratio)
+    report = check_inputs(spec, a.data, scale_ratio=a.scale_ratio)
     _print_check(report)
     plan = parameter_plan(spec, report)
     for group, title in (("adjusted", "Adjusted automatically"), ("decide", "Needs your decision"),
@@ -270,7 +270,7 @@ def cmd_run(a) -> int:
     if changes and not a.reason:
         raise ValueError("Changing a parameter needs a reason: add --reason \"...\" (it is recorded in the run crate).")
     out = run_on_data(agent.spec(a.method), a.data, _runs(agent, a.runs_dir), runner=a.runner, agent=a.who,
-                      auto_adjust=not a.no_adjust, channel=a.channel, pixel_ratio=a.pixel_ratio,
+                      auto_adjust=not a.no_adjust, channel=a.channel, scale_ratio=a.scale_ratio,
                       overrides={k: (v, a.reason) for k, v in changes.items()} or None)
     _print_check(out.check)
     print(f"Parameters used: {out.params}")
@@ -519,7 +519,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("target")
     s.add_argument("data")
     s.add_argument("--method")
-    s.add_argument("--pixel-ratio", type=float, help="Your pixel size / the research's, when the research states none")
+    s.add_argument("--scale-ratio", "--pixel-ratio", dest="scale_ratio", type=float,
+                   help="When the research doesn't state the scale its parameters depend on (pixel size, sampling rate): your value / the research's, e.g. 2 for 2×2-binned images")
     s.set_defaults(func=cmd_check)
 
     s = sub.add_parser("run", help="Run a method on your data, with checks and a run crate")
@@ -531,8 +532,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--channel", type=int, default=0, help="Channel index to analyse (0-based)")
     s.add_argument("--param", action="append", metavar="NAME=VALUE", help="Change a parameter (needs --reason)")
     s.add_argument("--reason", help="Why you changed the parameters (recorded in the run crate)")
-    s.add_argument("--pixel-ratio", type=float, help="Your pixel size / the research's, when the research states "
-                                                     "none (e.g. 2 for 2×2-binned images)")
+    s.add_argument("--scale-ratio", "--pixel-ratio", dest="scale_ratio", type=float,
+                   help="When the research doesn't state the scale its parameters depend on (pixel size, sampling rate): your value / the research's, e.g. 2 for 2×2-binned images")
     s.set_defaults(func=cmd_run)
 
     s = sub.add_parser("approve", help="Record a visual check of a run's overlays")

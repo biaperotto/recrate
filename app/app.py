@@ -52,9 +52,14 @@ WH = ROOT / "examples" / "workflowhub-nuclei-segmentation"
 SD = ROOT / "examples" / "stardist-nuclei"
 EXAMPLES = {
     "workflowhub": {"title": "Nuclei segmentation · WorkflowHub #771",
-                    "about": "A published Galaxy workflow crate, with public microscopy images from Zenodo.",
-                    "tags": ["RO-Crate", "Galaxy", "real data"],
-                    "agent": WH / "paper_agent", "build": {"crate": WH / "crate"}, "data": WH / "research-data" / "B2"},
+                    "about": "The simple one: a published Galaxy workflow (Otsu threshold, count) reproduced exactly on "
+                             "its own test image, then reused on 6 open BBBC039 images with their ground truth.",
+                    "tags": ["RO-Crate", "Galaxy", "microscopy", "ground truth"],
+                    "agent": WH / "paper_agent", "build": {"crate": WH / "crate"},
+                    "data": WH / "reuse-bbbc039",
+                    "data_note": "6 images from BBBC039 (U2OS nuclei, Hoechst; Broad Institute, CC0), another lab and "
+                                 "microscope, with their ground truth in ground-truth/: your counts are shown next to "
+                                 "the true ones."},
     "stardist": {"title": "Cell Detection with Star-convex Polygons · StarDist, arXiv 2018",
                  "about": "A segmentation preprint with public code, model and data. Reproduce its Table 1, then reuse "
                           "the same model on a second public nuclei dataset (BBBC039) and compare the segmentations.",
@@ -62,7 +67,9 @@ EXAMPLES = {
                  "agent": SD / "paper_agent",
                  "fetch_paper": "arXiv:1806.03535",  # fetched when opened: the arXiv licence doesn't let us ship it
                  "build": {"crate": SD / "crate", "paper_doi": "10.48550/arXiv.1806.03535"},
-                 "env": True, "data": None,
+                 "env": True, "data": SD / "reuse-sample",
+                 "data_note": "6 of BBBC039's 200 images, with their ground truth (CC0): enough to see how the "
+                              "model does on another lab's nuclei. For all 200, use *From a link*.",
                  "reuse_links": {"label": "BBBC039 (Broad Institute, CC0): 200 U2OS nuclei images, Hoechst, with "
                                           "ground truth",
                                  "refs": ["https://data.broadinstitute.org/bbbc/BBBC039/images.zip",
@@ -83,7 +90,8 @@ TOOL_LABEL = {
     "reproducibility_record": "Reading the record", "set_pixel_size": "Setting the pixel size",
     "compare_paper_parameters": "Running with the published values unchanged",
     "followup_checks": "Listing follow-up checks", "run_followup_check": "Running a follow-up check",
-    "make_figure": "Plotting from the run",
+    "make_figure": "Plotting from the run", "recreated_figures": "Showing the recreated figures",
+    "review_figure": "Recording your figure review",
 }
 
 
@@ -427,6 +435,11 @@ def open_example(key: str) -> None:
         built = False  # built before ReCRATE looked for the paper's code and data: rebuild
     if built and any(not m.ladder for m in PaperAgent.load(ex["agent"]).methods):
         built = False  # built before the verdict ladder
+    if built and ex["build"].get("crate"):
+        from recrate.crate import list_methods, resolve_crate_dir
+
+        if len(list_methods(resolve_crate_dir(ex["build"]["crate"]))) != len(PaperAgent.load(ex["agent"]).methods):
+            built = False  # the example's crate gained (or lost) a method since it was built
     if not built:  # missing, or built by an older ReCRATE
         with st.spinner("Building the example: reading it, finding its code and data, reproducing what can run…"):
             build = dict(ex["build"])
@@ -440,8 +453,13 @@ def open_example(key: str) -> None:
             build_env(ex["agent"], log=lambda *_: None)
         with st.spinner("Reproducing the paper's results…"):
             revalidate(ex["agent"])
+    if ex.get("make_data") and not Path(ex["data"]).exists():  # derived from the example's own data, made once
+        import subprocess
+
+        subprocess.run([sys.executable, str(ex["make_data"])], check=True, capture_output=True)
     load_agent(ex["agent"], ex["data"])
     ss.ro = {"example": key}
+    ss.scale_ratio = None
     ss._goto = "validate"
     a = PaperAgent.load(ex["agent"])
     say(f"Opened **{a.card()['title']}**. {a.card()['verdict']} "
@@ -693,13 +711,13 @@ def data_signature(files: list[Path]) -> tuple:
 
 
 @st.cache_data(show_spinner=False)
-def cached_check(agent_dir: str, method: str, data: str, sig: tuple) -> dict:
+def cached_check(agent_dir: str, method: str, data: str, sig: tuple, scale_ratio: float | None = None) -> dict:
     from recrate.model import parameter_plan
 
     a = PaperAgent.load(agent_dir)
     try:
         spec = a.spec(method)
-        r = check_inputs(spec, Path(data))
+        r = check_inputs(spec, Path(data), scale_ratio=scale_ratio)
     except CrateError as e:
         return {"status": "fail", "can_run": False, "adjustments": [], "plan": None,
                 "rows": [{"check": "Method inputs", "paper": "not declared", "your data": "-", "status": "fail",
@@ -844,7 +862,12 @@ def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None
                                   label_visibility="collapsed") or metrics[0]
     if s["mode"] != "reproduce" and not other and rows and f"{metric}_true" in rows[0]:  # ground truth in your data
         other, lab2 = [{**r, metric: r[f"{metric}_true"]} for r in rows], "Ground truth (in your data)"
-    mean = lambda rr: sum(float(r[metric]) for r in rr if r.get(metric)) / max(1, len(rr))  # noqa: E731
+    has = lambda r: r.get(metric) not in (None, "")  # noqa: E731
+    if other and not any(has(r) for r in other):  # e.g. the paper publishes the count, not the mean area
+        other = None
+    if ref_rows and not any(has(r) for r in ref_rows):
+        ref_rows = None
+    mean = lambda rr: sum(float(r[metric]) for r in rr if has(r)) / max(1, sum(1 for r in rr if has(r)))  # noqa: E731
     c = st.columns(3)
     c[0].metric("This run" if s["mode"] == "reproduce" else "Your run", f"{mean(rows):.4g}", border=True, help=lab1)
     if s["mode"] == "reproduce" and other:
@@ -855,7 +878,8 @@ def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None
                     delta_color="off", border=True, help=lab2)
     if ref_rows:
         c[2].metric("Published data", f"{mean(ref_rows):.4g}", border=True, help="Reported on the published data")
-    df = pd.DataFrame([{"item": r.get("image") or r[list(r)[0]], "value": float(r[metric]), "series": lab1} for r in rows])
+    df = pd.DataFrame([{"item": r.get("image") or r[list(r)[0]], "value": float(r[metric]), "series": lab1}
+                       for r in rows if has(r)])
     if other:
         df = pd.concat([df, pd.DataFrame([{"item": r.get("image") or r[list(r)[0]], "value": float(r[metric]),
                                            "series": lab2} for r in other if r.get(metric)])])
@@ -884,16 +908,45 @@ def results_tab(agent: PaperAgent, run_dir: Path | None, data_dir: Path) -> None
                 spec, run_inputs(run_dir, data_dir), spec.default_params(), runner=runner))
             st.rerun()
     c1, c2 = st.columns(2)
-    chart_png = comparison_chart([r.get("image") or r[list(r)[0]] for r in rows], [float(r[metric]) for r in rows],
-                                 [float(r[metric]) for r in other] if other else None, metric, lab1, lab2, rng)
+    item = lambda r: r.get("image") or r[list(r)[0]]  # noqa: E731
+    mine = [r for r in rows if has(r)]
+    theirs = {item(r): float(r[metric]) for r in (other or []) if has(r)}
+    paired = bool(theirs) and all(item(r) in theirs for r in mine)  # the chart pairs values item by item
+    chart_png = comparison_chart([item(r) for r in mine], [float(r[metric]) for r in mine],
+                                 [theirs[item(r)] for r in mine] if paired else None, metric, lab1, lab2, rng)
     c1.download_button("Chart (PNG)", chart_png, file_name=f"{s['run']}-{metric}.png", mime="image/png",
                        width="stretch", icon=":material/download:", key=f"chartdl-{s['run']}-{metric}")
     if c2.button("Add chart to the export", width="stretch", key=f"addchart-{s['run']}-{metric}"):
         ss.figures[f"{s['run']}-{metric}.png"] = chart_png
         st.toast("Added to the export bundle.")
+    ovs = sorted((run_dir / "outputs" / "overlays").glob("*.png"))
+    if ovs:  # what the method found, on each image: the first thing to look at
+        st.markdown("**Segmentation on " + ("your images" if s["mode"] != "reproduce" else "the published images") + "**")
+        by = {Path(r.get("image", "")).stem: r for r in rows}
+        for i in range(0, min(len(ovs), 6), 3):
+            for col, ov in zip(st.columns(3), ovs[i:i + 3]):
+                stem = ov.name.removesuffix("_overlay.png")
+                r = by.get(stem, {})
+                cap = f"{stem[:28]}" + (f" · {r[metric]} {metric.replace('_', ' ')}" if r.get(metric) else "") + \
+                    (f" (truth {r[metric + '_true']})" if r.get(f"{metric}_true") else "")
+                col.image(str(ov), caption=cap, width="stretch")
+        if len(ovs) > 6:
+            st.caption(f"First 6 of {len(ovs)} images; all of them under *Review each result*.")
+    from recrate.paper_figures import figure_label
+
+    drawn = sorted(f for f in (run_dir / "outputs" / "figures").glob("*")  # the figures the method drew in this run
+                   if f.suffix.lower() in IMAGE_EXT and f.stem != "published_vs_reproduced") \
+        if (run_dir / "outputs" / "figures").is_dir() else []
+    if drawn:
+        where = "your data" if s["mode"] != "reproduce" else "the published data"
+        st.markdown(f"**Figures drawn from {where}**")
+        for f in drawn:
+            label = figure_label(f.name)
+            st.image(str(f), width="stretch",
+                     caption=(f"The paper's {label}, drawn by the same method from {where}" if label
+                              else f"{f.stem}, drawn from {where}"))
     with st.expander("Table"):
         st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-    ovs = sorted((run_dir / "outputs" / "overlays").glob("*.png"))
     paper_ovs = paper_overlays(agent, s) if ovs and s["mode"] != "reproduce" else []
     if paper_ovs:
         with st.expander("The paper's data next to yours", expanded=True):
@@ -1022,106 +1075,169 @@ def figure_builder(agent: PaperAgent, run_dir: Path, data_dir: Path) -> None:
 
 # ---- Reproduce: does the research reproduce on its own data? ------------------------------------------
 def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> None:
+    """One answer first (does it reproduce?), then one card per method with only what needs attention; the rest is
+    folded away."""
     env = agent.environment
-    report = agent.path / "REPORT.md"
-    if report.exists():  # written by the /recrate agent: what can be recreated, and what can't
-        with st.expander("Report from the ReCRATE agent", expanded=not agent.methods, icon=":material/smart_toy:"):
-            st.markdown(report.read_text(encoding="utf-8"))
     if not agent.methods:
         empty_validate(agent)
     else:
-        verdict_and_ladder(agent)
-    for m in agent.methods:
-        spec = agent.spec(m.id)
-        with st.container(border=True):
-            st.markdown(f"**{m.name}** &nbsp; {BADGE.get(m.status, m.status)} &nbsp; :gray-badge[{m.language}]"
-                        + (f" &nbsp; :gray-badge[{m.readiness}]" if m.readiness else ""))
-            for g in m.gaps:
-                st.caption(("⛔ " if m.readiness == "blocked" else "ℹ️ ") + g)
-            if m.run_crate and Path(m.run_crate).exists():
-                results_by_value(Path(m.run_crate))
-                if m.status == "differs":
-                    followups_view(agent, m, spec)
-                conclusion_review(agent, m)
-            elif m.detail:
-                st.markdown(f"<span class='muted'>{html.escape(m.detail)}</span>", unsafe_allow_html=True)
-            run = latest(runs, m.name, "reproduce")
-            if run and st.toggle("Show the latest reproduction's outputs", key=f"showrep-{m.id}"):
-                results_tab(agent, run, data_dir)
+        verdict(agent)
+        for m in agent.methods:
+            method_card(agent, m, runs, data_dir)
+    st.markdown("<div class='eyebrow' style='margin-top:.8rem'>Details</div>", unsafe_allow_html=True)
     if agent.methods:
         from recrate.model import assumptions
 
         said = list(dict.fromkeys(a for m in agent.methods for a in assumptions(agent.spec(m.id), env)))
-        if said:
-            with st.expander(f"What the paper doesn't say ({len(said)})", icon=":material/help:"):
+        gaps = list(dict.fromkeys(g for m in agent.methods if m.readiness != "blocked" for g in m.gaps))
+        if said or gaps:
+            with st.expander(f"What the paper doesn't say ({len(said) + len(gaps)})", icon=":material/help:"):
                 st.caption("Each is an assumption ReCRATE, or whoever drafted the crate, had to make.")
-                st.markdown("\n".join(f"- {html.escape(a)}" for a in said))
-    with st.expander("Software environment" + (f" · as of {env.published}" if env and env.published else "")):
+                st.markdown("\n".join(f"- {html.escape(a)}" for a in gaps + said))
+    with st.expander("Software environment" + (f" · as of {env.published}" if env and env.published else ""),
+                     icon=":material/inventory_2:"):
         if env and env.published:
             st.caption(f"Publication date from {env.published_source}.")
         environment_table(agent)
     with st.expander("Read the source" + (" · cited passage highlighted" if ss.get("highlight") else ""),
-                     expanded=bool(ss.get("highlight"))):
+                     expanded=bool(ss.get("highlight")), icon=":material/article:"):
         source_view(agent)
 
 
-LADDER_BADGE = {"passed": ":green-badge[passed]", "partial": ":orange-badge[partial]",
-                "failed": ":red-badge[failed]", "not checked": ":gray-badge[not checked]"}
+STEP_MARK = {"passed": "✓", "partial": "◐", "failed": "✗", "not checked": "○"}
 
 
-def verdict_and_ladder(agent: PaperAgent) -> None:
-    """The verdict sentence (written from the results, never by the model), then one ladder row per method."""
-    from recrate.model import STEPS
-
-    card = agent.card()
+def verdict(agent: PaperAgent) -> None:
+    """The verdict sentence, written from the results (never by the model)."""
     ladders = [m.ladder for m in agent.methods if m.ladder]
     numbers = [lad["numbers"]["status"] for lad in ladders]
     show = (st.success if numbers and all(n == "passed" for n in numbers) else
             st.warning if any(n in ("partial", "failed") for n in numbers) else
             st.error if any(lad["runs"]["status"] == "failed" for lad in ladders) else st.info)
-    show(f"**{card['verdict']}**")
-    for m in agent.methods:
-        if not m.ladder:
-            continue
-        cols = st.columns([1.1] + [1] * len(STEPS))
-        cols[0].markdown(f"**{m.name}**")
-        for c, (key, label) in zip(cols[1:], STEPS):
-            stp = m.ladder.get(key, {"status": "not checked", "reason": ""})
-            c.markdown(f"<span class='eyebrow'>{label}</span>", unsafe_allow_html=True)
-            c.markdown(LADDER_BADGE.get(stp["status"], stp["status"]), help=stp["reason"])
-    st.caption("“Ready” never means reproduced: a step advances only on evidence from a run, and only a person "
-               "marks the last one.")
+    show(f"**{agent.card()['verdict']}**")
 
 
-def results_by_value(run_dir: Path) -> None:
-    """Every compared value: published, reproduced, difference, tolerance and where it comes from. Mismatches first."""
+def method_card(agent: PaperAgent, m, runs: list[dict], data_dir: Path) -> None:
     from recrate.figures import comparison_from_run, make_run_figure
+    from recrate.model import STEPS
 
-    comp = comparison_from_run(run_dir)
-    if comp is None or not comp.measures:
+    spec = agent.spec(m.id)
+    run_dir = Path(m.run_crate) if m.run_crate and Path(m.run_crate).exists() else None
+    comp = comparison_from_run(run_dir) if run_dir else None
+    with st.container(border=True):
+        st.markdown(f"**{m.name}** &nbsp; {BADGE.get(m.status, m.status)}")
+        if m.ladder:  # where it stands, in one line: materials · runs · same numbers · same conclusion
+            st.markdown(" &nbsp;·&nbsp; ".join(
+                f"<span title='{html.escape(m.ladder.get(k, {}).get('reason', ''))}'>"
+                f"{STEP_MARK.get(m.ladder.get(k, {}).get('status', 'not checked'), '○')} {label}</span>"
+                for k, label in STEPS), unsafe_allow_html=True)
+        if m.readiness == "blocked":
+            for g in m.gaps:
+                st.caption(f"⛔ {g}")
+        if comp and comp.measures:
+            bad = [x for x in comp.measures if not x.within]
+            if bad:
+                st.markdown(f"**{len(bad)} of {len(comp.measures)} values differ from the paper:**")
+                st.dataframe(pd.DataFrame([{"value": x.measure, "published": x.reported, "recomputed": x.reproduced,
+                                            "tolerance": x.tolerance_label} for x in bad]),
+                             hide_index=True, width="stretch")
+            else:
+                st.markdown(f"All **{len(comp.measures)}** published values reproduce, within the paper's tolerance.")
+        elif m.detail:
+            st.markdown(f"<span class='muted'>{html.escape(m.detail)}</span>", unsafe_allow_html=True)
+        if comp and comp.measures:
+            with st.expander(f"All {len(comp.measures)} values"):
+                st.dataframe(pd.DataFrame([{"value": x.measure, "published": x.reported, "recomputed": x.reproduced,
+                                            "difference": f"±{x.rel_diff:.3g}" if x.absolute else f"{x.rel_diff:.1%}",
+                                            "tolerance (source)": x.tolerance_label,
+                                            "within": "yes" if x.within else "no"}
+                                           for x in sorted(comp.measures, key=lambda x: x.within)]),
+                             hide_index=True, width="stretch")
+        if run_dir:
+            figures_block(spec, run_dir, comp)
+            paper_figures_view(agent, m, run_dir)
+        if m.status == "differs":
+            with st.expander("Where could the difference come from?"):
+                followups_view(agent, m, spec)
+        run = latest(runs, m.name, "reproduce")
+        if run and st.toggle("Show the outputs of the latest reproduction", key=f"showrep-{m.id}"):
+            results_tab(agent, run, data_dir)  # has its own expanders, which can't sit inside another
+        if run_dir:
+            conclusion_review(agent, m)
+
+
+IMAGE_EXT = {".png", ".jpg", ".jpeg"}
+
+
+def figures_block(spec, run_dir: Path, comp) -> None:
+    """The reproduction as pictures: what the method found on the published data (its segmentation drawn on the
+    image) next to the published picture when the research has one, and every published value next to the
+    recomputed one."""
+    from recrate.figures import make_run_figure
+
+    published = sorted(p for p in (spec.path / "expected" / "figures").glob("*") if p.suffix.lower() in IMAGE_EXT) \
+        if (spec.path / "expected" / "figures").is_dir() else []
+    overlays = sorted((run_dir / "outputs" / "overlays").glob("*.png"))
+    plot = run_dir / "outputs" / "figures" / "published_vs_reproduced.png"
+    if comp and len(comp.measures) > 1 and not plot.exists():
+        try:  # drawn from the run's recorded comparison, and recorded in its run crate
+            make_run_figure(run_dir)
+        except Exception:  # noqa: BLE001 - no figure is better than a broken page
+            pass
+    if not (published or overlays or plot.exists()):
         return
-    rows = sorted(comp.measures, key=lambda m: m.within)
-    df = pd.DataFrame([{"value": m.measure, "published": m.reported, "reproduced": m.reproduced,
-                        "difference": f"±{m.rel_diff:.3g}" if m.absolute else f"{m.rel_diff:.1%}",
-                        "tolerance (source)": m.tolerance_label, "within": "yes" if m.within else "NO"}
-                       for m in rows])
-    st.markdown(f"**Same numbers: {comp.count} within tolerance**")
-    st.dataframe(df.style.apply(lambda r: ["background-color: #fbe9e2" if r["within"] == "NO" else ""] * len(r),
-                                axis=1), hide_index=True, width="stretch")
-    fig = run_dir / "outputs" / "figures" / "published_vs_reproduced.png"
-    if fig.exists():
-        st.image(str(fig), caption="Plotted from this run's outputs (recorded in its run crate)", width="stretch")
-    elif st.button("Plot published vs reproduced", key=f"fig-{run_dir.name}", icon=":material/scatter_plot:"):
-        make_run_figure(run_dir)
-        st.rerun()
+    st.markdown("**Figures**")
+    if published or overlays:
+        shown = ([(p, "Published (" + p.stem.replace("_", " ") + ")") for p in published[:2]]
+                 + [(o, "Reproduced: " + o.name.removesuffix("_overlay.png")) for o in overlays[:max(1, 3 - len(published[:2]))]])
+        for col, (img, cap) in zip(st.columns(len(shown)), shown):
+            col.image(str(img), caption=cap, width="stretch")
+        if overlays:
+            st.caption("Reproduced images show what the method found, outlined on the published data.")
+    if plot.exists():
+        st.image(str(plot), caption="Each published value next to the recomputed one (from this run's outputs)",
+                 width="stretch")
+
+
+def paper_figures_view(agent: PaperAgent, m, run_dir: Path) -> None:
+    """The paper's figures this method recreated, with the paper's captions. A person says whether they show the same
+    thing as the paper's (recorded in the run crate): ReCRATE never decides that itself."""
+    from recrate.paper_figures import VERDICTS, recreated, review_figure
+
+    figs = recreated(run_dir, agent.path / "paper")
+    if not figs:
+        return
+    done = sum(1 for f in figs if f["review"])
+    with st.expander(f"The paper's figures, recreated ({len(figs)}) · {done} reviewed", icon=":material/compare:",
+                     expanded=not done):
+        st.caption("Redrawn by this run from the published data, as each caption describes. Does it show the same "
+                   "thing as the paper's figure? Only a person can say, and it is recorded in the run crate.")
+        for f in figs:
+            st.markdown(f"**{f['label']}**" + (f" <span class='muted'>· {html.escape(short(f['caption'], 160))}</span>"
+                                               if f["caption"] else ""), unsafe_allow_html=True)
+            st.image(str(f["recreated"]), width="stretch")
+            r = f["review"]
+            if r:
+                st.caption(f"{ {'same': '✅', 'differs': '⚠️'}.get(r['value'], '❔')} {r['value']}, by {r['by']}"
+                           + (f": {r['note']}" if r["note"] else ""))
+            else:
+                k = f"figrev-{run_dir.name}-{f['recreated'].name}"
+                a1, a2, a3 = st.columns([1.6, 2.2, 0.7], vertical_alignment="bottom")
+                verdict = a1.segmented_control("Same figure?", VERDICTS, key=f"{k}-v")
+                note = a2.text_input("What you see (recorded)", key=f"{k}-n",
+                                     placeholder="e.g. same pattern; the paper also draws an unexplained inner bar")
+                if a3.button("Record", key=f"{k}-b", disabled=not verdict or ss.tools.who == "anonymous",
+                             help="Set your name in the top bar first" if ss.tools.who == "anonymous" else None):
+                    review_figure(run_dir, ss.tools.who, f["recreated"].name, verdict, note)
+                    note_for_chat(f"{ss.tools.who} reviewed the recreated {f['label']} of {m.name}: {verdict}.")
+                    st.rerun()
 
 
 def followups_view(agent: PaperAgent, m, spec) -> None:
     """When numbers differ: the follow-up checks, each its own recorded run. All of them stay visible."""
     from recrate.followup import followups_for, propose, run_followup
 
-    st.markdown("**Where could the difference come from?** Each check is its own run, linked to this one; the "
-                "result above is never replaced.")
+    st.caption("Each check is its own run, linked to this one; the result above is never replaced.")
     done = followups_for(agent.runs_dir, spec)
     for d in done:
         st.caption(f"✔ {d['followup']}: {d['headline']}")
@@ -1360,11 +1476,15 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
         st.caption(f"{len(files)} file(s) · {fmt_bytes(sum(f.stat().st_size for f in files))} · "
                    + ("uploaded" if data_dir == ss.uploads / "data" else f"folder `{data_dir.name}`") if files else
                    "No data yet: upload files, or point at a folder.")
+        ex = EXAMPLES.get(ss.get("ro", {}).get("example", ""), {})
+        if ex.get("data_note") and ex.get("data") and data_dir == Path(ex["data"]):
+            st.caption(f"Example data: {ex['data_note']}")
+    scale_question(agent, data_dir, files)
     st.markdown("<div class='eyebrow' style='margin-top:.6rem'>2 · Does it fit each method?</div>", unsafe_allow_html=True)
     missing_px = False
     for m in agent.methods:
         spec = agent.spec(m.id)
-        fit = (cached_check(str(agent.path), m.name, str(data_dir), data_signature(files))
+        fit = (cached_check(str(agent.path), m.name, str(data_dir), data_signature(files), ss.get("scale_ratio"))
                if files or not agent.spec(m.id).needs_data else None)
         adj = {a["parameter"]: a for a in (fit["adjustments"] if fit else [])}
         with st.container(border=True):
@@ -1445,6 +1565,37 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
                 st.rerun()
 
 
+def scale_question(agent: PaperAgent, data_dir: Path, files: list[Path]) -> None:
+    """When the research doesn't state the scale some parameters depend on (pixel size for images, sampling rate for
+    recordings...), ask how the user's compares: the one fact ReCRATE can't read from both sides. Asked only in fields
+    that have such a scale, so a paper analysing tables is never asked about pixels."""
+    from recrate.profiles import fields_of
+
+    if not files:
+        return
+    fields = [f for f in fields_of(agent) if f.scale]
+    rows = [r for m in agent.methods
+            for r in cached_check(str(agent.path), m.name, str(data_dir), data_signature(files),
+                                  ss.get("scale_ratio"))["rows"]]
+    f = next((f for f in fields if any(r["check"] == f.scale_check and r["paper"] == "not stated" for r in rows)), None)
+    if f is None:
+        return
+    with st.container(border=True):
+        st.markdown(f"**{f.scale_question}** The research doesn't state its {f.scale}, and some parameters depend on "
+                    "it. If yours differs, they are rescaled to keep their meaning.")
+        choice = st.segmented_control("Scale", ["Same", "Different", "I don't know"], key="scale-choice",
+                                      default="Same" if ss.get("scale_ratio") == 1 else
+                                      "Different" if ss.get("scale_ratio") else "I don't know",
+                                      label_visibility="collapsed")
+        ratio = 1.0 if choice == "Same" else None
+        if choice == "Different":
+            ratio = st.number_input(f.scale_ratio_label, min_value=0.05, max_value=20.0, step=0.5,
+                                    value=float(ss.get("scale_ratio") or 2.0), help=f.scale_help)
+        if ratio != ss.get("scale_ratio"):
+            ss.scale_ratio = ratio
+            st.rerun()
+
+
 def reuse_actions(agent: PaperAgent, data_dir: Path, files: list[Path]) -> None:
     tools: ChatTools = ss.tools
     if not agent.methods:
@@ -1453,7 +1604,7 @@ def reuse_actions(agent: PaperAgent, data_dir: Path, files: list[Path]) -> None:
     c1, c2 = st.columns([1.3, 2], vertical_alignment="center")
     name = c1.selectbox("Method", names, key="reuse-method", label_visibility="collapsed") if len(names) > 1 else names[0]
     m = next(x for x in agent.methods if x.name == name)
-    fit = (cached_check(str(agent.path), m.name, str(data_dir), data_signature(files))
+    fit = (cached_check(str(agent.path), m.name, str(data_dir), data_signature(files), ss.get("scale_ratio"))
                if files or not agent.spec(m.id).needs_data else None)
     overrides = ss.get(f"ov-{m.id}", {})
     missing = [k for k, (_, why) in overrides.items() if not str(why).strip()]
@@ -1468,7 +1619,7 @@ def reuse_actions(agent: PaperAgent, data_dir: Path, files: list[Path]) -> None:
         adj = fit["adjustments"] if fit else []
         out = run_with_progress(f"Running {m.name}", lambda: run_on_data(
             spec, data_dir, agent.runs_dir, runner=runner, agent=tools.who, overrides=overrides or None,
-            progress=tools.progress))
+            progress=tools.progress, scale_ratio=ss.get("scale_ratio")))
         ss.run_name = out.run_dir.name
         tools.last_run = out.run_dir
         if adj or overrides:
@@ -1675,96 +1826,41 @@ def crate_panel(agent: PaperAgent, key: str) -> None:
                        key=f"crate-dl-{key}", on_click="ignore")
 
 
+def run_sentence(r: dict) -> str:
+    """One run, in the words a researcher would use."""
+    what = {"reproduce": f"Reproduced **{r['method']}** on the published data",
+            "follow-up": f"Checked a possible cause of a difference in **{r['method']}**",
+            "reuse": f"Ran **{r['method']}** on your data"}.get(r["mode"], f"Ran **{r['method']}**")
+    result = (f"{r['images']} file(s)" if r.get("images") else "") if r["mode"] == "reuse" else \
+        (r.get("purpose") or "") + " " + (r["verdict"] or "")
+    return what + (f": {short(result.strip(), 140)}" if result and result.strip() else "")
+
+
 def record_section(agent: PaperAgent, runs: list[dict]) -> Path | None:
-    with st.container(border=True):
-        crate_panel(agent, "record")
-    run_dir = None
+    """The record, minimal: what was run, when, by whom, with what result. For the selected run, what you changed and
+    a methods paragraph for your paper; below, its record to download. The RO-Crate details stay inside that file."""
     if not runs:
-        st.info("No runs yet. Every reproduction and every run on your data is written here as a Workflow Run "
-                "RO-Crate: what ran, on which data, with which settings, checked by whom.")
-    else:
-        st.markdown(f"**{headline(summarise_record(runs))}**")
-        kinds = {"reproduce": "reproduction", "follow-up": "follow-up check", "reuse": "your data"}
-        c1, c2 = st.columns(2)
-        show_kinds = c1.multiselect("Kind", list(kinds.values()), default=list(kinds.values()), key="rec-kinds",
-                                    label_visibility="collapsed", placeholder="Kind")
-        methods_ = sorted({r["method"] for r in runs if r["method"]})
-        show_methods = c2.multiselect("Method", methods_, default=methods_, key="rec-methods",
-                                      label_visibility="collapsed", placeholder="Method") if len(methods_) > 1 else methods_
-        shown = [r for r in reversed(runs) if kinds.get(r["mode"], r["mode"]) in show_kinds
-                 and (r["method"] in show_methods or not r["method"])]
-        if not shown:
-            st.caption("No run matches these filters.")
-            return None
-        rows = [{"when": (r["when"] or "")[:16].replace("T", " "), "kind": kinds.get(r["mode"], r["mode"]),
-                 "method": r["method"], "result": short((r.get("purpose") or "") + " " + (r["verdict"] if r["mode"] != "reuse"
-                                                       else r["headline"] or ""), 120),
-                 "by": r["by"], "review": r.get("conclusion") or r["approved"] or ""} for r in shown]
-        names = [r["run"] for r in shown]
-        sel = st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", height=min(38 * len(rows) + 40, 260),
-                           on_select="rerun", selection_mode="single-row", key="runs-table")
-        picked = (sel.selection.rows or [None])[0] if sel and hasattr(sel, "selection") else None
-        if picked is None:
-            want = ss.get("run_name")
-            picked = names.index(want) if want in names else 0
-        run_dir = agent.runs_dir / names[picked]
-        r = run_story(run_dir)
-        with st.container(border=True):
-            st.markdown(f"**{r['title']}**")
-            st.markdown(f"<span class='muted'>{html.escape(r['summary'] or '')}</span>", unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            c1.markdown(f"**Who** {r['who']}  \n**When** {(r['ended'] or '')[:19].replace('T', ' ')}")
-            c2.markdown(f"**Workflow** `{Path(r['workflow']['file'] or '').name}` ({r['workflow']['language']})")
-            st.caption("Software: " + "; ".join(r["software"]))
-            st.dataframe(pd.DataFrame([{"parameter": p["name"], "value": str(p["value"]), "published": str(p["paper_default"]),
-                                        "why": p["note"]} for p in r["parameters"]]), hide_index=True, width="stretch")
-            with st.expander(f"Inputs ({len(r['inputs'])}), with checksums"):
-                st.dataframe(pd.DataFrame([{"file": i["file"], "size": fmt_bytes(i["size_bytes"]),
-                                            "sha256": i["sha256"][:16] + "…"} for i in r["inputs"]]),
-                             hide_index=True, width="stretch")
-            if r["checks"] or r["comparison"] or r["reviews"]:
-                with st.expander("Checks, comparison and reviews"):
-                    for title, rows_ in (("Input checks", r["checks"]), ("Comparison with the published result",
-                                                                         r["comparison"]), ("Reviews", r["reviews"])):
-                        if rows_:
-                            st.markdown(f"**{title}**")
-                            st.dataframe(pd.DataFrame([{k: str(v) for k, v in x.items()} for x in rows_]),
-                                         hide_index=True, width="stretch")
-            if r["figures"]:
-                with st.expander(f"Figures ({len(r['figures'])}), each with its crate entry"):
-                    for f in r["figures"]:
-                        st.image(str(run_dir / f["file"]), caption=f"{f['name']}: {f['description']}  ·  `{f['file']}`")
-            with st.expander("Methods paragraph and references"):
-                spec = agent.spec(summarise_run(run_dir)["method"])
-                st.code(methods_markdown(run_dir), language="markdown", wrap_lines=True)
-                t1, t2 = st.tabs(["BibTeX", "CSL-JSON"])
-                t1.code(references_bib(agent, spec, run_dir), language="bibtex")
-                t2.code(json.dumps(references_csl(agent, spec, run_dir), indent=2, ensure_ascii=False), language="json")
-            if st.toggle("View as RO-Crate", key=f"asjson-{run_dir.name}"):
-                st.markdown(f"<div class='tree'>{tree_html(run_dir, run_dir)}</div>", unsafe_allow_html=True)
-                st.json(json.loads((run_dir / "ro-crate-metadata.json").read_text(encoding="utf-8")), expanded=1)
-    with st.expander("Connect from Claude or any MCP client"):
-        st.markdown("Run this research object as an agent: ask about the paper, check your data, reproduce, "
-                    "reuse and record, from a chat.")
-        mcp_install(agent.path, "record")
-        st.markdown("- **Read the paper**: about_paper, search_paper, describe_method, tables and figures\n"
-                    "- **Check and run**: check_my_data, reproduce, run_on_my_data, follow-up checks\n"
-                    "- **Figures**: make_figure\n"
-                    "- **Record**: review_conclusion, approve_run, methods_text, publish_run, report_page")
-    with st.expander("Files of this research object"):
-        root = agent.path
-        st.markdown(f"<div class='tree'>{tree_html(root, root)}</div>", unsafe_allow_html=True)
-        files = []
-        for d, dirs, names in os.walk(root):  # pruned as it goes: never into .git or the hidden folders
-            dirs[:] = sorted(x for x in dirs if x not in HIDE and not x.startswith("."))
-            files += [(Path(d) / n).relative_to(root).as_posix() for n in sorted(names)
-                      if n not in HIDE and not n.startswith(".")]
-            if len(files) > 3000:
-                break
-        pick = st.selectbox("Preview a file", files, index=None, placeholder="Preview a file…",
-                            label_visibility="collapsed")
-        if pick:
-            preview(root, pick)
+        st.info("Nothing recorded yet. Every time you reproduce the research or run a method on your data, it is "
+                "recorded here, so you can show exactly what you did.")
+        return None
+    st.caption("Every run is recorded: what ran, on which data, with which settings, and by whom.")
+    shown = list(reversed(runs))
+    names = [r["run"] for r in shown]
+    sel = st.dataframe(pd.DataFrame([{"when": (r["when"] or "")[:16].replace("T", " "),
+                                      "what": run_sentence(r).replace("**", ""), "by": r["by"]} for r in shown]),
+                       hide_index=True, width="stretch", height=min(38 * len(shown) + 40, 230), on_select="rerun",
+                       selection_mode="single-row", key="runs-table",
+                       column_config={"what": st.column_config.TextColumn(width="large")})
+    picked = (sel.selection.rows or [None])[0] if sel and hasattr(sel, "selection") else None
+    if picked is None:
+        picked = names.index(ss.get("run_name")) if ss.get("run_name") in names else 0
+    run_dir = agent.runs_dir / names[picked]
+    r = run_story(run_dir)
+    changed = [p for p in r["parameters"] if p["paper_default"] not in (None, "") and str(p["value"]) != str(p["paper_default"])]
+    st.markdown("Settings: " + ("; ".join(f"`{p['name']}` {p['paper_default']} → **{p['value']}**" for p in changed)
+                                if changed else "the paper's, unchanged."))
+    with st.expander("Methods paragraph for your paper"):
+        st.code(methods_markdown(run_dir), language="markdown", wrap_lines=True)
     return run_dir
 
 
@@ -1772,31 +1868,18 @@ def record_actions(agent: PaperAgent, run_dir: Path | None) -> None:
     if run_dir is None:
         st.caption("Runs appear here as you reproduce or reuse.")
         return
-    spec = agent.spec(summarise_run(run_dir)["method"])
-    c1, c2, c3 = st.columns([1, 1.3, 1.3], vertical_alignment="center")
-    with c1.popover("Include", width="stretch", icon=":material/tune:"):
-        inc = {k for k, on in {
-            "crate": st.checkbox("Run crate", value=True), "results": st.checkbox("Results", value=True),
-            "methods": st.checkbox("Methods paragraph", value=True), "references": st.checkbox("References", value=True),
-            "figures": st.checkbox(f"Figures ({len(ss.figures)})", value=bool(ss.figures), disabled=not ss.figures),
-        }.items() if on}
-    ss.export_include = inc
-    from recrate.report import build_report
+    import io
+    import zipfile
 
-    st.download_button("Report page (HTML, opens anywhere)", build_report(agent.path).read_bytes(),
-                       file_name=f"{agent.name[:40]}-report.html", mime="text/html", width="stretch",
-                       icon=":material/description:",
-                       help="One page with the verdict, every compared value, figures, follow-ups and every run")
-    if c2.button("Add to the record", width="stretch", icon=":material/bookmark_add:",
-                 help="Register this run in the research object's reproducibility record"):
-        st.toast(headline(publish_back(spec, run_dir)["summary"]))
-    bundle = ss.get("bundle")
-    if bundle and Path(bundle).exists() and Path(bundle).name.startswith(run_dir.name):
-        c3.download_button("Download bundle", Path(bundle).read_bytes(), file_name=Path(bundle).name,
-                           mime="application/zip", width="stretch", type="primary", icon=":material/download:")
-    elif c3.button("Export bundle", type="primary", width="stretch", icon=":material/inventory_2:"):
-        ss.bundle = str(export_bundle(agent, spec, run_dir, figures=ss.figures, include=ss.export_include))
-        st.rerun()
+    buf = io.BytesIO()  # the run's RO-Crate: everything about it, readable by people and machines
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(run_dir.rglob("*")):
+            if f.is_file():
+                z.write(f, Path(run_dir.name) / f.relative_to(run_dir))
+    st.download_button("Download this run's record", buf.getvalue(), file_name=f"{run_dir.name}.zip",
+                       mime="application/zip", type="primary", width="stretch", icon=":material/download:",
+                       help="The run as an RO-Crate: workflow, inputs with checksums, settings, results, figures, "
+                            "reviews, and a page that opens in any browser")
 
 
 # ---- the workstation card ------------------------------------------------------------------------------
@@ -1961,6 +2044,10 @@ def topbar() -> None:
         kind, label = engine_plan()
         with c[1].popover("Agent", width="stretch", icon=":material/smart_toy:"):
             agent_box()
+            if ss.get("agent_dir"):  # the same research object, from Claude or any MCP client
+                st.divider()
+                st.markdown("**Use it from Claude or any MCP client**")
+                mcp_install(Path(ss.agent_dir), "topbar")
         with c[2].popover(ss.who, width="stretch", icon=":material/person:", help="Who runs are recorded as"):
             st.markdown("**Recorded as**")
             st.caption("Every run crate names who ran it (provenance). Defaults to your git user name.")

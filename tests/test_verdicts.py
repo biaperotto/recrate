@@ -103,7 +103,7 @@ def test_reuse_says_what_ran_and_flags_a_missed_rescaling(nuclei):
     half = NUCLEI / "my-data-half-resolution"
     if not half.exists():
         pytest.skip("run examples/workflowhub-nuclei-segmentation/make_half_resolution.py")
-    adjusted = run_on_data(nuclei.spec(), half, nuclei.runs_dir, agent="test", pixel_ratio=2)
+    adjusted = run_on_data(nuclei.spec(), half, nuclei.runs_dir, agent="test", scale_ratio=2)
     root = next(e for e in load_run_crate(adjusted.run_dir)["@graph"] if e["@id"] == "./")
     assert root["description"].startswith("Reuse of segmentation_and_counting") and "on 3 input file(s)" in root["description"]
     assert "filter_size 3.0 → 1.5" in root["description"]

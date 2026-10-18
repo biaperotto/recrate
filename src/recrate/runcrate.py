@@ -223,12 +223,18 @@ def write_run_crate(
             output_refs.append(add({"@id": f"outputs/{rel}", "@type": "File", "name": rel,
                                     "encodingFormat": "text/plain" if Path(f).suffix == ".txt" else
                                     _MEDIA.get(Path(f).suffix.lower(), "application/octet-stream")}, part=True))
-    for i, fig in enumerate(figures or []):  # made by the paper's own plotting code, as part of the run
+    from .paper_figures import figure_label
+
+    for i, fig in enumerate(figures or []):  # plotted by the workflow during the run; figure-3.png recreates Figure 3
         (out_dir / "outputs" / "figures").mkdir(exist_ok=True)
         shutil.copy2(fig, out_dir / "outputs" / "figures" / fig.name)
+        label = figure_label(fig.name)
         output_refs.append(add({"@id": f"outputs/figures/{fig.name}", "@type": ["File", "ImageObject"],
-                                "name": f"Figure {fig.stem}", "encodingFormat": _MEDIA.get(fig.suffix.lower(), "image/png"),
-                                "description": "Plotted by the workflow's own code during this run."}, part=True))
+                                "name": f"Recreated {label}" if label else f"Figure {fig.stem}",
+                                "encodingFormat": _MEDIA.get(fig.suffix.lower(), "image/png"),
+                                "description": (f"Recreates {label} of the paper; plotted by the workflow during this run."
+                                                if label else "Plotted by the workflow's own code during this run.")},
+                               part=True))
 
     person_ref = add(_person(agent))
     adjust_txt = "; ".join([f"{a.parameter} {a.old} → {a.new} ({a.reason})" for a in adjust.values()]

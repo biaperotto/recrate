@@ -58,7 +58,7 @@ def no_data_dir(runs_dir: Path) -> Path:
 
 def check_inputs(crate: MethodSpec | str | Path, data: str | Path | None,
                  params: dict[str, Any] | None = None, method: str | None = None,
-                 pixel_ratio: float | None = None) -> CheckReport:
+                 scale_ratio: float | None = None) -> CheckReport:
     from .profiles import OK, CheckItem
 
     spec = _spec(crate, method)
@@ -68,7 +68,7 @@ def check_inputs(crate: MethodSpec | str | Path, data: str | Path | None,
         return report
     if data is None:
         raise CrateError("This method needs input data: give a file or folder.")
-    return get_profile(spec.profile).check(spec, Path(data), params, pixel_ratio=pixel_ratio)
+    return get_profile(spec.profile).check(spec, Path(data), params, scale_ratio=scale_ratio)
 
 
 def latest_run(runs_dir: Path, spec: MethodSpec, mode: str = "reproduce") -> Path | None:
@@ -86,7 +86,7 @@ def latest_run(runs_dir: Path, spec: MethodSpec, mode: str = "reproduce") -> Pat
 def execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: str, agent: str,
             params: dict[str, Any], check: CheckReport | None, compare: bool, channel: int = 0,
             progress=None, param_notes: dict[str, str] | None = None, rounded: bool = False,
-            followup: dict[str, Any] | None = None, pixel_ratio: float | None = None,
+            followup: dict[str, Any] | None = None, scale_ratio: float | None = None,
             purpose: str | None = None) -> RunOutcome:
     """Run, compare or check the results, and write the run crate. ``followup``: the follow-up check this run is."""
     if spec.workflow_path is None or not spec.workflow_path.exists():
@@ -119,7 +119,7 @@ def execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: str
         if mode == "reuse" and check is not None:  # are the results in the range the paper reported?
             ref = latest_run(runs_dir, spec)
             get_profile(spec.profile).check_results(spec, result.results_csv, check,
-                                                    ref / "outputs" / "results.csv" if ref else None, pixel_ratio)
+                                                    ref / "outputs" / "results.csv" if ref else None, scale_ratio)
         ladder = build_ladder(spec, comparison, ran=True) if compare else None
         run_dir = _new_run_dir(runs_dir, mode)
         write_run_crate(run_dir, spec, mode, data, result, check, comparison, agent=agent, overlays=overlays,
@@ -145,18 +145,18 @@ def run_on_data(crate: MethodSpec | str | Path, data: str | Path | None, runs_di
                 channel: int = 0, params: dict[str, Any] | None = None,
                 allow_warnings: bool = True, method: str | None = None,
                 overrides: dict[str, tuple[Any, str]] | None = None, progress=None,
-                pixel_ratio: float | None = None) -> RunOutcome:
+                scale_ratio: float | None = None) -> RunOutcome:
     """Check your data against the paper's inputs, then run and record.
 
     ``overrides`` maps a parameter to ``(value, reason)``: a person's choice. It wins over the
-    automatic adjustment and is recorded with its reason in the run crate. ``pixel_ratio``: your pixel size
+    automatic adjustment and is recorded with its reason in the run crate. ``scale_ratio``: your pixel size
     divided by the research's, when the research states none.
     """
     spec = _spec(crate, method)
     if not spec.needs_data:
         data = no_data_dir(Path(runs_dir))
     base = {**spec.default_params(), **(params or {})}
-    check = check_inputs(spec, data, base, pixel_ratio=pixel_ratio)
+    check = check_inputs(spec, data, base, scale_ratio=scale_ratio)
     if not check.can_run:
         failed = [f"{i.name}: {i.note}" for i in check.items if i.status == "fail"]
         raise CrateError("Your data does not fit this method:\n- " + "\n- ".join(failed))
@@ -185,5 +185,5 @@ def run_on_data(crate: MethodSpec | str | Path, data: str | Path | None, runs_di
                 if any(p.name == n and str(p.prop("changes_question")).lower() == "true" for p in spec.value_inputs)]
     purpose = ("Method reused for a different question: " + "; ".join(question)) if question else None
     return execute(spec, Path(data), "reuse", Path(runs_dir), runner, agent, used, check,
-                   compare=False, channel=channel, progress=progress, param_notes=notes, pixel_ratio=pixel_ratio,
+                   compare=False, channel=channel, progress=progress, param_notes=notes, scale_ratio=scale_ratio,
                    purpose=purpose)

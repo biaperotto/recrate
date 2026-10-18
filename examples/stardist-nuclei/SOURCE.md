@@ -21,9 +21,13 @@ the 2018 versions); the conclusion of Table 1 does not change.
 
 **Reuse: a second dataset of the same kind.** [BBBC039](https://bbbc.broadinstitute.org/BBBC039) (Broad Bioimage
 Benchmark Collection, CC0): 200 images of U2OS nuclei stained with Hoechst, 520 × 696 pixels, 16-bit, with
-ground truth. Same modality (widefield fluorescence, a nuclear stain), different cells, lab and microscope. The app
-suggests its two links (`images.zip`, `masks.zip`) under **Reuse → From a link**; they are downloaded once into
-`~/.cache/recrate/datasets/`. Its masks colour touching nuclei with different values (1 to 3, red channel); the scripts
+ground truth. Same modality (widefield fluorescence, a nuclear stain), different cells, lab and microscope.
+
+`reuse-sample/` holds 6 of its 200 images with their masks (4.3 MB, every 33rd image in name order), so the example
+needs no download: it is selected under **Reuse** when the example opens. On them, the paper's model and thresholds
+unchanged find 608 nuclei against 627 in the ground truth (average precision at IoU 0.5 per image 0.88 to 1.0, mean
+0.94), in about a minute and a half. For all 200 images, the app keeps BBBC039's two links (`images.zip`, `masks.zip`)
+under **Reuse → From a link**; they are downloaded once into `~/.cache/recrate/datasets/`. Its masks colour touching nuclei with different values (1 to 3, red channel); the scripts
 read each connected region of one value as one nucleus.
 
 Note: DSB2018 drew in part on Broad (BBBC) image collections, so BBBC039 may overlap with the training data and a good score

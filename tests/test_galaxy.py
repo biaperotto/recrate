@@ -65,8 +65,8 @@ def test_runs_on_the_zenodo_images(tmp_path):
     pixel = next(i for i in unstated.items if i.name == "Pixel size")
     assert unstated.status == "warn" and "filter_size" in pixel.note
     assert next(i for i in unstated.items if i.name == "Bit depth / intensity").status == "ok"  # same as the paper's
-    assert check_inputs(spec, data, pixel_ratio=1).status == "ok"
-    half = check_inputs(spec, data, pixel_ratio=2)
+    assert check_inputs(spec, data, scale_ratio=1).status == "ok"
+    half = check_inputs(spec, data, scale_ratio=2)
     assert [(a.parameter, a.new) for a in half.adjustments] == [("filter_size", 1.5)]
     out = run_on_data(spec, data, a.runs_dir, agent="test", overrides={"filter_size": (2.0, "sharper nuclei")})
     rows = (out.run_dir / "outputs" / "results.csv").read_text().splitlines()
@@ -91,6 +91,19 @@ def test_reuse_at_half_resolution(tmp_path):
         return [int(r.split(",")[1]) for r in (out.run_dir / "outputs" / "results.csv").read_text().splitlines()[1:]]
 
     unchanged = counts(run_on_data(a.spec(), half, a.runs_dir, agent="test"))
-    rescaled = run_on_data(a.spec(), half, a.runs_dir, agent="test", pixel_ratio=2)
+    rescaled = run_on_data(a.spec(), half, a.runs_dir, agent="test", scale_ratio=2)
     assert rescaled.params["filter_size"] == 1.5
     assert unchanged == [385, 385, 281] and counts(rescaled) == [425, 414, 306]  # full resolution: 425, 413, 307
+
+
+def test_reuse_on_bbbc039_with_ground_truth(tmp_path):
+    """Another lab's images with ground truth: each run reports the true count next to its own. The published
+    workflow, unchanged, finds 472 of BBBC039's 627 nuclei (no step splits touching nuclei)."""
+    data = EXAMPLE / "reuse-bbbc039"
+    if not data.exists():
+        pytest.skip("BBBC039 sample not present")
+    a = agentify(tmp_path / "agent", crate=CRATE, validate="none")
+    out = run_on_data(a.spec(), data, a.runs_dir, agent="test")
+    rows = [r.split(",") for r in (out.run_dir / "outputs" / "results.csv").read_text().splitlines()]
+    assert rows[0] == ["image", "count", "mean_area_px", "count_true"]
+    assert sum(int(r[1]) for r in rows[1:]) == 472 and sum(int(r[3]) for r in rows[1:]) == 627

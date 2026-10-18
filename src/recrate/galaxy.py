@@ -274,7 +274,7 @@ class GalaxyRunner(Runner):
         import scipy
         import skimage
 
-        from .profiles.bioimaging import list_images, read_image_metadata
+        from .profiles.bioimaging import ground_truth_count, list_images, read_image_metadata
         from .runners.python_ref import _plane
 
         wf = load_workflow(workflow)
@@ -284,9 +284,11 @@ class GalaxyRunner(Runner):
         started = now_iso()
         log: list[str] = []
         images = list_images(Path(input_dir))
+        truth = {f.name: ground_truth_count(Path(input_dir), f.stem) for f in images}  # when your data brings one
+        has_truth = any(v is not None for v in truth.values())
         with (output_dir / "results.csv").open("w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
-            w.writerow(["image", "count", "mean_area_px"])
+            w.writerow(["image", "count", "mean_area_px"] + (["count_true"] if has_truth else []))
             for i, f in enumerate(images):
                 if progress:
                     progress(i, len(images), f.name)
@@ -304,7 +306,8 @@ class GalaxyRunner(Runner):
                 if labels is not None:
                     tifffile.imwrite(masks / f"{f.stem}_mask.tif", ((labels > 0) * 255).astype(np.uint8))
                 w.writerow([f.name, int(count) if count is not None else len(areas),
-                            f"{areas.mean():.2f}" if len(areas) else "0"])
+                            f"{areas.mean():.2f}" if len(areas) else "0"]
+                           + ([truth[f.name] if truth[f.name] is not None else ""] if has_truth else []))
         tools = sorted({f"{tool_key(s.get('tool_id'))} {s.get('tool_version')}" for s in wf["steps"].values()
                         if tool_key(s.get("tool_id")) in TOOLS})
         return RunResult(
@@ -355,6 +358,7 @@ def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
     shutil.rmtree(work, ignore_errors=True)
     (work / "example").mkdir(parents=True)
     expected, tolerance = None, 0.0  # no source unless the published test states how it compares (no verdict)
+    case: dict[str, Any] = {}
     if tests and tests.exists():
         case = (yaml.safe_load(tests.read_text(encoding="utf-8")) or [{}])[0]
         job_files = [v["path"] for v in (case.get("job") or {}).values() if isinstance(v, dict) and v.get("path")]
@@ -411,6 +415,17 @@ def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
     r = next(e for e in m["@graph"] if e.get("@id") == "./")
     r["isBasedOn"] = {"@id": root.get("isBasedOn") or str(src)}
     r["dateModified"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    # The test's published pictures (e.g. the overlay), kept so a reproduction can be shown next to them
+    for name, out in (case.get("outputs") or {}).items():
+        p = tests.parent / str(out.get("path", "")) if isinstance(out, dict) else None
+        if p is not None and p.suffix.lower() in {".png", ".jpg", ".jpeg"} and p.exists():
+            (out_dir / "expected" / "figures").mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, out_dir / "expected" / "figures" / p.name)
+            fid = f"expected/figures/{p.name}"
+            m["@graph"].append({"@id": fid, "@type": ["File", "ImageObject"], "name": f"Published {name}",
+                                "encodingFormat": "image/png" if p.suffix.lower() == ".png" else "image/jpeg",
+                                "description": f"Output '{name}' of the workflow's published test ({tests.name})."})
+            r.setdefault("hasPart", []).append({"@id": fid})
     mpath.write_text(json.dumps(m, indent=2, ensure_ascii=False), encoding="utf-8")
     shutil.rmtree(work, ignore_errors=True)
     return desc

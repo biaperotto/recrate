@@ -13,7 +13,7 @@ TIFF tags) and compares it with what the method's crate declares:
 
 When pixel size differs, parameters that declare a ``scaling`` property are
 rescaled so they mean the same physical size (when the research states no pixel size, the user can state
-how theirs compares, ``pixel_ratio``):
+how theirs compares, ``scale_ratio``):
 
 * ``inverse_pixel_area``: a size in pixels^2 (e.g. minimum particle area)
 * ``inverse_pixel_size``: a length in pixels (e.g. a filter radius)
@@ -29,7 +29,7 @@ from typing import Any
 import tifffile
 
 from ..crate import MethodSpec
-from .base import FAIL, OK, WARN, Adjustment, CheckItem, CheckReport, DomainProfile, rescale
+from .base import FAIL, OK, WARN, Adjustment, CheckItem, CheckReport, DomainProfile, Field, rescale, unstated_scale
 
 IMAGE_SUFFIXES = {".tif", ".tiff"}
 PIXEL_SIZE_REL_TOL = 0.05
@@ -113,6 +113,28 @@ def list_images(data_path: Path) -> list[Path]:
     return found
 
 
+GROUND_TRUTH_DIRS = ("ground-truth", "ground_truth", "masks", "labels")
+
+
+def ground_truth_count(data_path: Path, stem: str) -> int | None:
+    """The number of objects in an image's ground truth, when the user's data brings one: a mask or label image with
+    the image's name in ``ground-truth/`` (or ``masks/``, ``labels/``) next to the images. Each connected region of
+    one value is one object, so label images and BBBC-style colourings (touching objects in different values) both
+    count right. None when there is no ground truth."""
+    import numpy as np
+    from scipy import ndimage
+    from skimage.io import imread
+
+    for d in GROUND_TRUTH_DIRS:
+        for suffix in (".png", ".tif", ".tiff"):
+            p = Path(data_path) / d / f"{stem}{suffix}"
+            if p.exists():
+                a = imread(p)
+                a = a[..., 0] if a.ndim == 3 else a
+                return int(sum(ndimage.label(a == v)[1] for v in np.unique(a) if v))
+    return None
+
+
 def read_image_metadata(path: Path) -> dict[str, Any]:
     """Pixel size, unit, shape, axes, channels and format of one TIFF."""
     info: dict[str, Any] = {"file": path.name, "format": "TIFF", "pixel_size": None, "unit": None}
@@ -165,14 +187,24 @@ def _ome_pixel_size(xml: str) -> tuple[float | None, str | None]:
 class BioimagingProfile(DomainProfile):
     name = "bioimaging"
     description = "Calibration-aware checks for 2D/3D microscopy image analysis (OME / ImageJ metadata)."
+    field = Field(
+        label="Images", data_noun="images", scale="pixel size", scale_check="Pixel size",
+        scale_question="How large are your pixels compared with the research's?",
+        scale_ratio_label="Your pixel size ÷ the research's",
+        scale_help="2 means each of your pixels is twice as wide (e.g. 2×2 binning, or half the magnification).",
+        visual=True,
+        hints=("Look at the overlays with the user after a run: merged, split or missed objects don't show in the "
+               "numbers.",
+               "If images have no pixel size, ask the user for it (from the microscope or acquisition software) and "
+               "call set_pixel_size with what they say; never guess it."))
 
     def inspect(self, data_path: Path) -> dict[str, Any]:
         files = list_images(Path(data_path))
         return {"files": [read_image_metadata(f) for f in files]}
 
     def check(self, spec: MethodSpec, data_path: Path, params: dict[str, Any] | None = None,
-              pixel_ratio: float | None = None) -> CheckReport:
-        """``pixel_ratio``: your pixel size divided by the research's, stated by the user, for research that
+              scale_ratio: float | None = None) -> CheckReport:
+        """``scale_ratio``: your pixel size divided by the research's, stated by the user, for research that
         states no pixel size (so the calibrations can't be compared)."""
         data_path = Path(data_path)
         params = dict(params or spec.default_params())
@@ -242,23 +274,9 @@ class BioimagingProfile(DomainProfile):
                         note = "; ".join(f"{a.parameter} {a.old:g} → {a.new:g}" for a in adj) or \
                                "No scalable parameters declared; results may not be comparable."
                         report.items.append(CheckItem("Pixel size", exp_txt, f"{obs:g} µm", WARN, note))
-        elif pixel_ratio is not None or data_path.resolve() != (spec.example_data or Path("/-")).resolve():
-            scaled = [p.name for p in spec.value_inputs if (p.scaling_rule or ("",))[0] == "pixel size"]
-            if scaled and pixel_ratio is not None and abs(float(pixel_ratio) - 1) <= PIXEL_SIZE_REL_TOL:
-                report.items.append(CheckItem("Pixel size", "not stated", "same as the research's (stated by you)", OK))
-            elif scaled and pixel_ratio:
-                adj = rescale(spec, params, "pixel size", float(pixel_ratio),
-                              f"your pixels are {float(pixel_ratio):g}× the research's (stated by you; the research "
-                              "states no pixel size)")
-                report.adjustments.extend(adj)
-                report.items.append(CheckItem("Pixel size", "not stated", f"{float(pixel_ratio):g}× the research's",
-                                              WARN, "; ".join(f"{a.parameter} {a.old:g} → {a.new:g}" for a in adj)))
-            elif scaled:
-                report.items.append(CheckItem(
-                    "Pixel size", "not stated", "not compared", WARN,
-                    f"{', '.join(scaled)} {'is' if len(scaled) == 1 else 'are'} in pixels and the research states no "
-                    "pixel size: if your pixels differ in size from the research's, give the ratio (pixel ratio) "
-                    "so it is rescaled; otherwise results may not be comparable."))
+        elif scale_ratio is not None or data_path.resolve() != (spec.example_data or Path("/-")).resolve():
+            if any((p.scaling_rule or ("",))[0] == "pixel size" for p in spec.value_inputs):
+                unstated_scale(spec, params, report, self.field, scale_ratio, same_tol=PIXEL_SIZE_REL_TOL)
         self._intensity(spec, files, data_path, report)
         cal = user_calibration(data_path) if data_path.is_dir() else None
         if cal:
@@ -317,14 +335,14 @@ class BioimagingProfile(DomainProfile):
             report.items.append(CheckItem("Bit depth / intensity", exp, obs, OK))
 
     def check_results(self, spec: MethodSpec, results_csv: Path, report: CheckReport,
-                      reference_csv: Path | None = None, pixel_ratio: float | None = None) -> None:
+                      reference_csv: Path | None = None, scale_ratio: float | None = None) -> None:
         from .base import _means
 
         mine, ref = _means(results_csv), _means(reference_csv)
         paper = _means(spec.expected_results)
         counts = {c for c in mine if "count" in c and c in paper and paper[c]}
-        super().check_results(spec, results_csv, report, reference_csv, pixel_ratio, skip=counts)
-        ratio = self._pixel_ratio(spec, report, pixel_ratio)
+        super().check_results(spec, results_csv, report, reference_csv, scale_ratio, skip=counts)
+        ratio = self._scale_ratio(spec, report, scale_ratio)
         paper_imgs = list_images(spec.example_data) if spec.example_data and spec.example_data.exists() else []
         mine_px = [m["shape"][-1] * m["shape"][-2] for m in report.observed.get("files", [])]
         if counts and paper_imgs and mine_px:  # a field's size changes its count: compare objects per area
@@ -355,13 +373,13 @@ class BioimagingProfile(DomainProfile):
                                       "data: check the segmentation, or whether a size parameter needs rescaling."))
 
     @staticmethod
-    def _pixel_ratio(spec: MethodSpec, report: CheckReport, pixel_ratio: float | None) -> float | None:
+    def _scale_ratio(spec: MethodSpec, report: CheckReport, scale_ratio: float | None) -> float | None:
         """Your pixel size / the paper's: from both calibrations, else as you stated it, else unknown."""
         exp_px = spec.data_input.properties.get("pixel size")
         observed = [to_um(m["pixel_size"], m["unit"]) for m in report.observed.get("files", [])]
         if exp_px is not None and observed and None not in observed:
             return (sum(observed) / len(observed)) / to_um(float(exp_px.value), exp_px.unit or "µm")
-        return float(pixel_ratio) if pixel_ratio else None
+        return float(scale_ratio) if scale_ratio else None
 
     @staticmethod
     def _rescale(spec: MethodSpec, params: dict[str, Any], exp_um: float, obs_um: float) -> list[Adjustment]:

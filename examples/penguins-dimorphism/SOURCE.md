@@ -41,5 +41,12 @@ The check is its own run crate, linked to the reproduction; the first result (9 
 second check, rounding the reproduced values as the paper prints them, gives 6 of 12, so rounding alone
 doesn't explain the paper's values.
 
+**The paper's figures.** `workflows/isotope_figures.py` (ours, CC0) redraws Figures 3, 4 and 5 from the same data as
+their captions describe them: mean δ13C and δ15N by sex and year, ± 1 SE. ReCRATE shows each next to the original, for
+a person to judge. Figure 3 shows the same pattern every year, and our ± 1 SE bars match the paper's wider bars; the
+paper's narrower inner bars are not explained by the captions. The sample sizes the captions print are compared
+exactly and don't come back (Adélie n = 127 / 128, chinstrap 53, gentoo 115; the data gives 139, 68 / 67 and 118 for
+every sexed bird, or 126, 54 / 53 and 111 with the clutch exclusion).
+
 **Reuse.** On the Adélie penguins grouped by island (`group_column = Island`, recorded with its reason),
 dimorphism is similar on all three colonies (body mass SDI −0.19 to −0.21).

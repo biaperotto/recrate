@@ -124,6 +124,82 @@
           "quote": "some pairs were excluded from statistical analyses because a final egg was never observed at the nest"
         }
       ]
+    },
+    {
+      "name": "isotope_signatures",
+      "description": "Mean δ13C and δ15N stable isotope signatures of males and females, per year and species, with ± 1 SE (Figures 3, 4 and 5 of the paper). Redrawn from the published data: the figures are written as figures/figure-3.png, figure-4.png and figure-5.png, and the sample sizes the captions print are compared.",
+      "workflow": {
+        "file": "workflows/isotope_figures.py",
+        "language": "Python",
+        "software": [
+          {
+            "name": "Python",
+            "version": "3"
+          },
+          {
+            "name": "matplotlib",
+            "version": "3"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "id": "iso-in-table",
+          "name": "input_dir",
+          "type": "File",
+          "format": "text/csv",
+          "description": "One row per individual: species, sex, egg date (for the year) and both isotope values",
+          "properties": {
+            "columns": {
+              "value": "Species,Sex,Date Egg,Delta 13 C (o/oo),Delta 15 N (o/oo)"
+            }
+          }
+        },
+        {
+          "id": "iso-in-keep",
+          "name": "keep_rows",
+          "type": "Text",
+          "default": "",
+          "description": "Inclusion rule: rows to keep, as 'Column=Value' conditions separated by ';' (empty: every sexed individual)",
+          "role": "free"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "iso-out",
+          "name": "results",
+          "type": "File",
+          "format": "text/csv",
+          "description": "Sample sizes per species (as printed in the captions); the figures are in figures/",
+          "abs_tolerances": {
+            "n_d13c": {
+              "value": 0,
+              "source": "paper-stated",
+              "note": "the captions of Figures 3, 4 and 5 print the sample sizes; counts are compared exactly",
+              "quote": "based on sample sizes exactly following analyses"
+            },
+            "n_d15n": {
+              "value": 0,
+              "source": "paper-stated",
+              "note": "the captions of Figures 3, 4 and 5 print the sample sizes; counts are compared exactly",
+              "quote": "based on sample sizes exactly following analyses"
+            }
+          }
+        }
+      ],
+      "example_data": "data/",
+      "expected": "expected/figure_sample_sizes.csv",
+      "followups": [
+        {
+          "title": "Exclude pairs that did not complete their clutch",
+          "kind": "inclusion rule",
+          "changes": {
+            "keep_rows": "Clutch Completion=Yes"
+          },
+          "why": "The paper excludes pairs whose second egg was never observed; the published data records this as Clutch Completion = No.",
+          "quote": "some pairs were excluded from statistical analyses because a final egg was never observed at the nest"
+        }
+      ]
     }
   ]
 }

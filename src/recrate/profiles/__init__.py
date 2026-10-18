@@ -19,6 +19,20 @@ PROFILES: dict[str, type[DomainProfile]] = {
 }
 
 
+def fields_of(agent) -> list:
+    """The fields of a research object's methods (one ``Field`` per distinct profile), for the app and the chat."""
+    out, seen = [], set()
+    for m in getattr(agent, "methods", []):
+        try:
+            name = agent.spec(m.id).profile
+        except Exception:  # noqa: BLE001 - a method without a readable crate has no field yet
+            continue
+        if name not in seen:
+            seen.add(name)
+            out.append(get_profile(name).field)
+    return out
+
+
 def get_profile(name: str) -> DomainProfile:
     """A known profile, or the generic one for any other field (it checks presence and format only)."""
     return PROFILES.get(name or "generic", GenericProfile)()
@@ -26,5 +40,5 @@ def get_profile(name: str) -> DomainProfile:
 
 __all__ = [
     "OK", "WARN", "FAIL", "Adjustment", "CheckItem", "CheckReport", "DomainProfile",
-    "BioimagingProfile", "GenericProfile", "TimeseriesProfile", "PROFILES", "get_profile",
+    "BioimagingProfile", "GenericProfile", "TimeseriesProfile", "PROFILES", "get_profile", "fields_of",
 ]
