@@ -16,3 +16,7 @@ examples/workflowhub-nuclei-segmentation/paper_agent/
 examples/penguins-dimorphism/paper_agent/
 examples/workflowhub-nuclei-segmentation/my-data-half-resolution/
 .gstack/
+.claude/worktrees/
+.claude/skills/developing-with-streamlit
+.agents/
+.superpowers/
