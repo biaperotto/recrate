@@ -11,9 +11,13 @@
 
 ---
 
-[Paper2Agent](https://github.com/jmiao24/Paper2Agent) showed that a paper's code can become an agent: an MCP server whose tools run the paper's methods, so anyone can apply them by asking. Two problems remain. A tool that runs is not a tool that is right: nothing checks it against the paper's published results first. And a method applied to data unlike the paper's (another pixel size, grouping or sampling rate) usually runs without errors and gives a believable wrong answer.
+[Paper2Agent](https://github.com/jmiao24/Paper2Agent) showed that a paper's code can become an agent: an MCP server whose tools run the paper's methods, each tested against the tutorial it came from, so anyone can apply them by asking. ReCRATE takes that idea and adds what reusing a method safely needs:
 
-ReCRATE closes both gaps with the [FAIR principles for research software (FAIR4RS)](https://doi.org/10.1038/s41597-022-01710-x). Each tool is built from an explicit description of the research ([RO-Crate](https://doi.org/10.3233/DS-210053)) instead of inferred from code. It is validated against the published numbers before anyone reuses it, it checks your data against what the method expects, and every run leaves a standard provenance record.
+* **Checked against the paper.** A tool that reproduces the authors' tutorial is not yet a check of the paper's results. ReCRATE runs each method on the paper's own data and compares it with the numbers the paper published.
+* **Checked against your data.** A method applied to data unlike the paper's (another pixel size, grouping or sampling rate) can run without errors and still give a wrong answer. ReCRATE checks your data against what the method expects before it runs, and flags results far from the paper's after.
+* **Recorded.** Every run leaves a standard provenance record.
+
+To do this, ReCRATE describes the research with an [RO-Crate](https://doi.org/10.3233/DS-210053): which workflow, data, parameters and published results belong together. It uses the paper's crate when one is published, and recreates one from the paper and its code when not. Throughout, it follows the [FAIR principles for research software (FAIR4RS)](https://doi.org/10.1038/s41597-022-01710-x).
 
 ## How it works
 

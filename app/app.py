@@ -90,7 +90,10 @@ st.html("""<style>
 :root {--bg:#f1efea; --card:#ffffff; --line:#e6e3da; --ink:#14181F; --muted:#6b7472; --accent:#2A78D6;
        --accent-soft:#e7f0fb; --bubble:#f3f1ec; --dark:#14181F;}
 .stApp {background: var(--bg);}
-header[data-testid="stHeader"] {height: 0; background: transparent;}
+header[data-testid="stHeader"] {height: 0; background: transparent; pointer-events: none;}
+header[data-testid="stHeader"] [data-testid="stToolbar"] {pointer-events: none;}
+header[data-testid="stHeader"] [data-testid="stToolbarActions"], header [data-testid="stMainMenu"] {display: none;}
+[data-testid="stExpandSidebarButton"] {pointer-events: auto;}
 .block-container {padding: .9rem 1.4rem .6rem; max-width: 100%;}
 h1, h2, h3, h4, h5 {letter-spacing: -.01em; color: var(--ink);}
 .muted {color: var(--muted); font-size: .86rem;}
@@ -276,7 +279,6 @@ ss.setdefault("ro", {})
 ss.setdefault("figures", {})
 ss.setdefault("context_notes", [])
 ss.setdefault("uploads", Path(tempfile.mkdtemp(prefix="recrate-")))
-ss.setdefault("engine_choice", "auto")
 ss.setdefault("local_url", LOCAL_URL)
 ss.setdefault("section", "validate")
 who = ss.who
@@ -297,21 +299,29 @@ def pick_model(models: list[str]) -> str | None:
     return models[0] if models else None
 
 
+AGENTS = {"claude": "Claude", "local": "Local model", "commands": "Simple commands"}
+
+
+def default_agent() -> str:
+    """Claude when it is available (Claude Code signed in, or an API key), else a local model if one runs."""
+    if claude_code_binary() or claude_available(ss.get("api_key"))[0]:
+        return "claude"
+    return "local" if available_models(ss.local_url) else "commands"
+
+
 def engine_plan() -> tuple[str, str]:
-    """(kind, label): subscription | claude | local | commands, chosen by the person or automatically: Claude on your
-    own subscription first (no key, no cost per message), then a free local model, then an API key."""
-    choice = ss.engine_choice
-    if choice in ("auto", "subscription") and claude_code_binary():
-        return "subscription", "Claude · your subscription"
-    has_claude, _ = claude_available(ss.get("api_key"))
-    models = available_models(ss.local_url) if choice in ("auto", "local") else []
-    model = ss.get("local_model") if ss.get("local_model") in models else pick_model(models)
-    if choice == "claude" and has_claude:
-        return "claude", "Claude"
-    if choice in ("auto", "local") and model:
-        return "local", f"{model} · on this computer"
-    if choice == "auto" and has_claude:
-        return "claude", "Claude"
+    """(kind, label) for the chosen agent: subscription | claude | local | commands, and the name shown on the chat."""
+    choice = ss.engine_choice if ss.engine_choice in AGENTS else "claude"
+    if choice == "claude":
+        if claude_code_binary():
+            return "subscription", "Claude"
+        if claude_available(ss.get("api_key"))[0]:
+            return "claude", "Claude"
+    if choice == "local":
+        models = available_models(ss.local_url)
+        model = ss.get("local_model") if ss.get("local_model") in models else pick_model(models)
+        if model:
+            return "local", model
     return "commands", "Simple commands"
 
 
@@ -1706,57 +1716,26 @@ def landing() -> None:
 
 
 # ---- the top bar: connect, who, reset -------------------------------------------------------------------
-def connect_box() -> None:
-    kind, label = engine_plan()
-    st.markdown(f"**Chat:** {label}")
-    choice = st.radio("Who answers in the chat", ["auto", "subscription", "local", "claude", "commands"],
-                      key="engine_choice",
-                      format_func={"auto": "Automatic: Claude on your subscription if Claude Code is installed, else a "
-                                           "free local model, else Claude with an API key",
-                                   "subscription": "Claude, with your Claude subscription (through Claude Code; no key)",
-                                   "local": "An open model on this computer (free, no key)",
-                                   "claude": "Claude (API key)", "commands": "Simple commands only"}.get)
-    if choice in ("auto", "subscription"):
-        exe = claude_code_binary()
-        if exe:
-            st.caption(f"Claude Code found ({Path(exe).parent.parent.parent.name if 'extensions' in exe else exe}). "
-                       "Claude answers with your subscription and uses only this research object's tools.")
-        elif choice == "subscription":
-            st.caption("Claude Code isn't installed: install it (or its VS Code extension) and sign in.")
-    if choice in ("auto", "local") and not (choice == "auto" and claude_code_binary()):
+def agent_box() -> None:
+    """Which agent answers in the chat. Nothing else: one choice, and one field only when it needs one."""
+    choice = st.radio("Agent", list(AGENTS), key="engine_choice", format_func=AGENTS.get, label_visibility="collapsed")
+    if choice == "claude" and not claude_code_binary():
+        key = st.text_input("Anthropic API key", type="password", placeholder="Anthropic API key",
+                            label_visibility="collapsed", help="Needed without Claude Code. Kept for this session only.")
+        if key.strip() and key.strip() != ss.get("api_key"):
+            ss.api_key = key.strip()
+            st.rerun()
+    elif choice == "local":
         models = available_models(ss.local_url)
         if models:
             current = ss.get("local_model") if ss.get("local_model") in models else pick_model(models)
-            ss.local_model = st.selectbox("Model", models, index=models.index(current))
-            st.caption("Models need tool calling: qwen2.5, llama3.1, mistral-nemo work well.")
+            ss.local_model = st.selectbox("Model", models, index=models.index(current), label_visibility="collapsed")
         else:
-            st.markdown("No local model server found. To use an open model for free:")
-            st.code("brew install ollama        # or download it from ollama.com\nollama serve\n"
-                    "ollama pull qwen2.5:7b", language="bash")
-            st.caption("LM Studio and llama.cpp work too: start their server and set the address below.")
-        url = st.text_input("Server address (OpenAI-compatible)", value=ss.local_url)
-        if url != ss.local_url:
-            ss.local_url = url
-            available_models.clear()
-            st.rerun()
-        if st.button("Check again", icon=":material/refresh:"):
-            available_models.clear()
-            st.rerun()
-    if choice == "claude":
-        key = st.text_input("Anthropic API key", type="password", placeholder="sk-ant-…",
-                            help="Used for this session only; never saved.")
-        if key and st.button("Use this key", type="primary"):
-            ss.api_key = key.strip()
-            st.rerun()
-        if ss.get("api_key") and st.button("Forget the key"):
-            ss.api_key = None
-            st.rerun()
-    st.divider()
-    st.markdown("**Or talk to it in Claude Desktop or Claude Code** (your Claude subscription, no key):")
-    if ss.get("agent_dir"):
-        mcp_install(Path(ss.agent_dir), "connect")
-    else:
-        st.caption("Open a research object first.")
+            c1, c2 = st.columns([3, 1], vertical_alignment="center")
+            c1.caption("No local model running (e.g. Ollama).")
+            if c2.button("Retry", key="agent-retry"):
+                available_models.clear()
+                st.rerun()
 
 
 def mcp_install(agent_dir: Path, key: str) -> None:
@@ -1786,8 +1765,8 @@ def topbar() -> None:
         c = st.columns([7, 1.2, 1.6, .8], vertical_alignment="center")
         c[0].markdown(logo_html(150), unsafe_allow_html=True)
         kind, label = engine_plan()
-        with c[1].popover("Connect", width="stretch", icon=":material/hub:", help=f"Chat: {label}"):
-            connect_box()
+        with c[1].popover("Agent", width="stretch", icon=":material/smart_toy:"):
+            agent_box()
         with c[2].popover(ss.who, width="stretch", icon=":material/person:", help="Who runs are recorded as"):
             st.markdown("**Recorded as**")
             st.caption("Every run crate names who ran it (provenance). Defaults to your git user name.")
@@ -1803,6 +1782,8 @@ def topbar() -> None:
 
 
 # ---- page ---------------------------------------------------------------------------------------------
+if ss.get("engine_choice") not in AGENTS:
+    ss.engine_choice = default_agent()
 sidebar()
 ss.setdefault("landing", not ss.get("agent_dir"))
 if ss.landing and not ss.get("agent_dir"):
