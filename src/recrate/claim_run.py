@@ -27,10 +27,13 @@ WHOLE_PAPER = "whole paper (no usable data availability section)"
 
 _AVAILABILITY = re.compile(r"(data|code|materials?)\b.*\bavailab|availab\w*\s+of\s+(data|code|materials?)", re.I)
 _MARKDOWN_HEADING = re.compile(r"\s*#{1,6}\s")
+_LINK = re.compile(r"https?://|www\.|doi\.org|\b10\.\d{4,}/", re.I)
+_TRAILING = frozenset("a an and are at by for from in is of on or the to under via was were with".split())
 _PLAIN_HEADING = re.compile(
     r"(?:\d+\.?\s*)?(?:abstract|introduction|background|methods?|materials and methods|results(?: and discussion)?|"
     r"discussion|conclusions?|acknowledge?ments?|funding|references|bibliography|supplementary (?:material|information)|"
-    r"author contributions?|competing interests?|conflicts? of interest|ethics(?: statement)?)\s*:?", re.I)
+    r"author contributions?|competing interests?|conflicts? of interest|ethics(?: statement)?|reporting summary|"
+    r"additional information|extended data|peer review information|keywords?)\s*:?", re.I)
 
 
 def _is_availability_heading(line: str) -> bool:
@@ -38,11 +41,21 @@ def _is_availability_heading(line: str) -> bool:
     return 0 < len(text) <= 80 and not text.endswith(".") and bool(_AVAILABILITY.search(text))
 
 
-def _ends_section(line: str) -> bool:
-    """Whether ``line`` starts the next section: a markdown heading, or (plain text from a PDF) a line that is
-    just a well-known section name. Only known names: a looser rule cuts a section short at a short line of
-    its own prose and loses the link after it."""
-    return bool(_MARKDOWN_HEADING.match(line) or _PLAIN_HEADING.fullmatch(line.strip()))
+def _lone_title(lines: list[str], i: int) -> bool:
+    """A short, unpunctuated line alone between blank lines that names no link and does not trail off
+    ("The images are deposited at"): a plain-text heading the known names do not list."""
+    line = lines[i].strip()
+    alone = (i == 0 or not lines[i - 1].strip()) and (i + 1 >= len(lines) or not lines[i + 1].strip())
+    words = line.split()
+    return (bool(line) and alone and len(words) <= 6 and not line.endswith((".", ",", ";", ":"))
+            and not _LINK.search(line) and words[-1].lower().strip("()") not in _TRAILING)
+
+
+def _ends_section(lines: list[str], i: int) -> bool:
+    """Whether ``lines[i]`` starts the next section: a markdown heading, a line that is just a well-known
+    section name, or a lone short title. A link alone on its line is the data being named, not a heading."""
+    return bool(_MARKDOWN_HEADING.match(lines[i]) or _PLAIN_HEADING.fullmatch(lines[i].strip())
+                or _lone_title(lines, i))
 
 
 def data_sections(paper_text: str) -> list[str]:
@@ -55,7 +68,7 @@ def data_sections(paper_text: str) -> list[str]:
     found: list[tuple[bool, str]] = []
     for i, line in enumerate(lines):
         if _is_availability_heading(line):
-            end = next((j for j in range(i + 1, len(lines)) if _ends_section(lines[j])), len(lines))
+            end = next((j for j in range(i + 1, len(lines)) if _ends_section(lines, j)), len(lines))
             found.append(("data" not in line.lower(), "\n".join(lines[i + 1:end])))
     return [text for _, text in sorted(found, key=lambda f: f[0])]  # stable: data sections first
 

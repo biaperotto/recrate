@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -226,3 +227,33 @@ def test_rerun_reuses_the_pinned_checkout_and_gives_the_same_rows(agent, monkeyp
     second = run_claims(agent.path, respond=_replay, online=True)
     assert [c.to_json() for c in second] == [c.to_json() for c in first]
     assert any(c.result == "Not checked" and c.data_source["version"] for c in second)
+
+
+_TOOL = "https://github.com/third/party-tool"
+
+
+def _plain(agent, availability: str) -> str:
+    base = (agent.path / "paper" / "paper.md").read_text(encoding="utf-8").split("## Data and code availability")[0]
+    return base.replace("## ", "").replace("# ", "") + f"\nData availability\n\n{availability}\n"
+
+
+def test_an_unlisted_plain_text_heading_ends_the_section(agent, monkeypatch):
+    for heading in ("Statistical analysis", "Online Methods", "Methods and materials", "5. Statistics",
+                    "Image analysis"):
+        _set_paper(agent, _plain(agent, f"On request.\n\n{heading}\n\nWe used {_TOOL} for the tests."))
+        shutil.rmtree(agent.path / "data", ignore_errors=True)
+        monkeypatch.setattr(claim_run, "pin_git", _fake_pin([]))
+        claims = run_claims(agent.path, respond=_replay, online=True)
+        # the section names no link, so the whole paper is searched and says so: the tool's repository is
+        # never claimed to come from the data availability section
+        good = [c for c in claims if c.result == "Not checked"]
+        assert all(c.data_source["found_in"].startswith("whole paper") for c in good), heading
+        assert good, heading
+
+
+def test_the_section_text_stops_at_an_unlisted_heading():
+    text = f"Data availability\n\nOn request.\n\nStatistical analysis\n\nWe used {_TOOL}.\n"
+    assert claim_run.data_sections(text) == ["\nOn request.\n"]
+    plain_link = f"Data availability\n\nThe images are deposited at\n\n{_REPO}\n\nStatistical analysis\n\nWe used {_TOOL}.\n"
+    (section,) = claim_run.data_sections(plain_link)
+    assert _REPO in section and _TOOL not in section
