@@ -48,10 +48,13 @@ class Report:
         return {"ok": self.ok, "checked": self.checked, "findings": [f.__dict__ for f in self.findings]}
 
 
-def _norm(text: str) -> str:
+def norm_text(text: str) -> str:
     t = text.replace("−", "-").replace("–", "-").replace("­", "")
     t = re.sub(r"-\s*\n\s*", "", t)          # hyphenation at line ends
     return re.sub(r"\s+", " ", t).lower().strip()
+
+
+_norm = norm_text
 
 
 def _number_forms(value: str) -> list[str]:
@@ -80,8 +83,11 @@ def _positions(text: str, value: str) -> list[int]:
     return sorted({m.start() for p in pats for m in re.finditer(p, text)})
 
 
-def _number_in(text: str, value: str) -> bool:
+def number_in(text: str, value: str) -> bool:
     return bool(_positions(text, value))
+
+
+_number_in = number_in
 
 
 def _row_together(text: str, values: list[str], window: int = 1500) -> bool:
