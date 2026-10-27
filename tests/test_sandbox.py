@@ -47,3 +47,20 @@ def test_unknown_mode_is_refused(monkeypatch):
     monkeypatch.setenv("RECRATE_SANDBOX", "chroot")
     with pytest.raises(sandbox.SandboxUnavailable, match="Unknown"):
         sandbox.backend()
+
+
+def test_the_trust_notice_says_how_the_code_is_confined(monkeypatch):
+    """The 'run it if you trust it' notice tells what the sandbox does and doesn't, instead of implying an
+    unconfined run; without a sandbox it says the run will be refused."""
+    from recrate import sandbox
+
+    monkeypatch.delenv("RECRATE_SANDBOX", raising=False)
+    monkeypatch.setattr(sandbox, "backend", lambda: "sandbox-exec")
+    text = sandbox.trust_notice({"Snakemake"}, network=False)
+    assert "(Snakemake)" in text and "sandbox-exec" in text and "without network access" in text
+    assert "can still read your files" in text and "trust where it comes from" in text
+    assert "which this workflow's recipe needs" in sandbox.trust_notice({"Nextflow"}, network=True)
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+    assert "refuse to run it" in sandbox.trust_notice({"Python"})
+    monkeypatch.setenv("RECRATE_SANDBOX", "off")
+    assert "unconfined" in sandbox.trust_notice({"Python"})

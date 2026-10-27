@@ -70,6 +70,26 @@ def describe(network: bool | None = None) -> str:
     return f"sandboxed with {b}: {net}; writes only to the run's own folders, temporary files and tool caches"
 
 
+def trust_notice(languages: list[str] | set[str], network: bool | None = None) -> str:
+    """What running a workflow's own code here means, for the person deciding to: how it is confined (or that it
+    is not), what the sandbox still lets it do (read files), and that the choice is theirs."""
+    langs = ", ".join(sorted(set(languages))) or "its"
+    b = backend()
+    if b is None and mode() in OFF:
+        how = ("unconfined: RECRATE_SANDBOX=off was chosen, so it can read and write anywhere you can and use the "
+               "network")
+    elif b is None:
+        how = ("and no sandbox is available on this computer, so ReCRATE will refuse to run it unless you choose to "
+               "run it unconfined (RECRATE_SANDBOX=off or `recrate --unsandboxed`)")
+    else:
+        net = ("with the network, which this workflow's recipe needs (to fetch containers, environments or test data)"
+               if network else "without network access")
+        how = (f"in the operating system's sandbox ({b}): {net}, writing only to the run's own folders, temporary "
+               "files and tool caches. It can still read your files, as any program you run can")
+    return (f"This runs the workflow's own code ({langs}) on your computer, {how}. Run it if you trust where it "
+            "comes from, or read the code first.")
+
+
 def _real(p: Path | str) -> str:
     return str(Path(p).resolve())
 

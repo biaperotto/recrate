@@ -221,8 +221,12 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
         elif spec.needs_data and not (spec.example_data and spec.example_data.exists()):
             st.detail = "No example data in the crate."
         elif validate == "none" or (validate == "safe" and runs_own_code(m["language"])):
-            st.detail = ("Not run yet: validating executes the workflow's own code. "
-                         "Run it when you trust the source.")
+            from .sandbox import backend
+
+            st.detail = ("Not run yet: validating executes the workflow's own code"
+                         + (" (sandboxed: no network unless its recipe needs it, writes only to its run folder)"
+                            if backend() else " (no sandbox is available here)")
+                         + ". Run it when you trust the source.")
         else:
             try:
                 r = reproduce(spec, runs_dir, runner=runner, agent=who)

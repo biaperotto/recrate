@@ -325,8 +325,10 @@ def validate_actions(agent: PaperAgent) -> None:
     c2.caption(f"{len(runnable)} with published data")
     if needs_trust:
         with c1.popover("Reproduce all", type="primary", width="stretch", icon=":material/replay:"):
-            st.markdown("This runs the workflows' own code (" + ", ".join(sorted({m.language for m in needs_trust}))
-                        + ") on your computer. Do it only if you trust where it comes from.")
+            from recrate.sandbox import trust_notice
+
+            network = any((agent.spec(m.id).invocation or {}).get("network") for m in needs_trust)
+            st.markdown(trust_notice({m.language for m in needs_trust}, network))
             if st.button("I trust it: run", type="primary", key="trust-all"):
                 with st.spinner("Reproducing…"):
                     revalidate(agent.path, runner="auto")
