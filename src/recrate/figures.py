@@ -321,7 +321,8 @@ def plot_table(rows: list[dict[str, Any]], kind: str, x: str | None = None, y: s
         raise ValueError("Say which column to plot (y).")
     if kind != "hist" and not x:
         raise ValueError(f"A {kind} plot needs an x column too.")
-    groups = list(dict.fromkeys(str(r.get(group)) for r in rows)) if group else [None]
+    xcol, gcol = x or "", group or ""  # checked above; plain strings from here on
+    groups = list(dict.fromkeys(str(r.get(gcol)) for r in rows)) if group else [None]
     if len(groups) > MAX_GROUPS:
         raise ValueError(f"{len(groups)} groups in {group!r}: more than {MAX_GROUPS} can't be told apart by colour; "
                          "filter the table or plot the groups separately.")
@@ -330,13 +331,13 @@ def plot_table(rows: list[dict[str, Any]], kind: str, x: str | None = None, y: s
     fig, ax = plt.subplots(figsize=(6.0, 3.4))
     yv = _numbers(rows, y)
     if kind == "bar":
-        cats = list(dict.fromkeys(str(r.get(x)) for r in rows))
+        cats = list(dict.fromkeys(str(r.get(xcol)) for r in rows))
         width = 0.8 / len(groups)
         averaged = False
         for gi, g in enumerate(groups):
             heights = []
             for c in cats:
-                vals = [v for r, v in zip(rows, yv) if str(r.get(x)) == c and (g is None or str(r.get(group)) == g)
+                vals = [v for r, v in zip(rows, yv) if str(r.get(xcol)) == c and (g is None or str(r.get(gcol)) == g)
                         and not math.isnan(v)]
                 averaged |= len(vals) > 1
                 heights.append(sum(vals) / len(vals) if vals else math.nan)
@@ -346,8 +347,8 @@ def plot_table(rows: list[dict[str, Any]], kind: str, x: str | None = None, y: s
         if averaged:
             note += f"; bars are means over repeated {x} values"
     elif kind == "box":
-        cats = list(dict.fromkeys(str(r.get(x)) for r in rows))
-        data = [[v for r, v in zip(rows, yv) if str(r.get(x)) == c and not math.isnan(v)] for c in cats]
+        cats = list(dict.fromkeys(str(r.get(xcol)) for r in rows))
+        data = [[v for r, v in zip(rows, yv) if str(r.get(xcol)) == c and not math.isnan(v)] for c in cats]
         bp = ax.boxplot(data, patch_artist=True, widths=0.5, medianprops={"color": INK, "linewidth": 1.5},
                         whiskerprops={"color": INK_MUTED}, capprops={"color": INK_MUTED},
                         flierprops={"marker": "o", "markersize": 3, "markerfacecolor": INK_MUTED, "markeredgecolor": "none"})
@@ -357,13 +358,13 @@ def plot_table(rows: list[dict[str, Any]], kind: str, x: str | None = None, y: s
         note += "; boxes: median and quartiles"
     elif kind == "hist":
         for g in groups:
-            vals = [v for r, v in zip(rows, yv) if (g is None or str(r.get(group)) == g) and not math.isnan(v)]
+            vals = [v for r, v in zip(rows, yv) if (g is None or str(r.get(gcol)) == g) and not math.isnan(v)]
             ax.hist(vals, bins="auto", color=colour[g], alpha=0.7 if len(groups) > 1 else 1.0, label=g, linewidth=0)
         ax.set_ylabel("count")
     else:  # scatter, line: x numeric
-        xv = _numbers(rows, x)
+        xv = _numbers(rows, xcol)
         for g in groups:
-            pts = sorted((xi, yi) for r, xi, yi in zip(rows, xv, yv) if (g is None or str(r.get(group)) == g)
+            pts = sorted((xi, yi) for r, xi, yi in zip(rows, xv, yv) if (g is None or str(r.get(gcol)) == g)
                          and not (math.isnan(xi) or math.isnan(yi)))
             if not pts:
                 continue
@@ -375,7 +376,7 @@ def plot_table(rows: list[dict[str, Any]], kind: str, x: str | None = None, y: s
                            linewidth=1.5, label=g, zorder=3)
     _style(ax, x or "", "count" if kind == "hist" else y)
     if len(groups) > 1 and kind != "box":  # a box plot shows one distribution per category; group is not drawn
-        ax.legend(frameon=False, fontsize=7, title=group.replace("_", " "), title_fontsize=7, loc="best")
+        ax.legend(frameon=False, fontsize=7, title=gcol.replace("_", " "), title_fontsize=7, loc="best")
     elif kind == "box" and group:
         note += f"; group {group!r} is not drawn by a box plot (one box per {x})"
     if title:

@@ -56,7 +56,7 @@ ReCRATE takes the Paper2Agent idea and builds it on FAIR4RS and RO-Crate. It is 
 | Starts from | A paper and its code repository | The same, or an RO-Crate |
 | The paper's own environment | Built per paper | Built per paper with `uv` (`recrate env`), and every run records each installed package |
 | Tools come from | The code's tutorials | The paper's reported methods **and** the code's tutorials and examples |
-| A tool is | A typed function, which may take data or just values | The same: typed parameters with their units and the paper's sentence; data optional |
+| A tool is | A typed function, which may take data or just values | The same: a Python function named in the crate (`recrate entry`), or a script; typed parameters with their units and the paper's sentence; data optional |
 | Tested against | The tutorials' outputs, not the paper's results | The paper's **published results**, with sourced tolerances and an independent verifier |
 | Your data | Left to the model | Checked against the method's declared inputs; parameters rescaled only by declared rules |
 | Figures | The code's plots as tools; in the chat, ad hoc plotting code, unrecorded | The same plots as tools, the paper's figures recreated and judged by a person, and any chart in the chat drawn by code from a file and recorded with its data |
@@ -83,7 +83,7 @@ This follows the [FAIR principles for research software (FAIR4RS)](https://doi.o
 
 ## Examples
 
-**Nuclei segmentation** ([WorkflowHub #771](examples/workflowhub-nuclei-segmentation/), Galaxy, imaging). **Same numbers 1/1.** ReCRATE reads the method from the workflow and its published test, and runs it without a Galaxy server through ports of the Galaxy tools at their pinned versions. It finds the test's 20 nuclei, with the same label image pixel for pixel, and 425, 413 and 307 nuclei on three full fields of public images ([Zenodo](https://doi.org/10.5281/zenodo.3362976)). Readiness is *ready-with-gaps*: the research states no pixel size.
+**Nuclei segmentation** ([WorkflowHub #771](examples/workflowhub-nuclei-segmentation/), Galaxy, imaging). **Same numbers 1/1.** ReCRATE reads the method from the workflow and its published test, and runs it without a Galaxy server through ports of the Galaxy tools at their pinned versions. Any other Galaxy workflow runs on a Galaxy server through its API (`pip install "recrate[galaxy]"`, then `GALAXY_URL` and `GALAXY_API_KEY`, for example usegalaxy.eu): the inputs are uploaded, the workflow invoked, its outputs downloaded and compared with the published test, and the run crate names the server and the history. It finds the test's 20 nuclei, with the same label image pixel for pixel, and 425, 413 and 307 nuclei on three full fields of public images ([Zenodo](https://doi.org/10.5281/zenodo.3362976)). Readiness is *ready-with-gaps*: the research states no pixel size.
 
 **Penguin size dimorphism** ([Gorman et al. 2014, *PLOS ONE*](examples/penguins-dimorphism/), ecology, tables). **Same numbers 9/12.** Recomputing Table 2 from the open data, three chinstrap values differ: culmen length −0.097 vs −0.11, flipper length −0.043 vs −0.05, body mass −0.117 vs −0.10. The paper excludes pairs whose second egg was never observed, and gives n = 54 chinstraps. Applying that exclusion as a follow-up check leaves 27 males and 27 females, and all 12 values match. Both runs stay on record; whether the conclusion holds is for a person to say. One caveat: the ±0.006 margin is 0.001 wider than rounding alone, and `check-description` says so. At ±0.005 the counts are 6/12 and 10/12.
 
@@ -129,7 +129,7 @@ Then ask, for example, *"Reproduce this paper"*, *"Check my images in ./data, th
 **From a paper alone.** In the app, add the paper and press **Make runnable**, or run `recrate build agents/<paper>` after `recrate agentify --paper <pdf> --out agents/<paper>`, or use `/recrate <paper>` in Claude Code. In each case Claude, on your subscription, runs the pipeline:
 
 1. It clones the code and builds the paper's own environment.
-2. It turns the reported methods and the code's tutorials into tools.
+2. It turns the reported methods, the code's tutorials and its plots into tools: a thin function around the authors' code, with no boilerplate, or a script.
 3. It runs each tool on the published data and compares it with the published results.
 4. An independent verifier checks every claim.
 
