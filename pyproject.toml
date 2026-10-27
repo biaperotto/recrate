@@ -52,6 +52,9 @@ extend-exclude = ["agents", "examples"]  # the examples hold the papers' own cod
 [tool.ruff.lint]
 select = ["E9", "F", "I"]  # syntax errors, pyflakes (undefined names, unused imports), import order
 
+[tool.ruff.lint.isort]
+known-first-party = ["recrate", "ui"]  # ui: the app's view modules (app/ui)
+
 [tool.mypy]
 # Type-checked in CI: the modules that pass today, so they stay clean. The others are listed by
 # `mypy src/recrate` and join this list as they are fixed.
