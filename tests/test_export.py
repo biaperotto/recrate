@@ -58,3 +58,36 @@ def test_the_crate_is_validated_when_created_and_again_when_it_changes(tmp_path,
     (a.crate_dir / "notes.txt").write_text("a change")
     again = crate_validation(a.path)
     assert again["fingerprint"] != v["fingerprint"] and again["passed"]  # changed: validated again
+
+
+def test_incidental_files_do_not_change_the_crate_fingerprint(tmp_path):
+    """Finder's .DS_Store and Python's bytecode appear on their own; they must not make a validated crate look changed
+    (which re-ran the validator, a minute or more, while the app drew its page)."""
+    from recrate.export import crate_fingerprint
+
+    a = agentify(tmp_path / "agent", crate=EXAMPLE / "crate", validate="none")
+    before = crate_fingerprint(a.path)
+    (a.crate_dir / ".DS_Store").write_bytes(b"\x00" * 10)
+    (a.crate_dir / "workflows").mkdir(exist_ok=True)
+    (a.crate_dir / "workflows" / "__pycache__").mkdir()
+    (a.crate_dir / "workflows" / "__pycache__" / "x.cpython-311.pyc").write_bytes(b"\x00" * 99)
+    assert crate_fingerprint(a.path) == before
+    (a.crate_dir / "notes.txt").write_text("a real change")
+    assert crate_fingerprint(a.path) != before
+
+
+def test_the_stored_validation_is_shown_without_running_the_validator(tmp_path, monkeypatch):
+    """run=False never starts the validator: the stored result comes back, marked stale once the crate changed."""
+    import recrate.export as export
+
+    a = agentify(tmp_path / "agent", crate=EXAMPLE / "crate", validate="none")
+    manifest = json.loads((a.path / "agent.json").read_text())
+    manifest["crate_validation"] = {"passed": True, "profile": "workflow-ro-crate-1.0", "fingerprint": export.crate_fingerprint(a.path),
+                                    "required": {"passed": True, "checks": 1, "passed_checks": 1, "issues": []},
+                                    "recommended": {"passed": True, "checks": 1, "passed_checks": 1, "issues": []}, "when": "2026-01-01T00:00:00+00:00"}
+    (a.path / "agent.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(export, "validate_crate", lambda *_: (_ for _ in ()).throw(AssertionError("validator ran")))
+    assert export.crate_validation(a.path, run=False)["when"] == "2026-01-01T00:00:00+00:00"
+    (a.crate_dir / "notes.txt").write_text("a change")
+    v = export.crate_validation(a.path, run=False)
+    assert v["stale"] and v["when"] == "2026-01-01T00:00:00+00:00"

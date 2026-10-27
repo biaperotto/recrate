@@ -232,6 +232,14 @@ section[data-testid="stSidebar"] .tree {font-size: .8rem;}
 .stApp:has(.rc-entering) [data-testid="stMain"] {transition: opacity .3s ease-out;}
 .stApp[data-test-script-state="running"]:has(.rc-entering) [data-testid="stMain"],
 .stApp[data-test-script-state="rerunRequested"]:has(.rc-entering) [data-testid="stMain"] {opacity: 0; transition: none;}
+/* a page change stays hidden for at most 1.5 s: after that it shows as it comes, so a slow step never looks frozen */
+.stApp[data-test-script-state="running"]:has(.rc-entering) [data-testid="stMain"] {animation: rc-reveal .3s ease-out 1.5s forwards;}
+@keyframes rc-reveal {to {opacity: 1;}}
+/* a sign of life while the script runs: the header that holds Streamlit's own indicator is collapsed above */
+.stApp[data-test-script-state="running"]::after {content: "Working…"; position: fixed; top: .55rem; right: 1rem;
+  z-index: 1000; font-size: .78rem; color: var(--muted); background: var(--card); border: 1px solid var(--line);
+  border-radius: 999px; padding: .15rem .65rem; pointer-events: none; animation: rc-pulse 1.2s ease-in-out infinite;}
+@keyframes rc-pulse {0%, 100% {opacity: .45;} 50% {opacity: 1;}}
 .steps-line {white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .8rem; color: var(--muted);}
 </style>""")
 
@@ -1818,19 +1826,28 @@ def sidebar() -> None:
 def crate_panel(agent: PaperAgent, key: str) -> None:
     """The research object's RO-Crate: validated with the RO-Crate validator when it was created (and again if it has
     changed since), so its status shows before anything is downloaded; then the download."""
-    from recrate.export import _how, crate_validation, export_crate
+    from recrate.export import _how, crate_validation, export_crate, validator
 
     if agent.crate_dir is None:
         return
-    with st.spinner("Validating the RO-Crate…"):
-        try:
-            v = crate_validation(agent.path)
-        except Exception as e:  # noqa: BLE001 - shown, not raised
-            v = {"error": f"{type(e).__name__}: {e}"}
+    try:  # the stored result only: the validator itself (a minute or more) never runs while the page draws
+        v = crate_validation(agent.path, run=False)
+    except Exception as e:  # noqa: BLE001 - shown, not raised
+        v = {"error": f"{type(e).__name__}: {e}"}
     st.markdown("**RO-Crate**" + (" &nbsp; :orange-badge[draft]" if agent.manifest.get("draft") else ""))
     st.caption(_how(agent.manifest))
+    if v is None or v.get("stale"):
+        if st.button("Validate again" if v else "Validate", key=f"validate-{key}", icon=":material/fact_check:",
+                     help="Runs the RO-Crate validator, which fetches its profiles: a minute or two"):
+            with st.spinner("Validating the RO-Crate…"):
+                try:
+                    crate_validation(agent.path, refresh=True)
+                except Exception as e:  # noqa: BLE001 - shown, not raised
+                    st.error(f"Validation could not run: {type(e).__name__}: {e}")
+            st.rerun()
     if v is None:
-        st.caption("Not validated: install the RO-Crate validator (`pip install roc-validator`).")
+        st.caption("Not validated yet" + ("" if validator() else
+                                           ": install the RO-Crate validator (`pip install roc-validator`)") + ".")
     elif v.get("error"):
         st.warning(f"Validation could not run: {v['error']}")
     else:
