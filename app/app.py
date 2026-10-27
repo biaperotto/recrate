@@ -156,16 +156,19 @@ mark.cite {background: rgba(232,163,61,.3); color: inherit; padding: 0 .1em; bor
 /* chat bubbles */
 [class*="st-key-msg-a-"] {background: var(--bubble); border-radius: 14px 14px 14px 4px; padding: .7rem .95rem .8rem;
   max-width: 92%; gap: .3rem;}
-[class*="st-key-msg-u-"] {background: var(--dark); color: #fff; border-radius: 14px 14px 4px 14px; padding: .7rem .95rem .8rem;
-  max-width: 85%; margin-left: auto; gap: .2rem;}
-[class*="st-key-msg-u-"] p, [class*="st-key-msg-u-"] code {color: #fff !important;}
+[class*="st-key-msg-u-"] {background: var(--accent-soft); color: var(--ink); border-radius: 14px 14px 4px 14px;
+  padding: .7rem .95rem .8rem; max-width: 85%; margin-left: auto; gap: .2rem;}
+[class*="st-key-msg-u-"] p, [class*="st-key-msg-u-"] code {color: var(--ink) !important;}
+[class*="st-key-msg-u-"] a {color: var(--accent) !important;}
 [class*="st-key-msg-"] p {margin-bottom: .2rem;}
-.ctx {background: var(--dark); color: #f1efea; border-radius: 14px; padding: .8rem 1rem; margin: .1rem 0 .6rem;}
-.ctx .eyebrow {color: #9fb3ae;}
-.ctx .t {font-weight: 600; font-size: 1rem; margin: .15rem 0 .2rem; color: #fff;}
-.ctx .m {font-size: .82rem; color: #c9d4d1;}
-.ctx summary {cursor: pointer; font-size: .8rem; color: #9fb3ae; margin-top: .3rem;}
-.ctx details p {font-size: .82rem; color: #c9d4d1; margin: .3rem 0 0;}
+.ctx {background: var(--bubble); color: var(--ink); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+  border-radius: 14px; padding: .8rem 1rem; margin: .1rem 0 .6rem;}
+.ctx .eyebrow {color: var(--muted);}
+.ctx .t {font-weight: 600; font-size: 1rem; margin: .15rem 0 .2rem; color: var(--ink);}
+.ctx .m {font-size: .82rem; color: var(--muted);}
+.ctx summary {cursor: pointer; font-size: .8rem; color: var(--accent); margin-top: .3rem;}
+.ctx details p {font-size: .82rem; color: var(--ink); margin: .3rem 0 0;}
+.ctx a {color: var(--accent);}
 .chip {display: inline-flex; align-items: center; gap: .35rem; font-size: .75rem; border: 1px solid var(--line);
   border-radius: 999px; padding: .1rem .55rem; color: var(--muted); background: #fbfaf7;}
 .dot {width: 7px; height: 7px; border-radius: 50%; display: inline-block;}
@@ -602,7 +605,7 @@ def context_card(agent: PaperAgent) -> None:
                                   f"{n_ok}/{len(agent.methods)} reproduced" if agent.methods else "no runnable method yet",
                                   c.get("crate_source")] if x)
     about = short(agent.methods[0].description, 400) if agent.methods and agent.methods[0].description else ""
-    src = f"<p><a href='{html.escape(c['doi'])}' style='color:#9fd3c4'>{html.escape(c['doi'])}</a></p>" if c.get("doi") else ""
+    src = f"<p><a href='{html.escape(c['doi'])}' style='color:var(--accent)'>{html.escape(c['doi'])}</a></p>" if c.get("doi") else ""
     st.markdown(f"<div class='ctx'><div class='eyebrow'>Research object</div><div class='t'>{html.escape(c['title'])}"
                 f"</div><div class='m'>{html.escape(meta)}</div>"
                 + (f"<details><summary>Show more ▾</summary><p>{html.escape(about)}</p>{src}</details>" if about or src else "")
