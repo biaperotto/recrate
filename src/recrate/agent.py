@@ -171,7 +171,7 @@ def diagnose(spec: MethodSpec) -> tuple[str, list[str]]:
     from .runners import readiness
 
     blocked = readiness(spec.workflow_language, spec.workflow_path, env_python(spec.path.parent),
-                        env_rscript(spec.path.parent))
+                        env_rscript(spec.path.parent), invocation=spec.invocation)
     if blocked:
         return "blocked", [blocked]
     gaps = []
@@ -293,6 +293,16 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
             if not paper and (galaxy_src / "README.md").exists():
                 paper = galaxy_src / "README.md"  # no article: answer from the workflow's own documentation
 
+    # A Nextflow (nf-core), CWL or Snakemake crate: read its method in that community's own conventions
+    eco = None
+    if crate and galaxy_src is None:
+        from .adapters import detect_ecosystem
+
+        eco_src = resolve_crate_dir(crate)
+        eco = detect_ecosystem(eco_src)
+        if eco and not paper and (eco_src / "README.md").exists():
+            paper = eco_src / "README.md"
+
     # 1. The paper, as an agent can read it: text by section, tables, figures (see reading.py)
     p: Paper | None = None
     if paper:
@@ -351,6 +361,18 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
         manifest["crate_source"] = "derived from a Galaxy Workflow RO-Crate"
         if manifest.get("crate_found"):
             manifest["crate_source"] = f"found on {manifest['crate_found']['where']}, derived from its Galaxy workflow"
+    elif eco:
+        from .adapters import LABELS, import_crate
+
+        src = resolve_crate_dir(crate)
+        for d in (crate_out, out / "source-crate"):
+            if d.exists():
+                shutil.rmtree(d)
+        shutil.copytree(src, out / "source-crate")  # the original, unchanged
+        import_crate(src, crate_out)
+        manifest["crate_source"] = f"derived from a {LABELS[eco]} Workflow RO-Crate"
+        if manifest.get("crate_found"):
+            manifest["crate_source"] = f"found on {manifest['crate_found']['where']}, derived from its {LABELS[eco]} workflow"
     elif crate:
         src = resolve_crate_dir(crate)
         if src.resolve() != crate_out.resolve():

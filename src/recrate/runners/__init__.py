@@ -68,11 +68,13 @@ def get_runner(name: str = "auto", language: str | None = None, workflow: Path |
 
 
 def readiness(language: str | None, workflow: Path | None, python: Path | None = None,
-              rscript: Path | None = None) -> str | None:
+              rscript: Path | None = None, invocation: dict | None = None) -> str | None:
     """None when this computer can run the workflow; otherwise why not, naming what is missing.
 
     Built from the runners actually available: a Galaxy workflow is ready only when every tool its results need
-    is ported, and a script only when its interpreter is installed.
+    is ported, a script only when its interpreter is installed, and an engine workflow only when ReCRATE knows how
+    to call it: it follows the ``--input_dir`` contract, or the crate carries an invocation recipe (``invocation``,
+    from recrate.adapters) whose container runtime, if it needs one, is installed.
     """
     try:
         runner = get_runner("auto", language, workflow)
@@ -99,11 +101,19 @@ def readiness(language: str | None, workflow: Path | None, python: Path | None =
         why = runner.readiness()
         if why:
             return why
-        if runner.name == "quarto" and re.search(r"```\{r[ ,}]", Path(workflow).read_text(errors="replace")):
-            import shutil
+        import shutil
 
+        if runner.name == "quarto" and re.search(r"```\{r[ ,}]", Path(workflow).read_text(errors="replace")):
             if not (rscript or shutil.which("Rscript")):  # an R document also needs R
                 return "Needs R (Rscript), not installed here: install R (cran.r-project.org)."
+        if invocation:
+            needs = invocation.get("needs") or []
+            if needs and not any(shutil.which(n) for n in needs):
+                return (f"Needs a container runtime ({', '.join(needs)}) to run as its authors do; none is installed "
+                        "here.")
+        elif "input_dir" not in Path(workflow).read_text(errors="replace"):
+            return (f"No adapter knows how to call this {runner.software} workflow: it does not take "
+                    "--input_dir/--output_dir and the crate has no invocation recipe.")
     return None
 
 

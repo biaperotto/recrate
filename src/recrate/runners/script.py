@@ -70,7 +70,7 @@ class ScriptRunner(Runner):
             cmd += ["--channel", str(channel)]
         confined, extra_env = sandbox.wrap(cmd, [output_dir])  # the paper's code: no network, writes only here
         started = now_iso()
-        proc = subprocess.run(confined, capture_output=True, text=True, timeout=3600, env={**os.environ, **extra_env})
+        proc = subprocess.run(confined, capture_output=True, text=True, timeout=3600, env=sandbox.environment(extra_env))
         ended = now_iso()
         if proc.returncode != 0:
             raise RuntimeError(f"{Path(workflow).name} failed (exit {proc.returncode}):\n{proc.stderr[-2000:]}")

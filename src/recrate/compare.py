@@ -7,11 +7,16 @@ Each tolerance carries its source (``tolerance_source:<column>``, see model.py),
 Rows are matched on the first column (``image`` for images; a species, a sample, a gene...).
 The verdict is on dataset-level means, as papers usually report; per-image
 differences are listed for inspection.
+
+Outputs of kind ``files`` (a workflow's test compares its output files, not numbers) are tables with the columns
+``file``, ``sha1`` and optionally ``size``: each published file is reproduced when the produced file has the same
+sha1; a file of the same size but different content, or a missing file, is a difference.
 """
 
 from __future__ import annotations
 
 import csv
+import hashlib
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -56,6 +61,7 @@ class MeasureComparison:
     tolerance: float
     absolute: bool = False
     source: str | None = None  # where the tolerance comes from (model.TOLERANCE_SOURCES)
+    note: str = ""  # for a file comparison: what matched or differed (reported/reproduced are then 1 = present, 1/0 = same)
 
     @property
     def within(self) -> bool:
@@ -67,6 +73,8 @@ class MeasureComparison:
         return f"{t}, {self.source}" if self.source else f"{t}, no source"
 
     def describe(self) -> str:
+        if self.note:
+            return f"{self.measure}: {self.note} (tolerance {self.tolerance_label})"
         if self.absolute:
             return (f"{self.measure} {self.reproduced:g} vs {self.reported:g} reported "
                     f"(±{self.rel_diff:.3g}, tolerance {self.tolerance_label})")
@@ -106,6 +114,51 @@ class Comparison:
         return "Found a difference from the published result: " + "; ".join(m.describe() for m in self.measures)
 
 
+def is_files_table(rows: list[dict[str, str]]) -> bool:
+    """A table of files (``file``, ``sha1`` columns): the output kind ``files``."""
+    return bool(rows) and {"file", "sha1"} <= set(rows[0])
+
+
+def files_table(folder: Path, out: Path, skip: set[str] | None = None) -> Path:
+    """Write ``out`` as a files table of everything under ``folder`` (path relative to it, sha1, size)."""
+    rows = []
+    for f in sorted(Path(folder).rglob("*")):
+        rel = f.relative_to(folder).as_posix()
+        if f.is_file() and rel not in (skip or set()) and f != out:
+            rows.append((rel, hashlib.sha1(f.read_bytes()).hexdigest(), f.stat().st_size))
+    out.write_text("file,sha1,size\n" + "".join(f"{r},{h},{z}\n" for r, h, z in rows), encoding="utf-8")
+    return out
+
+
+def compare_files(got: list[dict[str, str]], want: list[dict[str, str]], source: str | None) -> Comparison:
+    """File by file, keyed by the ``file`` column: the same sha1 reproduces it. Each file is one measure, reported 1
+    (present) and reproduced 1 (same) or 0 (different), with the finding in ``note``."""
+    comp = Comparison()
+    by_name = {r.get("file"): r for r in got}
+    by_base = {Path(r.get("file", "")).name: r for r in got}
+    for w in want:
+        name = w.get("file", "")
+        g = by_name.get(name) or by_base.get(Path(name).name)
+        if g is None:
+            comp.missing_images.append(name)
+            continue
+        same = bool(w.get("sha1")) and g.get("sha1") == w.get("sha1")
+        size_w, size_g = _num(w.get("size")), _num(g.get("size"))
+        if same:
+            note = "identical (sha1)"
+        elif size_w is not None and size_w == size_g:
+            note = "same size, different content"
+        elif size_w is not None and size_g is not None:
+            note = f"different content ({size_g:g} vs {size_w:g} bytes)"
+        else:
+            note = "different content"
+        comp.measures.append(MeasureComparison(f"sha1 · {name}", 1.0, 1.0 if same else 0.0, 0.0 if same else 1.0,
+                                               0.0, absolute=True, source=source, note=note))
+        comp.per_image.append({"file": name, "sha1": {"reported": w.get("sha1"), "reproduced": g.get("sha1"),
+                                                      "same": same, "note": note}})
+    return comp
+
+
 def round_as_printed(value: float, printed: str) -> float:
     """``value`` rounded half-up to as many decimals as ``printed`` shows (how a paper's table rounds)."""
     dec = len(printed.strip().split(".")[1]) if "." in printed else 0
@@ -121,6 +174,8 @@ def compare_results(produced: Path, expected: Path, tolerances: dict[str, float]
     want = read_results(expected)
     abs_tolerances = abs_tolerances or {}
     sources = sources or {}
+    if is_files_table(want):  # output kind "files": the workflow's test compares files, so does ReCRATE
+        return compare_files(got, want, sources.get("sha1") or sources.get("file"))
     key = "image" if "image" in want[0] else next(iter(want[0]))
     cols = list(tolerances) or [c for c in want[0] if c != key and c not in abs_tolerances
                                 and _num(want[0][c]) is not None]

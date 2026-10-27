@@ -154,6 +154,9 @@ def crate_root(folder: Path) -> Path | None:
 
 
 def fetch_workflowhub(wid: str, version: str | None, dest: Path) -> Found:
+    """The crate of a WorkflowHub workflow, unpacked in ``dest/crate``, with the registry's record of it in
+    ``dest/workflowhub.json`` (class, DOI, EDAM topics, tags, and the inputs, outputs and steps it parsed): what the
+    crate itself often lacks, and what galaxy.py and the adapters read."""
     info = _json(f"https://workflowhub.eu/workflows/{wid}")["data"]["attributes"]
     version = version or str(info.get("latest_version") or len(info.get("versions") or [1]))
     data, _ = _get(f"https://workflowhub.eu/workflows/{wid}/ro_crate?version={version}")
@@ -162,9 +165,16 @@ def fetch_workflowhub(wid: str, version: str | None, dest: Path) -> Found:
     z.write_bytes(data)
     crate = safe_unzip(z, dest / "crate")
     z.unlink()
-    return Found("crate", f"{info.get('title')} (WorkflowHub #{wid}, v{version})", crate,
-                 f"https://workflowhub.eu/workflows/{wid}?version={version}",
-                 [f"Licence: {info.get('license')}", f"Workflow type: {(info.get('workflow_class') or {}).get('title')}"])
+    url = f"https://workflowhub.eu/workflows/{wid}?version={version}"
+    record = {"id": wid, "version": version, "url": url, "title": info.get("title"), "license": info.get("license"),
+              "workflow_class": (info.get("workflow_class") or {}).get("title"), "doi": info.get("doi"),
+              "tags": info.get("tags") or [], "topic_annotations": info.get("topic_annotations") or [],
+              "operation_annotations": info.get("operation_annotations") or [], "internals": info.get("internals") or {}}
+    (dest / "workflowhub.json").write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+    notes = [f"Licence: {info.get('license')}", f"Workflow type: {record['workflow_class']}"]
+    if record["doi"]:
+        notes.append(f"DOI: {record['doi']}")
+    return Found("crate", f"{info.get('title')} (WorkflowHub #{wid}, v{version})", crate, url, notes)
 
 
 def fetch_zenodo(rid: str, dest: Path) -> Found:

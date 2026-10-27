@@ -31,7 +31,7 @@ fiji = ["pyimagej>=1.5"]
 draft = ["anthropic>=0.40"]
 mcp = ["mcp>=1.2", "matplotlib>=3.7"]  # mcp 1.x (FastMCP) and 2.x (MCPServer); matplotlib for make_figure
 app = ["streamlit>=1.43", "pandas>=2", "matplotlib>=3.7", "roc-validator>=0.12"]  # validator: the sidebar's check
-dev = ["pytest>=7", "roc-validator>=0.12"]  # roc-validator: run crates are checked against the RO-Crate profiles
+dev = ["pytest>=7", "roc-validator>=0.12", "ruff", "mypy"]  # roc-validator: run crates are checked against the RO-Crate profiles; ruff and mypy run in CI
 all = ["pyimagej>=1.5", "anthropic>=0.40", "mcp>=1.2", "streamlit>=1.43", "pandas>=2", "matplotlib>=3.7", "pytest>=7"]
 
 [project.scripts]
@@ -47,7 +47,7 @@ recrate = ["workflows/*.ijm", "workflows/*.py", "skill/*.md", "skill/agents/*.md
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = ["agents", "examples/*/paper_agent", "examples/*/paper-download"]
+extend-exclude = ["agents", "examples"]  # the examples hold the papers' own code, as published
 
 [tool.ruff.lint]
 select = ["E9", "F", "I"]  # syntax errors, pyflakes (undefined names, unused imports), import order
@@ -60,6 +60,7 @@ ignore_missing_imports = true
 follow_imports = "silent"
 files = [
     "src/recrate/__init__.py",
+    "src/recrate/adapters.py",
     "src/recrate/cli.py",
     "src/recrate/compare.py",
     "src/recrate/drafter.py",

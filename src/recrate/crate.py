@@ -10,6 +10,8 @@ The input crate follows Workflow RO-Crate 1.0. The parts ReCRATE needs are:
   pixel size, channels, dimensions, how a parameter scales, tolerances
 * data entities with ``exampleOfWork`` pointing at a parameter: the paper's own
   input data and its reported (expected) output
+* on the workflow, ``additionalProperty`` ``recrate invocation``: how to call a workflow that follows its own
+  community's conventions (nf-core, CWL, Snakemake) rather than ReCRATE's contract; written by recrate.adapters
 
 Domain-specific properties use plain PropertyValues so the crate stays valid
 RO-Crate. Their names are a ReCRATE proposal, documented in docs/crate-spec.md.
@@ -104,6 +106,7 @@ class MethodSpec:
     method_description: str = ""
     draft: bool = False
     followups: list[dict[str, Any]] = field(default_factory=list)  # declared follow-up checks (recrate.followup)
+    invocation: dict[str, Any] | None = None  # how to call the workflow in its own idiom (recrate.adapters)
     raw: dict[str, Any] = field(default_factory=dict)
 
     # ---- convenience -------------------------------------------------
@@ -381,5 +384,7 @@ def load_crate(path: str | Path, method: str | None = None) -> MethodSpec:
         draft=str(root_props["draft"].value).lower() == "true" if "draft" in root_props else False,
         followups=[json.loads(graph[_ref(r)]["value"]) for r in _as_list(wf.get("additionalProperty"))
                    if graph.get(_ref(r) or "", {}).get("name") == "followup"],
+        invocation=next((json.loads(graph[_ref(r)]["value"]) for r in _as_list(wf.get("additionalProperty"))
+                         if graph.get(_ref(r) or "", {}).get("name") == "recrate invocation"), None),
         raw=raw,
     )

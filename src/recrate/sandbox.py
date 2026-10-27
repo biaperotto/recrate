@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -59,12 +60,12 @@ def backend() -> str | None:
     return None
 
 
-def describe() -> str:
+def describe(network: bool | None = None) -> str:
     """How code runs here, in one line: recorded in each run crate."""
     b = backend()
     if b is None:
         return "unsandboxed (chosen explicitly: RECRATE_SANDBOX=off)" if mode() in OFF else "no sandbox available"
-    net = "network allowed" if network_allowed() else "no network"
+    net = "network allowed" if (network_allowed() if network is None else network) else "no network"
     return f"sandboxed with {b}: {net}; writes only to the run's own folders, temporary files and tool caches"
 
 
@@ -88,10 +89,23 @@ def _sbpl(writable: list[str], network: bool) -> str:
     ])
 
 
-def wrap(cmd: list[str], writable: list[Path | str]) -> tuple[list[str], dict[str, str]]:
+SECRET = re.compile(r"(_KEY|_TOKEN|_SECRET|_PASSWORD|_CREDENTIALS)$|^(AWS_|GITHUB_|ANTHROPIC_|OPENAI_)", re.I)
+
+
+def environment(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment a paper's code runs with: yours, without API keys, tokens and other secrets (the code can't
+    send them anywhere, but it could write them into its outputs, which end up in a run crate), plus ``extra``."""
+    env = {k: v for k, v in os.environ.items() if not SECRET.search(k)}
+    env.update(extra or {})
+    return env
+
+
+def wrap(cmd: list[str], writable: list[Path | str], network: bool | None = None) -> tuple[list[str], dict[str, str]]:
     """The command to run instead of ``cmd``, and environment variables to add. Raises SandboxUnavailable when no
-    sandbox is available and running unsandboxed wasn't chosen."""
+    sandbox is available and running unsandboxed wasn't chosen. ``network``: allow it for this run (a workflow
+    engine that pulls containers or test data); by default only when RECRATE_SANDBOX_NETWORK=1."""
     b = backend()
+    net = network_allowed() if network is None else network
     scratch = tempfile.mkdtemp(prefix="recrate-sandbox-")  # tool caches and configs go here, not into your home
     env = {"PYTHONDONTWRITEBYTECODE": "1", "MPLCONFIGDIR": scratch, "JUPYTER_RUNTIME_DIR": scratch,
            "IPYTHONDIR": scratch,
@@ -109,9 +123,12 @@ def wrap(cmd: list[str], writable: list[Path | str]) -> tuple[list[str], dict[st
     for d in dirs:
         Path(d).mkdir(parents=True, exist_ok=True)
     if b == "sandbox-exec":
-        return ["sandbox-exec", "-p", _sbpl(dirs + [scratch], network_allowed()), *cmd], env
-    args = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
-            "--die-with-parent"] + ([] if network_allowed() else ["--unshare-net"])
-    for d in dirs + [scratch] + [c for c in CACHES if Path(c).is_dir()]:
+        return ["sandbox-exec", "-p", _sbpl(dirs + [scratch], net), *cmd], env
+    # The temporary folders stay visible and writable, as on macOS: the paper's data, workflow or environment may
+    # live there (a tmpfs over /tmp would hide them)
+    tmp = sorted({_real(tempfile.gettempdir()), "/tmp"} - set(dirs))
+    args = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--die-with-parent"] \
+        + ([] if net else ["--unshare-net"])
+    for d in [t for t in tmp if Path(t).is_dir()] + dirs + [scratch] + [c for c in CACHES if Path(c).is_dir()]:
         args += ["--bind", d, d]
     return [*args, "--", *cmd], env

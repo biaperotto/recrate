@@ -107,3 +107,105 @@ def test_reuse_on_bbbc039_with_ground_truth(tmp_path):
     rows = [r.split(",") for r in (out.run_dir / "outputs" / "results.csv").read_text().splitlines()]
     assert rows[0] == ["image", "count", "mean_area_px", "count_true"]
     assert sum(int(r[1]) for r in rows[1:]) == 472 and sum(int(r[3]) for r in rows[1:]) == 627
+
+
+# ---- any Galaxy workflow, not only imaging ---------------------------------------------------------------
+
+def _climate_workflow() -> dict:
+    """A small non-imaging workflow in the shape WorkflowHub publishes: a table input, an unported tool with
+    scalar settings and a connected input, one declared output."""
+    return {
+        "a_galaxy_workflow": "true", "name": "Climate variable - select and plot", "annotation": "Monthly means.",
+        "steps": {
+            "0": {"id": 0, "type": "data_input", "label": "Temperature table", "name": "Input dataset",
+                  "annotation": "A tabular file of monthly temperatures", "tool_id": None,
+                  "tool_state": json.dumps({"optional": False, "format": ["tabular"]}), "input_connections": {},
+                  "inputs": [{"name": "Temperature table", "description": "A tabular file"}]},
+            "1": {"id": 1, "type": "parameter_input", "label": "Threshold", "name": "Input parameter", "tool_id": None,
+                  "tool_state": json.dumps({"parameter_type": "float", "default": 1.5, "optional": False}),
+                  "input_connections": {}, "annotation": "Cut-off in degrees"},
+            "2": {"id": 2, "type": "tool", "label": None, "name": "Datamash",
+                  "tool_id": "toolshed.g2.bx.psu.edu/repos/iuc/datamash_ops/datamash_ops/1.1.0", "tool_version": "1.1.0",
+                  "tool_state": json.dumps({"__page__": None, "in_file": json.dumps({"__class__": "ConnectedValue"}),
+                                            "header_in": "\"true\"", "need_sort": "\"true\"", "grouping": "\"1\"",
+                                            "operations": "[{\"op_column\": \"8\", \"op_name\": \"mean\"}]",
+                                            "adv": json.dumps({"__current_case__": 0, "round": "no"})}),
+                  "input_connections": {"in_file": {"id": 0, "output_name": "output"}},
+                  "workflow_outputs": [{"label": "mean table", "output_name": "out_file"}]},
+        },
+    }
+
+
+def _climate_crate(folder: Path) -> Path:
+    crate = folder / "crate"
+    crate.mkdir(parents=True)
+    (crate / "climate.ga").write_text(json.dumps(_climate_workflow()), encoding="utf-8")
+    (crate / "ro-crate-metadata.json").write_text(json.dumps({"@context": "https://w3id.org/ro/crate/1.1/context", "@graph": [
+        {"@id": "ro-crate-metadata.json", "@type": "CreativeWork", "about": {"@id": "./"}},
+        {"@id": "./", "@type": "Dataset", "name": "Research Object Crate for Climate variable - select and plot",
+         "mainEntity": {"@id": "climate.ga"}, "license": "https://spdx.org/licenses/Apache-2.0",
+         "identifier": "https://workflowhub.eu/workflows/46?version=1", "datePublished": "2020-07-23 19:22:21 +0100",
+         "hasPart": [{"@id": "climate.ga"}]},
+        {"@id": "climate.ga", "@type": ["File", "SoftwareSourceCode", "ComputationalWorkflow"],
+         "name": "Climate variable - select and plot", "programmingLanguage": {"@id": "#galaxy"}},
+        {"@id": "#galaxy", "@type": "ComputerLanguage", "name": "Galaxy"},
+    ]}), encoding="utf-8")
+    (folder / "workflowhub.json").write_text(json.dumps({  # what sources.fetch_workflowhub saves next to the crate
+        "id": "46", "doi": "10.48546/workflowhub.workflow.46.1", "tags": ["climate"],
+        "topic_annotations": [{"label": "Climate science", "identifier": "http://edamontology.org/topic_3855"}]}))
+    return crate
+
+
+def test_every_tool_is_needed_when_no_outputs_are_declared():
+    from recrate.galaxy import result_steps, unported_tools
+    from recrate.runners import readiness
+
+    wf = _climate_workflow()
+    assert result_steps(wf) == {"0", "2"}  # the declared output and what feeds it
+    del wf["steps"]["2"]["workflow_outputs"]
+    assert result_steps(wf) == {"0", "2"}  # nothing declared: every tool counts
+    assert unported_tools(wf) == ["datamash_ops 1.1.0"]
+    assert readiness("Galaxy", Path("x.ga")) == "The workflow file is missing."
+
+
+def test_non_imaging_galaxy_crate_is_imported_generically(tmp_path):
+    from recrate.crate import load_crate
+    from recrate.galaxy import imaging_workflow, import_galaxy_crate
+    from recrate.runners import readiness
+
+    crate = _climate_crate(tmp_path)
+    assert is_galaxy_crate(crate) and not imaging_workflow(_climate_workflow())
+    import_galaxy_crate(crate, tmp_path / "out")
+    spec = load_crate(tmp_path / "out")
+    assert spec.profile == "generic" and spec.method_name == "climate_variable_select_and_plot"
+    assert spec.citation == "https://doi.org/10.48546/workflowhub.workflow.46.1"
+    assert "Fluorescence" not in json.dumps(spec.raw) and "  (" not in spec.description
+    assert "workflowhub.eu/workflows/46" in spec.description
+    d = spec.data_input
+    assert d.name == "temperature_table" and d.type == "File" and d.format == "text/tab-separated-values"
+    assert "monthly temperatures" in (d.description or "")
+    names = {p.name: p for p in spec.value_inputs}
+    assert names["threshold"].default == "1.5" and names["threshold"].role == "free"
+    assert names["datamash_ops_header_in"].default == "true" and names["datamash_ops_adv_round"].default == "no"
+    assert "in_file" not in json.dumps(list(names))  # connected inputs are not parameters
+    assert spec.outputs[0].name == "mean_table" and spec.output_kind == "files"
+    # honest readiness: nothing is ported, so it is blocked, naming the tool
+    why = readiness(spec.workflow_language, spec.workflow_path)
+    assert why and "not ported" in why and "datamash_ops 1.1.0" in why
+
+
+def test_galaxy_crate_recognised_by_language_and_rejected_without_main_entity(tmp_path):
+    crate = _climate_crate(tmp_path)
+    meta = json.loads((crate / "ro-crate-metadata.json").read_text())
+    for e in meta["@graph"]:
+        if e["@id"] == "./":
+            e["mainEntity"] = {"@id": "climate.json"}
+        if e["@id"] == "climate.ga":
+            e["@id"] = "climate.json"
+    (crate / "climate.ga").rename(crate / "climate.json")
+    (crate / "ro-crate-metadata.json").write_text(json.dumps(meta))
+    assert is_galaxy_crate(crate)  # not .ga, but its language is Galaxy
+    for e in meta["@graph"]:
+        e.pop("mainEntity", None)
+    (crate / "ro-crate-metadata.json").write_text(json.dumps(meta))
+    assert not is_galaxy_crate(crate)

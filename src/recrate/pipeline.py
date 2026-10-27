@@ -94,6 +94,7 @@ def execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: str
     from .env import env_python, env_rscript
 
     agent_dir = spec.path.parent
+    run.spec = spec  # an engine runner reads the crate's invocation recipe from it
     if run.name in {"script", "notebook"}:
         run.python = env_python(agent_dir)  # the research object's own environment, when built
     if run.name == "script":

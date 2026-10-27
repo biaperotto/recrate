@@ -57,7 +57,7 @@ def _resize(img: np.ndarray, factor: float) -> np.ndarray:
         return img
     h, w = img.shape[:2]
     im = Image.fromarray((img * 255).astype(np.uint8))
-    im = im.resize((max(1, round(w * factor)), max(1, round(h * factor))), Image.LANCZOS)
+    im = im.resize((max(1, round(w * factor)), max(1, round(h * factor))), Image.Resampling.LANCZOS)
     return np.asarray(im, dtype=float) / 255.0
 
 

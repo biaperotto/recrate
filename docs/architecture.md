@@ -19,7 +19,7 @@ agents/my_paper/
 
 | Input | What happens |
 | --- | --- |
-| RO-Crate (folder, zip, WorkflowHub, Zenodo) | Used as published. For a Galaxy crate, parameters come from the `.ga` file and the published data and expected count from its Planemo test. |
+| RO-Crate (folder, zip, WorkflowHub, Zenodo) | Used as published when it is a ReCRATE crate. A Workflow RO-Crate from WorkflowHub is first *derived* into one: for Galaxy, inputs, outputs and parameters from the `.ga` file and the published data and expected outputs from its Planemo test (`galaxy.py`); for nf-core, CWL and Snakemake, from their own conventions (`adapters.py`): parameters, the published test as example data and expected results, and an *invocation recipe* that says how the engine is called, which named inputs map to which files, and whether the run needs the network or a container runtime. The original stays in `source-crate/`, and `workflowhub.json` keeps what the registry knows (DOI, EDAM topics, parsed inputs). |
 | Paper, with a crate published somewhere | `crate_search.py` looks in the paper's links, WorkflowHub, Zenodo, DataCite and the code repository, and uses what it finds, saying where. |
 | Paper only | `paper_crate.py` recreates a crate as of publication (date, software, data), marked draft. It has no runnable method until one is described (by the `/recrate` agent, or `--draft claude`). |
 
@@ -30,7 +30,10 @@ agents/my_paper/
 **Readiness** (before running, `agent.diagnose`): `blocked` when no runner here can run the workflow, naming
 what is missing (an unported Galaxy tool, an interpreter that isn't installed); `ready-with-gaps` with the gaps
 (no published data or results, a tolerance without a source, an input property the crate doesn't state);
-otherwise `ready`. Ready never means reproduced.
+otherwise `ready`. Ready never means reproduced. For a workflow engine, ready also means ReCRATE knows how to call the
+workflow: either the crate carries an invocation recipe or the workflow follows ReCRATE's own contract; a pipeline
+that takes neither is `blocked` ("no adapter knows how to call this pipeline"), as is a recipe whose container
+runtime is not installed.
 
 **The verdict ladder**, per method, each step `passed`, `partial`, `failed` or `not checked`:
 
@@ -48,8 +51,9 @@ The older single status (`validated`, `differs`, `failed`, `not validated`) is d
 A tolerance without a source gives no verdict on those numbers. `recrate check-description` rejects a drafted
 tolerance without one, checks quotes against the paper, and compares `paper-rounding` with the decimals printed.
 
-**Output kinds.** Each output declares a `kind`; `scalar` and `table` are compared, any other kind leaves "same
-numbers" at "not checked", with the reason.
+**Output kinds.** Each output declares a `kind`; `scalar`, `table` and `files` (one row per produced file: sha1 exact,
+else size, as a workflow's own test states them, tolerance source `test-stated`) are compared, any other kind leaves
+"same numbers" at "not checked", with the reason.
 
 **Parameters with meaning.** Each parameter may declare a `unit`, a `scaling` rule (`scales_with:<property>^<exp>`,
 or the older `inverse_pixel_size` / `inverse_pixel_area`), a `role` (`free`, `fixed`), `sensitive_to` (a check whose
@@ -155,7 +159,11 @@ src/recrate/
   paper_crate.py   an RO-Crate recreated for a paper published without one
   environment.py   publication date; software named by the paper and code; versions as of publication
   agent.py         sources → agent; readiness, reproduction and the ladder per method; conclusion reviews
-  galaxy.py        Galaxy Workflow RO-Crates: derive a ReCRATE crate; run ported Galaxy imaging tools
+  galaxy.py        Galaxy Workflow RO-Crates: derive a ReCRATE crate (any workflow); run ported Galaxy imaging tools
+  adapters.py      nf-core, CWL and Snakemake crates from WorkflowHub: parameters, test data and expected outputs from
+                   their own conventions, and the invocation recipe the engine runner follows
+  sandbox.py       the paper's code runs confined (sandbox-exec, bubblewrap): no network unless the recipe needs it,
+                   writes only to the run's folders, no secrets in its environment
   crate.py         read an input crate (one method per workflow); draft.py builds one from a description
   profiles/        how data is checked: generic, bioimaging (calibration, intensity, object size), timeseries
                    (sampling rate, channels); base.rescale applies every field's scaling rules

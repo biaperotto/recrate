@@ -12,6 +12,11 @@ Each takes the same contract as a script, in its own idiom, and must leave ``res
 * **CWL** (``.cwl``): ``cwltool --outdir <out> <wf> <job>``, the job giving ``input_dir`` as a Directory and each
   parameter by name; ``results.csv`` is taken from the outputs.
 
+A crate imported by recrate.adapters carries an **invocation recipe** (``recrate invocation``): the engine's own
+command line (``nextflow run … -profile test,docker``, ``cwltool … job.json``, ``snakemake --configfile …``), which
+files the data folder must hold, whether the run needs the network and a container runtime, and how to list what
+it produced as ``results.csv``. With a recipe, the runner follows it; without one, the contract above applies.
+
 The workflow's folder is copied to a scratch folder first, so a render or an engine never writes into the crate.
 Everything the run produced besides ``results.csv`` (the executed notebook, the rendered report, engine logs) is
 kept as an output of the run crate.
@@ -19,6 +24,7 @@ kept as an output of the run crate.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -61,34 +67,129 @@ class EngineRunner(Runner):
     def command(self, workflow: Path, input_dir: Path, output_dir: Path, params: dict[str, Any], work: Path) -> list[str]:
         raise NotImplementedError
 
+    def recipe(self) -> dict[str, Any] | None:
+        """The crate's invocation recipe for this engine, when it has one (recrate.adapters)."""
+        inv = getattr(self.spec, "invocation", None)
+        return inv if isinstance(inv, dict) and inv.get("engine") == self.name else None
+
     def run(self, workflow: Path, input_dir: Path, output_dir: Path, params: dict[str, Any],
             channel: int = 0, progress=None) -> RunResult:
         if not self.available():
             raise RuntimeError(self.readiness())
         output_dir = Path(output_dir).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
+        recipe = self.recipe()
+        network = recipe.get("network") if recipe else None
         with tempfile.TemporaryDirectory(prefix=f"recrate-{self.name}-") as tmp:
             work = Path(tmp) / "workflow"
-            shutil.copytree(Path(workflow).parent, work, ignore=shutil.ignore_patterns(".git", "*_cache", ".snakemake"))
-            wf = work / Path(workflow).name
-            cmd = self.command(wf, Path(input_dir).resolve(), output_dir, params, work)
-            confined, extra_env = sandbox.wrap(cmd, [work, output_dir])  # no network, writes only to these
+            root = Path(workflow).parent
+            if recipe and recipe.get("root") and self.spec is not None:
+                root = Path(self.spec.path) / recipe["root"]
+            shutil.copytree(root, work, ignore=shutil.ignore_patterns(".git", "*_cache", ".snakemake"))
+            wf = work / Path(workflow).resolve().relative_to(root.resolve())
+            before = {p.relative_to(work) for p in work.rglob("*") if p.is_file()}
+            if recipe:
+                cmd = self.recipe_command(recipe, wf, Path(input_dir).resolve(), output_dir, params, work)
+            else:
+                cmd = self.command(wf, Path(input_dir).resolve(), output_dir, params, work)
+            confined, extra_env = sandbox.wrap(cmd, [work, output_dir], network=network)  # writes only to these
             started = now_iso()
             proc = subprocess.run(confined, cwd=work, capture_output=True, text=True, timeout=TIMEOUT,
-                                  env={**os.environ, **self.env_vars, **extra_env, "RECRATE_OUTPUT_DIR": str(output_dir)})
+                                  env=sandbox.environment({**self.env_vars, **extra_env, "RECRATE_OUTPUT_DIR": str(output_dir)}))
             ended = now_iso()
             (output_dir / f"{self.name}.log").write_text((proc.stdout + "\n" + proc.stderr)[-200000:], encoding="utf-8")
             if proc.returncode != 0:
                 raise RuntimeError(f"{Path(workflow).name} failed in {self.software} (exit {proc.returncode}):\n"
                                    f"{(proc.stderr or proc.stdout)[-2000:]}")
-            self.collect(work, output_dir)
+            if recipe and recipe.get("collect") == "new-files":  # what the engine left in its own folder (Snakemake)
+                for p in sorted(work.rglob("*")):
+                    rel = p.relative_to(work)
+                    if p.is_file() and rel not in before and rel.parts[0] not in {".snakemake", "work", ".nextflow"} \
+                            and p.name != "recrate-config.yaml":
+                        (output_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(p, output_dir / rel)
+            else:
+                self.collect(work, output_dir)
         results = output_dir / "results.csv"
+        if recipe and not results.exists():
+            self.recipe_results(recipe, output_dir)
         if not results.exists():
             raise RuntimeError(f"{Path(workflow).name} ran in {self.software} but wrote no results.csv in output_dir.")
         extra = [f for f in sorted(output_dir.rglob("*")) if f.is_file() and f.name != "results.csv"]
         return RunResult(results_csv=results, masks_dir=None, started=started, ended=ended, params=dict(params),
                          software=[(self.software, _version([self.tool, *self.version_args]))],
-                         log=proc.stdout[-4000:], extra_outputs=extra, sandbox=sandbox.describe())
+                         log=proc.stdout[-4000:], extra_outputs=extra, sandbox=sandbox.describe(network))
+
+    def recipe_command(self, recipe: dict[str, Any], workflow: Path, input_dir: Path, output_dir: Path,
+                       params: dict[str, Any], work: Path) -> list[str]:
+        """The recipe's command line with its placeholders filled; writes the job or config file it names."""
+        inputs: dict[str, str] = recipe.get("inputs") or {}
+        runtime = next((r for r in recipe.get("needs") or [] if shutil.which(r)), (recipe.get("needs") or ["docker"])[0])
+        fixed = {"{workflow}": str(workflow), "{input_dir}": str(input_dir), "{output_dir}": str(output_dir),
+                 "{work}": str(work), "{runtime}": runtime}
+
+        def fill(a: str) -> str | None:
+            for k, v in fixed.items():
+                a = a.replace(k, v)
+            m = re.fullmatch(r"\{param:(.+)}", a)
+            if m:
+                return str(params.get(m.group(1), ""))
+            m = re.fullmatch(r"\{input:(.+)}", a)
+            if m:
+                f = input_dir / inputs.get(m.group(1), m.group(1))
+                return str(f) if f.exists() else None  # absent: the flag and its value are dropped
+            return a
+
+        args: list[str] = []
+        for a in recipe.get("args") or []:
+            v = fill(a)
+            if v is None:
+                if args and args[-1].startswith("-"):
+                    args.pop()
+                continue
+            args.append(v)
+        if recipe.get("engine") == "cwl":
+            job: dict[str, Any] = dict(recipe.get("job_extra") or {})
+            for name, f in inputs.items():
+                if (input_dir / f).exists():
+                    job[name] = {"class": (recipe.get("classes") or {}).get(name, "File"), "path": str(input_dir / f)}
+            job.update({k: v for k, v in params.items() if v is not None and v != ""})
+            (work / "recrate-job.json").write_text(json.dumps(job, indent=1), encoding="utf-8")
+        if recipe.get("engine") == "snakemake":
+            import yaml
+
+            cfg = json.loads(json.dumps(recipe.get("config") or {}))  # a deep copy
+
+            def put(key: str, value: Any) -> None:  # dotted keys are nested config
+                d = cfg
+                parts = key.split(".")
+                for k in parts[:-1]:
+                    d = d.setdefault(k, {})
+                d[parts[-1]] = value
+
+            for name, f in inputs.items():
+                if (input_dir / f).exists():
+                    put(name, str(input_dir / f))
+            for k, v in params.items():
+                if v is not None and v != "":
+                    put(k, v)
+            (work / "recrate-config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+        return args
+
+    def recipe_results(self, recipe: dict[str, Any], output_dir: Path) -> None:
+        """``results.csv`` as the recipe says: a listing of what the run produced, or one of its tables."""
+        results = recipe.get("results") or {"kind": "files"}
+        if results.get("kind") == "table" and results.get("path"):
+            src = output_dir / results["path"]
+            if src.exists():
+                shutil.copy2(src, output_dir / "results.csv")
+            return
+        rows = []
+        for f in sorted(output_dir.rglob("*")):
+            if f.is_file() and f.name not in {"results.csv", f"{self.name}.log"}:
+                rows.append(f"{f.relative_to(output_dir).as_posix()},{hashlib.sha1(f.read_bytes()).hexdigest()},"
+                            f"{f.stat().st_size}\n")
+        (output_dir / "results.csv").write_text("file,sha1,size\n" + "".join(rows), encoding="utf-8")
 
     def collect(self, work: Path, output_dir: Path) -> None:
         """Bring back what the engine left in the scratch folder (e.g. a rendered report). Default: nothing."""

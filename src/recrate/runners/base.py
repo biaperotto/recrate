@@ -31,6 +31,7 @@ class RunResult:
 
 class Runner:
     name = "base"
+    spec: Any = None  # the MethodSpec being run, set by pipeline.execute (engines read its invocation recipe)
 
     def available(self) -> bool:
         return True

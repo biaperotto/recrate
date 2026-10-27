@@ -54,3 +54,26 @@ def test_preprint_links_keep_the_version_out_of_the_doi():
     bio = identify("https://www.biorxiv.org/content/10.1101/2023.01.02.522345v1.full")
     assert (bio[0].kind, bio[0].id, bio[0].version) == ("preprint", "10.1101/2023.01.02.522345", "v1")
     assert identify("10.1101/2023.01.02.522345v3")[0].id == "10.1101/2023.01.02.522345"  # a bare DOI too
+
+
+def test_workflowhub_fetch_saves_the_registry_record(tmp_path, monkeypatch):
+    """What the crate itself rarely says (DOI, EDAM topics, parsed inputs) is kept next to it, offline afterwards."""
+    import io
+    import json
+
+    from recrate import sources
+
+    attrs = {"title": "Nuclei", "license": "MIT", "latest_version": 2, "doi": "10.48546/workflowhub.workflow.771.2",
+             "workflow_class": {"title": "Galaxy"}, "tags": ["imaging"],
+             "topic_annotations": [{"label": "Microscopy", "identifier": "http://edamontology.org/topic_3382"}],
+             "internals": {"inputs": [{"id": "#main/input_image", "type": [{"type": "File"}]}], "outputs": [], "steps": []}}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ro-crate-metadata.json", json.dumps({"@graph": [{"@id": "./", "@type": "Dataset", "name": "Nuclei"}]}))
+    monkeypatch.setattr(sources, "_json", lambda url: {"data": {"attributes": attrs}})
+    monkeypatch.setattr(sources, "_get", lambda url, accept=None, timeout=60: (buf.getvalue(), "application/zip"))
+    found = sources.fetch_workflowhub("771", None, tmp_path)
+    assert found.kind == "crate" and found.path == tmp_path / "crate" and "DOI: 10.48546/workflowhub.workflow.771.2" in found.notes
+    rec = json.loads((tmp_path / "workflowhub.json").read_text())
+    assert rec["doi"] == attrs["doi"] and rec["version"] == "2" and rec["workflow_class"] == "Galaxy"
+    assert rec["topic_annotations"][0]["label"] == "Microscopy" and rec["internals"]["inputs"][0]["id"] == "#main/input_image"

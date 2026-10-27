@@ -426,11 +426,15 @@ def build(trusted: bool) -> None:
     env_line = ""
     if env:
         known = [s for s in env.software if s.version and s.how != "later"]
-        env_line = (f"\n\nPublished **{env.published or 'on an unknown date'}**. {len(known)} of {len(env.software)} "
-                    "software versions determined" + (": " + ", ".join(f"{s.name} {s.version}" for s in known[:5])
-                                                      if known else "") + ".")
+        env_line = f"\n\nPublished **{env.published or 'on an unknown date'}**." + (
+            f" {len(known)} of {len(env.software)} software versions determined"
+            + (": " + ", ".join(f"{s.name} {s.version}" for s in known[:5]) if known else "") + "."
+            if env.software else " The crate declares no software versions.")
     ss._goto = "validate"
-    say(f"{'Ready' if a.has_methods else 'Recreated the RO-Crate'}: **{a.card()['title']}**." + search_line + env_line
+    # "Ready" only when something can run here; a method blocked by a missing tool or runtime is said as such
+    blocked = bool(a.methods) and all(m.readiness == "blocked" for m in a.methods)
+    head = "Built, but it can't run here" if blocked else "Ready" if a.has_methods else "Recreated the RO-Crate"
+    say(f"{head}: **{a.card()['title']}**." + search_line + env_line
         + ("\n\n" + "\n".join(lines) if lines else "\n\nNo runnable method yet: see **Reproduce** for what's needed.")
         + "\n\nAsk me anything about it.")
 

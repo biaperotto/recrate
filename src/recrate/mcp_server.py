@@ -94,8 +94,12 @@ def typed_method_tool(spec, method_id: str, run):
     params, names = [], {}
     if spec.needs_data:
         d = spec.data_input
+        expected = d.description or d.format or "see describe_method"
+        named = (spec.invocation or {}).get("inputs") or {}
+        if named:  # the workflow takes named files: say which, by the names its community uses
+            expected = "a folder with: " + ", ".join(f"{f} ({n})" for n, f in named.items())
         params.append(inspect.Parameter("data_path", kw, annotation=Annotated[str, Field(
-            description=f"File or folder with the user's data. Expected: {d.description or d.format or 'see describe_method'}")]))
+            description=f"File or folder with the user's data. Expected: {expected}")]))
     for p in spec.value_inputs:
         arg = re.sub(r"\W+", "_", p.name).strip("_") or "value"
         if arg in names or arg in {"data_path", "who", "reason", "scale_ratio", "auto_adjust", "channel"}:

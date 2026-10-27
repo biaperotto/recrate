@@ -34,6 +34,7 @@ TOLERANCE_SOURCES = {
     "method-noise": "measured by rerunning a stochastic method",
     "person": "set by a named person, with a reason",
     "code-stated": "stated by the authors' code or tutorial output (file named)",
+    "test-stated": "stated by the workflow's own published test (file named)",
 }
 
 
@@ -169,8 +170,9 @@ OUTPUT_KINDS = {
     "metric": "within the paper's reported CI, or a stated tolerance",
     "figure": "never compared as pixels: compare the data behind it",
     "text": "exact match or set overlap",
+    "files": "one row per produced file: sha1 exact, else size",
 }
-COMPARED_KINDS = {"scalar", "table"}
+COMPARED_KINDS = {"scalar", "table", "files"}
 
 # ---- parameters with meaning ------------------------------------------------------------------------------------
 PARAMETER_ROLES = {
