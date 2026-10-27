@@ -383,3 +383,122 @@ def test_nfcore_pipeline_runs_with_micromamba_when_there_is_no_docker(tmp_path, 
     import subprocess as _sp
 
     assert _sp.run([str(shim), "config", "--show", "channels"], capture_output=True, text=True).stdout.startswith("channels:")
+
+
+# ---- Snakemake: the authors' run script as the published test run (several steps, a preflight, DVC pointers) -----
+
+SNAKEFILE_QC = """
+rule all:
+    input: "results/qc.txt"
+
+rule qc:
+    input: config["deps"]["input"]
+    output: "results/qc.txt"
+    shell: "awk -F, 'NR>1{{s+=$1}} END{{print s}}' {input} > {output}"
+"""
+SNAKEFILE_IMP = """
+rule all:
+    input: "results/total.txt"
+
+rule total:
+    input: config["deps"]["qc"]
+    output: "results/total.txt"
+    params: factor=config["params"]["factor"]
+    shell: "awk '{{print $1*{params.factor}}}' {input} > {output}"
+"""
+RUN_TEST = """#! /bin/bash
+set -e
+./prep.sh --what check --configfile config/test_qc.yaml
+snakemake --workflow-profile profiles/workflow \\
+    --snakefile workflow/Snakefile_qc \\
+    --configfile config/test_qc.yaml $@
+snakemake --workflow-profile profiles/workflow --snakefile workflow/Snakefile_imp --configfile config/test_imp.yaml $@
+"""
+PREP = """#! /bin/bash
+# --what check: a read-only preflight; exits 1 when an input named in the config is missing
+cfg=""; while [ $# -gt 0 ]; do case "$1" in --configfile) cfg="$2"; shift;; esac; shift; done
+for f in $(grep -o 'data/[A-Za-z0-9_.]*' "$cfg"); do [ -e "$f" ] || { echo "missing $f: run dvc pull" >&2; exit 1; }; done
+echo "preflight ok: $cfg"
+"""
+
+
+def two_step_snakemake_crate(tmp_path: Path, with_data: bool = True) -> Path:
+    c = _crate(tmp_path / "published", "workflow/Snakefile_imp", "Snakemake")
+    (c / "workflow").mkdir()
+    (c / "workflow" / "Snakefile_qc").write_text(SNAKEFILE_QC)
+    (c / "workflow" / "Snakefile_imp").write_text(SNAKEFILE_IMP)
+    (c / "config").mkdir()
+    (c / "config" / "test_qc.yaml").write_text("deps:\n  input: data/values.csv\nparams:\n  mind: 0.05\n")
+    (c / "config" / "test_imp.yaml").write_text("deps:\n  qc: results/qc.txt\nparams:\n  factor: 5\n")
+    (c / "profiles" / "workflow").mkdir(parents=True)
+    (c / "profiles" / "workflow" / "config.yaml").write_text("latency-wait: 5\nkeep-going: False\n")
+    (c / "run_test.sh").write_text(RUN_TEST)
+    (c / "prep.sh").write_text(PREP)
+    (c / "prep.sh").chmod(0o755)
+    (c / "data").mkdir()
+    if with_data:
+        (c / "data" / "values.csv").write_text("x\n1\n2\n3\n")
+    else:
+        (c / "data" / "values.csv.dvc").write_text("outs:\n- md5: abc\n  path: values.csv\n")
+        (c / ".dvc").mkdir()
+        (c / ".dvc" / "config").write_text("[core]\n    remote = lab\n['remote \"lab\"']\n    url = ssh://hpc.example.org/dvc\n")
+    return c
+
+
+def test_the_authors_run_script_becomes_ordered_steps_with_a_preflight(tmp_path):
+    c = two_step_snakemake_crate(tmp_path)
+    import_crate(c, tmp_path / "crate")
+    spec = load_crate(tmp_path / "crate")
+    inv = spec.invocation
+    assert inv["script"] == "run_test.sh" and [Path(s["snakefile"]).name for s in inv["steps"]] == ["Snakefile_qc", "Snakefile_imp"]
+    assert inv["steps"][0]["configfile"] == "config/test_qc.yaml" and inv["steps"][0]["workflow_profile"] == "profiles/workflow"
+    assert inv["steps"][0]["preflight"] == ["./prep.sh", "--what", "check", "--configfile", "config/test_qc.yaml"]
+    assert inv["needs"] == [] and "args" not in inv  # no container or conda directives: runs with snakemake alone
+    assert "2 Snakemake step(s) in order: Snakefile_qc, Snakefile_imp" in spec.method_description
+    assert spec.default_params() == {"params.mind": 0.05, "params.factor": 5}  # both steps' parameters
+    assert spec.example_data and (spec.example_data / "values.csv").exists()
+
+
+@pytest.mark.skipif(not shutil.which("snakemake"), reason="needs snakemake")
+def test_the_steps_run_in_order_as_the_authors_run_them(tmp_path):
+    c = two_step_snakemake_crate(tmp_path)
+    a = agentify(tmp_path / "agent", crate=c, online=False, validate="none")
+    spec = a.spec()
+    assert readiness(spec.workflow_language, spec.workflow_path, invocation=spec.invocation) is None
+    out = run_on_data(spec, spec.example_data, a.runs_dir, agent="test", overrides={"params.factor": (10, "a test")})
+    assert (out.run_dir / "outputs" / "results" / "qc.txt").read_text().strip() == "6"
+    assert (out.run_dir / "outputs" / "results" / "total.txt").read_text().strip() == "60"  # (1+2+3) * 10
+    log = (out.run_dir / "outputs" / "snakemake.log").read_text()
+    assert "preflight ok: config/test_qc.yaml" in log and log.index("Snakefile_qc") < log.index("Snakefile_imp")
+
+
+@pytest.mark.skipif(not shutil.which("snakemake"), reason="needs snakemake")
+def test_dvc_tracked_test_inputs_are_named_and_the_preflight_says_what_to_fetch(tmp_path):
+    """A crate whose test inputs are DVC pointers (as #2343's are): the method says which, and where they come from;
+    the run stops at the authors' preflight with their own message, instead of failing somewhere inside."""
+    c = two_step_snakemake_crate(tmp_path, with_data=False)
+    import_crate(c, tmp_path / "crate")
+    spec = load_crate(tmp_path / "crate")
+    assert "tracked with DVC (data/values.csv)" in spec.method_description and "ssh://hpc.example.org/dvc" in spec.method_description
+    assert spec.example_data and (spec.example_data / "DVC-DATA.md").exists()
+    a = agentify(tmp_path / "agent", crate=c, online=False, validate="none")
+    from recrate.pipeline import reproduce
+
+    with pytest.raises(RuntimeError, match=r"(?s)preflight.*missing data/values.csv: run dvc pull"):
+        reproduce(a.spec(), a.runs_dir, agent="test")
+
+
+def test_container_rules_need_singularity_not_docker(tmp_path):
+    c = two_step_snakemake_crate(tmp_path)
+    (c / "workflow" / "Snakefile_imp").write_text(SNAKEFILE_IMP.replace('    output: "results/total.txt"',
+                                                                        '    container: "docker://x/y"\n    # conda: "envs/x.yaml"\n    output: "results/total.txt"'))
+    import_crate(c, tmp_path / "crate")
+    inv = load_crate(tmp_path / "crate").invocation
+    assert inv["needs"] == ["singularity", "apptainer"] and inv["network"]  # a commented conda: line doesn't count
+    from recrate.runners.engines import SnakemakeRunner
+
+    r = SnakemakeRunner()
+    r.runtime = "apptainer"
+    assert r.deployment_flags() == ["--use-singularity"]
+    r.runtime = "mamba"
+    assert r.deployment_flags() == ["--use-conda", "--conda-frontend", "mamba"]

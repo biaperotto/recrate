@@ -372,6 +372,18 @@ def cmd_verify_server(a) -> int:
     return 0 if rep["ok"] else 1
 
 
+def cmd_runtime(a) -> int:
+    from .runtime_vm import describe, remove_vm, setup, status
+
+    if a.action == "setup":
+        print(describe(setup(cpus=a.cpus, memory_gb=a.memory, disk_gb=a.disk)))
+    elif a.action == "remove":
+        print("VM removed." if remove_vm() else "No VM to remove.")
+    else:
+        print(describe(status()))
+    return 0
+
+
 def cmd_mark(a) -> int:
     from .workflow_state import mark
 
@@ -411,6 +423,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"recrate {__version__}")
     p.add_argument("--unsandboxed", action="store_true",
                    help="Run the paper's code without a sandbox (only for code you trust; recorded in each run crate)")
+    p.add_argument("--remote", metavar="USER@HOST", help="Run workflow engines on that machine over SSH (its "
+                   "runtimes count for readiness; the workflow is copied there and the outputs come back). "
+                   "Default: RECRATE_REMOTE")
+    p.add_argument("--remote-dir", metavar="DIR", help="With --remote: the folder there for workflows and runs "
+                   "(default RECRATE_REMOTE_DIR, else ~/recrate-runs)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def runner_opts(sp, who: bool = True):
@@ -594,6 +611,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_hardware)
 
+    s = sub.add_parser("runtime", help="A Linux VM for workflows that need containers (docker, apptainer): setup, "
+                                       "status or remove. Made once with Lima, in user space; used on its own after that")
+    s.add_argument("action", choices=["setup", "status", "remove"])
+    s.add_argument("--cpus", type=int, default=4)
+    s.add_argument("--memory", type=int, default=8, help="GB of RAM for the VM while it runs (default 8)")
+    s.add_argument("--disk", type=int, default=100, help="GB of disk the VM may grow to (default 100)")
+    s.set_defaults(func=cmd_runtime)
+
     s = sub.add_parser("verify-server", help="Launch the agent's MCP server over stdio (or connect to one served "
                                              "with --http, via --url) and check its tools")
     s.add_argument("agent")
@@ -632,6 +657,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.unsandboxed:
         os.environ["RECRATE_SANDBOX"] = "off"
+    if getattr(args, "remote", None):
+        os.environ["RECRATE_REMOTE"] = args.remote
+    if getattr(args, "remote_dir", None):
+        os.environ["RECRATE_REMOTE_DIR"] = args.remote_dir
     try:
         return args.func(args)
     except (CrateError, ValueError, RuntimeError) as e:

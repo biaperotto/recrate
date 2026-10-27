@@ -615,7 +615,9 @@ Code cloned: {code_dir or 'no (use --repo URL or --fetch-code)'}
 """
 
 
-def revalidate(agent_dir: str | Path, runner: str = "auto") -> PaperAgent:
+def revalidate(agent_dir: str | Path, runner: str = "auto", validate: str = "all") -> PaperAgent:
+    """Re-check every method (``validate``: all, safe or none, as validate_methods takes it): with ``none``, only the
+    readiness is recomputed (e.g. after a remote machine was configured), nothing runs."""
     agent_dir = Path(agent_dir)
     manifest = json.loads((agent_dir / MANIFEST).read_text(encoding="utf-8"))
     crate_dir = agent_dir / "crate"
@@ -626,7 +628,8 @@ def revalidate(agent_dir: str | Path, runner: str = "auto") -> PaperAgent:
     if env is not None and not (crate_dir / "environment").exists():  # drafting rewrote the crate: keep the dates
         add_environment(crate_dir, env)
     spec0 = load_crate(crate_dir)
-    manifest["methods"] = [m.__dict__ for m in validate_methods(crate_dir, agent_dir / "runs", runner=runner)]
+    manifest["methods"] = [m.__dict__ for m in validate_methods(crate_dir, agent_dir / "runs", runner=runner,
+                                                                 validate=validate)]
     manifest["crate_source"] = manifest.get("crate_source") if manifest.get("crate_source") != "none" else "drafted"
     manifest["title"] = spec0.name
     manifest["name"] = _slug(spec0.name)  # the name a PDF's page header gave is replaced by the crate's title

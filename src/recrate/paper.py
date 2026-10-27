@@ -103,7 +103,7 @@ def _rank_repos(repos: list[str], text: str) -> list[str]:
 def _clean_link(link: str) -> str:
     """Drop what PDF text glues onto the end of a DOI or URL: a following word ("…26350296doi:", "….August"),
     a reference number ("…/rplos.20" from "rplos.\n20.") or a trailing full stop."""
-    link = re.split(r"\]\(|\)\(", link, 1)[0]  # a Markdown badge: "[![DOI](...zenodo.123-1073c8)](https://doi.org/...)"
+    link = re.split(r"\]\(|\)\(", link, maxsplit=1)[0]  # a Markdown badge: "[![DOI](...zenodo.123-1073c8)](https://doi.org/...)"
     while link.endswith(")") and link.count(")") > link.count("("):
         link = link[:-1]
     link = link.rstrip(".")

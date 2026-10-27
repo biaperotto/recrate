@@ -106,8 +106,12 @@ it is not.
 installed is used, docker, singularity or apptainer first, else conda, mamba or micromamba, with which a Nextflow
 pipeline runs its conda profile (each tool's environment built by Nextflow and cached in `~/.cache/recrate`, so a
 published pipeline runs on a computer without docker). The runtime and its version are recorded as software in the run
-crate. For pipelines too heavy for that, `.github/workflows/workflowhub-pipeline.yml` runs any WorkflowHub pipeline by
-id on a GitHub runner with docker and keeps the run crates as an artifact.
+crate. On a computer without any container runtime (a Mac), `recrate runtime setup` (`runtime_vm.py`) makes ReCRATE's
+own Linux VM with Lima, with docker, apptainer and the engines inside; `remote.py` then treats it as the default
+other machine for exactly the recipes this computer cannot run: the workflow's folder is copied there (rsync over
+Lima's SSH), the recipe's prepare, preflight and step commands run there, and the outputs come back. `RECRATE_REMOTE`
+names any other machine the same way. For pipelines too heavy for a laptop, `.github/workflows/workflowhub-pipeline.yml`
+runs any WorkflowHub pipeline by id on a GitHub runner with docker and keeps the run crates as an artifact.
 
 The MCP server mirrors Paper2Agent's three parts:
 

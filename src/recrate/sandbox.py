@@ -74,6 +74,11 @@ def trust_notice(languages: list[str] | set[str], network: bool | None = None) -
     """What running a workflow's own code here means, for the person deciding to: how it is confined (or that it
     is not), what the sandbox still lets it do (read files), and that the choice is theirs."""
     langs = ", ".join(sorted(set(languages))) or "its"
+    remote = os.environ.get("RECRATE_REMOTE", "").strip()
+    if remote and not remote.startswith("local:"):
+        return (f"This runs the workflow's own code ({langs}) on {remote} over SSH (RECRATE_REMOTE), where "
+                "ReCRATE does not confine it: it can read, write and use the network as your account there can. "
+                "Run it if you trust where it comes from, or read the code first.")
     b = backend()
     if b is None and mode() in OFF:
         how = ("unconfined: RECRATE_SANDBOX=off was chosen, so it can read and write anywhere you can and use the "

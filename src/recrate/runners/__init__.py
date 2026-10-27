@@ -137,10 +137,13 @@ def readiness(language: str | None, workflow: Path | None, python: Path | None =
         except RuntimeError as e:
             return str(e)
     if runner.name in ENGINES:
+        from ..remote import Remote
+
+        remote = Remote.from_env() if invocation else None  # a recipe may run on another machine
         if runner.name == "notebook":
             runner.python = python
         why = runner.readiness()
-        if why:
+        if why and not (remote and remote.has(runner.tool)):
             return why
         import shutil
 
@@ -150,8 +153,14 @@ def readiness(language: str | None, workflow: Path | None, python: Path | None =
         if invocation:
             needs = invocation.get("needs") or []
             if needs and not any(shutil.which(n) for n in needs):
+                if remote and any(remote.has(n) for n in needs):
+                    return None  # it runs there: the workflow is copied over, run, and its outputs brought back
+                where = f"here nor on {remote.host}" if remote else "here"
+                hint = ("" if remote else " `recrate runtime setup` makes a small Linux VM on this computer once (user "
+                        "space; docker and apptainer inside), after which such workflows run in it on their own; or set "
+                        "RECRATE_REMOTE=user@host to run them on a machine that has the runtime.")
                 return (f"Needs a container runtime ({', '.join(needs)}) to run as its authors do; none is installed "
-                        "here.")
+                        f"{where}.{hint}")
         elif "input_dir" not in Path(workflow).read_text(errors="replace"):
             return (f"No adapter knows how to call this {runner.software} workflow: it does not take "
                     "--input_dir/--output_dir and the crate has no invocation recipe.")

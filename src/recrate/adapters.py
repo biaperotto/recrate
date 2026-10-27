@@ -18,8 +18,11 @@ What the adapters read, by ecosystem:
   apptainer) or conda / mamba / micromamba (each tool installed into an environment instead).
 * **CWL**: the crate's ``FormalParameter``s (WorkflowHub writes them from the workflow), else the workflow's ``inputs``;
   a cwltest ``tests.yml`` gives the job (example data) and the expected outputs' checksums and sizes.
-* **Snakemake**: ``config/config.yaml`` with ``workflow/schemas/config.schema.yaml``; ``.test/config/config.yaml`` or
-  ``config/test*.yaml`` as the example run.
+* **Snakemake**: ``config/config.yaml`` with ``workflow/schemas/config.schema.yaml``; the authors' ``run_test.sh``
+  (one ``snakemake --snakefile … --configfile …`` call per step, in order, with their workflow profile and
+  ``prep.sh --what check`` as a preflight) as the published test run, else ``.test/config/config.yaml`` or
+  ``config/test*.yaml``; ``container:`` directives need singularity or apptainer, ``conda:`` ones conda or mamba;
+  test inputs that are DVC pointers are named, with the remote to fetch them from.
 
 Expected results from a test are recorded with the tolerance source ``test-stated`` (the test file is the evidence).
 No test, no reproduction: the method is reusable only, and the gaps say so.
@@ -698,6 +701,49 @@ def _looks_like_file(value: Any, base: Path) -> Path | None:
     return None
 
 
+def _snakemake_steps(src: Path) -> tuple[Path | None, list[dict[str, Any]]]:
+    """The published test run as the authors script it: ``run_test.sh`` (else another ``run_*.sh``) calling
+    ``snakemake --snakefile X --configfile Y [--workflow-profile P]`` once or several times (a QC workflow, then an
+    imputation workflow). Each call is one step, in order; a step whose Snakefile is not in the crate is skipped."""
+    scripts = [src / "run_test.sh", *sorted(src.glob("run_*.sh")), *sorted(src.glob("*.sh"))]
+    for script in dict.fromkeys(p for p in scripts if p.is_file()):
+        text = re.sub(r"\\\n\s*", " ", script.read_text(encoding="utf-8", errors="replace"))
+        steps: list[dict[str, Any]] = []
+        for line in text.splitlines():
+            line = line.split("#")[0]
+            if not re.search(r"(^|\s)snakemake\s", line) or "--version" in line:
+                continue
+            sf = re.search(r"(?:--snakefile|-s)\s+(\S+)", line)
+            if not sf or not (src / sf.group(1)).exists():
+                continue
+            cfgs = [c for c in re.findall(r"--configfiles?\s+(\S+)", line) if (src / c).exists()]
+            prof = re.search(r"--workflow-profile\s+(\S+)", line)
+            step: dict[str, Any] = {"snakefile": sf.group(1), "configfile": cfgs[0] if cfgs else None}
+            if prof and (src / prof.group(1)).is_dir():
+                step["workflow_profile"] = prof.group(1)
+            steps.append(step)
+        if steps:
+            return script, steps
+    return None, []
+
+
+def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    """``over`` on top of ``base``, nested dicts merged key by key (two steps' ``params`` blocks both kept)."""
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def _dvc_remote(src: Path) -> str | None:
+    cfg = src / ".dvc" / "config"
+    if cfg.exists():
+        m = re.search(r"^\s*url\s*=\s*(\S+)", cfg.read_text(encoding="utf-8", errors="replace"), re.M)
+        if m:
+            return m.group(1)
+    return None
+
+
 def import_snakemake(src: Path, out_dir: Path) -> dict[str, Any]:
     yaml = _yaml()
     idx, root = _meta(src)
@@ -705,8 +751,15 @@ def import_snakemake(src: Path, out_dir: Path) -> dict[str, Any]:
     info = _root_info(src, idx, root, wf)
     cfg_path = src / "config" / "config.yaml"
     config = yaml.safe_load(cfg_path.read_text(encoding="utf-8", errors="replace")) if cfg_path.exists() else {}
+    script, steps = _snakemake_steps(src)
     test_path = _snakemake_test_config(src)
+    if steps:  # the authors' own test run: its first config carries the test's values
+        test_path = next((src / st["configfile"] for st in steps if st.get("configfile")), test_path)
     test_cfg = yaml.safe_load(test_path.read_text(encoding="utf-8", errors="replace")) if test_path else {}
+    for st in steps:  # every step's config adds its own keys (the imputation step's refs and params)
+        if st.get("configfile") and src / st["configfile"] != test_path:
+            more = yaml.safe_load((src / st["configfile"]).read_text(encoding="utf-8", errors="replace")) or {}
+            test_cfg = _deep_merge(more, test_cfg or {})
     schema_path = src / "workflow" / "schemas" / "config.schema.yaml"
     schema = yaml.safe_load(schema_path.read_text(encoding="utf-8", errors="replace")) if schema_path.exists() else {}
     props = _flatten({k: v for k, v in (schema.get("properties") or {}).items()}) if schema else {}
@@ -720,35 +773,62 @@ def import_snakemake(src: Path, out_dir: Path) -> dict[str, Any]:
     inputs: dict[str, str] = {}
     files: list[dict[str, Any]] = []
     values: list[dict[str, Any]] = []
+    dvc_tracked: list[str] = []  # test inputs the crate only points at (DVC): fetched with dvc pull where allowed
     for key, v in merged.items():
+        if key.split(".")[0] in {"containers", "outs"}:  # container images and output folders are not parameters
+            continue
         desc = str(props.get(f"{key}.description") or props.get(key.split('.')[0] + ".description") or "")
         hit = _looks_like_file(v, test_base) or _looks_like_file(v, src)
-        if hit is not None or key.split(".")[-1] in {"samples", "units", "input", "input_vcf", "input_dir"}:
+        pointer = isinstance(v, str) and bool(v) and (src / f"{v}.dvc").exists() and not (src / v).exists()
+        if hit is not None or pointer or key.split(".")[-1] in {"samples", "units", "input", "input_vcf", "input_dir"}:
             files.append({"name": key, "description": desc or f"Config key {key}"})
             if hit is not None:
                 example[hit.name] = hit
                 inputs[key] = hit.name
             else:
                 inputs[key] = Path(str(v)).name if isinstance(v, str) and v else key
+                if pointer:
+                    dvc_tracked.append(str(v))
+        elif isinstance(v, str) and ("/" in v or re.search(r"\.[A-Za-z0-9]{1,6}$", v)) and not (src / v).exists():
+            continue  # a path to something a step produces during the run: neither an input nor a parameter
         elif isinstance(v, (str, int, float, bool)):
             typ = {bool: "Boolean", int: "Integer", float: "Float"}.get(type(v), "Text")
             values.append({"name": key, "type": typ, "default": v, "description": desc or f"Config key {key}"})
     values = values[:MAX_PARAMS]
     text = "".join(p.read_text(encoding="utf-8", errors="replace")
                    for p in [src / wid, *src.rglob("*.smk")] if p.exists())
-    envs = bool(re.search(r"^\s*(container|conda)\s*:", text, re.M))
-    recipe = {"engine": "snakemake", "root": "workflow", "cwd": "work", "network": envs,
-              "needs": ["docker", "singularity", "apptainer", "conda", "mamba"] if envs else [],
-              "inputs": inputs, "results": {"kind": "files"}, "collect": "new-files",
-              "config": test_cfg or config or {},
-              "args": ["snakemake", "-s", "{workflow}", "--cores", "2", "--directory", "{work}",
-                       "--configfile", "{work}/recrate-config.yaml"]}
+    containers = bool(re.search(r"^\s*container\s*:", text, re.M))  # commented-out directives don't count
+    condas = bool(re.search(r"^\s*conda\s*:", text, re.M))
+    # Snakemake runs containers through singularity/apptainer (not docker) and conda directives through conda/mamba
+    needs = (["singularity", "apptainer"] if containers else []) + (["conda", "mamba"] if condas else [])
+    recipe: dict[str, Any] = {"engine": "snakemake", "root": "workflow", "cwd": "work", "network": bool(needs),
+                              "needs": needs, "inputs": inputs, "results": {"kind": "files"}, "collect": "new-files",
+                              "config": test_cfg or config or {}}
+    if steps:
+        assert script is not None
+        prep = src / "prep.sh"
+        preflight = prep.exists() and "--what check" in prep.read_text(encoding="utf-8", errors="replace")
+        recipe["steps"] = [{**st, **({"preflight": ["./prep.sh", "--what", "check", "--configfile", st["configfile"]]}
+                                     if preflight and st.get("configfile") else {})} for st in steps]
+        recipe["script"] = str(script.relative_to(src))
+        if dvc_tracked:  # what the authors do once, where the data can be fetched: dvc pull, then unpack (prep.sh)
+            recipe["prepare"] = [["dvc", "pull"]] + ([["./prep.sh"]] if prep.exists() else [])
+    else:
+        recipe["args"] = ["snakemake", "-s", "{workflow}", "--cores", "2", "--directory", "{work}",
+                          "--configfile", "{work}/recrate-config.yaml", "{sdm}"]
+    remote = _dvc_remote(src)
+    how = (f" Published test run: {script.relative_to(src) if script else '?'} ({len(steps)} Snakemake step(s) in order:"
+           f" {', '.join(Path(st['snakefile']).name for st in steps)})." if steps else
+           f" Published test configuration: {test_path.relative_to(src)}." if test_path else
+           " The crate has no test configuration.")
+    deploy = (" Each rule runs in its own container (singularity or apptainer)." if containers else "") + \
+        (" Rules declare conda environments (conda or mamba)." if condas else "")
+    dvc_note = (f" The test's inputs are not in the crate but tracked with DVC ({', '.join(dvc_tracked)}); fetch them "
+                f"with `dvc pull` in the crate's folder on a machine with access to its remote"
+                f"{' (' + remote + ')' if remote else ''}, then reproduce." if dvc_tracked else "")
     method = {
         "name": _slug_name(wf.get("name") or info["name"]),
-        "description": (wf.get("description") or info["description"] or info["name"])
-        + (f" Published test configuration: {test_path.relative_to(src)}." if test_path else
-           " The crate has no test configuration.")
-        + (" Needs conda or a container runtime (the rules declare environments)." if envs else ""),
+        "description": (wf.get("description") or info["description"] or info["name"]) + how + deploy + dvc_note,
         "workflow": {"file": str(out_dir / "workflow" / wid), "language": "Snakemake", "software": _software(src, "snakemake")},
         "inputs": [_param(p["name"], "File", None, p["description"]) for p in files]
         + [_param(p["name"], p["type"], p["default"], p["description"], role="free") for p in values],
@@ -758,6 +838,15 @@ def import_snakemake(src: Path, out_dir: Path) -> dict[str, Any]:
     work = out_dir.parent / f".{out_dir.name}-import"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
+    if dvc_tracked and not example:  # the published data is a pointer: say so where the data would be
+        note = work / "DVC-DATA.md"
+        note.write_text("# The published test's inputs\n\nThey are tracked with DVC, not stored in the crate:\n\n"
+                        + "".join(f"- `{d}` (pointer: `{d}.dvc`)\n" for d in dvc_tracked)
+                        + (f"\nDVC remote: `{remote}`\n" if remote else "")
+                        + "\nOn a machine with access, run `dvc pull` (or `dvc update` for public sources) in the "
+                        "crate's `workflow/` folder; the preflight (`prep.sh --what check`) then passes and the test "
+                        "run reproduces as the authors run it.\n", encoding="utf-8")
+        example = {note.name: note}
     try:
         return _finish(src, out_dir, info, method, "snakemake", example, None, work)
     finally:
