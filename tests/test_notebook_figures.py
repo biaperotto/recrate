@@ -57,7 +57,7 @@ def test_the_notebook_runner_collects_its_figures(tmp_path):
     out = tmp_path / "out"
     out.mkdir()
     (out / "executed-analysis.ipynb").write_text(json.dumps(_executed_notebook(_png())))
-    NotebookRunner().collect(tmp_path / "work", out)
+    NotebookRunner().finish(out)
     assert (out / "figures" / "figure_1.png").exists() and (out / "figures" / MANIFEST).exists()
 
 

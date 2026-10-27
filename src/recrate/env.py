@@ -217,6 +217,8 @@ def build_env(agent_dir: str | Path, python: str | None = None, extra: list[str]
     sources = _sources(agent_dir)
     for what, args in sources:
         install(args, f"install from {what}")
+    if any((agent_dir / "crate").rglob("*.ipynb")) and not any(e.startswith("papermill") for e in extra or []):
+        extra = [*(extra or []), "papermill", "ipykernel"]  # a notebook runs with papermill in this environment
     if extra:
         install(extra, "install " + " ".join(extra))
     record = {"built": datetime.now(timezone.utc).replace(microsecond=0).isoformat(), "python": str(py),

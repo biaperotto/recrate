@@ -193,6 +193,7 @@ class EngineRunner(Runner):
                         shutil.copy2(p, output_dir / rel)
             else:
                 self.collect(work, output_dir)
+            self.finish(output_dir)
         results = output_dir / "results.csv"
         if recipe and not results.exists():
             self.recipe_results(recipe, output_dir)
@@ -262,6 +263,7 @@ class EngineRunner(Runner):
             remote.pull_files(rwork, new, output_dir)
         else:
             remote.pull(rout, output_dir)
+        self.finish(output_dir)
         results = output_dir / "results.csv"
         if not results.exists():
             self.recipe_results(recipe, output_dir)
@@ -418,6 +420,24 @@ class EngineRunner(Runner):
     def recipe_results(self, recipe: dict[str, Any], output_dir: Path) -> None:
         """``results.csv`` as the recipe says: a listing of what the run produced, or one of its tables."""
         results = recipe.get("results") or {"kind": "files"}
+        if results.get("kind") == "notebook-cells":  # what each code cell printed, as the authors' notebook stored it
+            from ..adapters import _cell_rows
+
+            rows_nb: list[tuple[int, str]] = []
+            for nb_path in sorted(output_dir.glob("executed-*.ipynb")):
+                nb = json.loads(nb_path.read_text(encoding="utf-8", errors="replace"))
+                cells = [c for c in nb.get("cells", []) if not (c.get("metadata", {}).get("tags") and
+                                                               "injected-parameters" in c["metadata"]["tags"])]
+                for i, c in enumerate(cells):
+                    if c.get("cell_type") != "code":
+                        continue
+                    text = "".join("".join(o.get("text") or []) for o in c.get("outputs") or []
+                                   if o.get("output_type") == "stream")
+                    if text.strip():
+                        rows_nb.append((i, text))
+            (output_dir / "results.csv").write_text(
+                "file,sha1,size\n" + "".join(f"{f},{h},{z}\n" for f, h, z in _cell_rows(rows_nb)), encoding="utf-8")
+            return
         if results.get("kind") == "table" and results.get("path"):
             src = output_dir / results["path"]
             if src.exists():
@@ -433,6 +453,10 @@ class EngineRunner(Runner):
 
     def collect(self, work: Path, output_dir: Path) -> None:
         """Bring back what the engine left in the scratch folder (e.g. a rendered report). Default: nothing."""
+
+    def finish(self, output_dir: Path) -> None:
+        """Work on what is in the output folder once everything is collected (e.g. the images inside an executed
+        notebook), whether the run was local or on another machine. Default: nothing."""
 
 
 class QuartoRunner(EngineRunner):
@@ -476,11 +500,31 @@ class NotebookRunner(EngineRunner):
             args += ["-p", k, str(v)]
         return args
 
-    def collect(self, work, output_dir):
+    def finish(self, output_dir):
         from ..notebook_figures import extract_notebook_images
 
         for nb in sorted(output_dir.glob("executed-*.ipynb")):  # the plots in its cell outputs, as files
             extract_notebook_images(nb, output_dir / "figures")
+
+    def recipe_command(self, recipe, workflow, input_dir, output_dir, params, work, probe=None):
+        """A published notebook's recipe: papermill from the paper's own environment when it has it, and the cell
+        that sets the data path tagged ``parameters`` in the run's copy, so the injected value takes effect."""
+        args = super().recipe_command(recipe, workflow, input_dir, output_dir, params, work, probe)
+        own = self._own()
+        if own and args and args[0] == "papermill":
+            args[:1] = own
+        nbinfo = recipe.get("notebook") or {}
+        cell = nbinfo.get("parameters_cell")
+        source = Path(self.spec.path) / recipe["root"] / workflow.relative_to(work) \
+            if self.remote is not None and self.spec is not None and recipe.get("root") else workflow
+        if cell is not None and source.exists():
+            nb = json.loads(source.read_text(encoding="utf-8", errors="replace"))
+            cells = nb.get("cells", [])
+            if 0 <= cell < len(cells) and not any("parameters" in (c.get("metadata", {}).get("tags") or []) for c in cells):
+                tags = cells[cell].setdefault("metadata", {}).setdefault("tags", [])
+                tags.append("parameters")
+                self._stage_file(work, workflow.relative_to(work).as_posix(), json.dumps(nb, indent=1))
+        return args
 
 
 class SnakemakeRunner(EngineRunner):

@@ -182,8 +182,9 @@ src/recrate/
   environment.py   publication date; software named by the paper and code; versions as of publication
   agent.py         sources → agent; readiness, reproduction and the ladder per method; conclusion reviews
   galaxy.py        Galaxy Workflow RO-Crates: derive a ReCRATE crate (any workflow); run ported Galaxy imaging tools
-  adapters.py      nf-core, CWL and Snakemake crates from WorkflowHub: parameters, test data and expected outputs from
-                   their own conventions, and the invocation recipe the engine runner follows
+  adapters.py      nf-core, CWL, Snakemake and Jupyter crates from WorkflowHub: parameters, test data and expected
+                   outputs from their own conventions (a notebook: its path variable injected with papermill, the
+                   printed output and images its cells stored), and the invocation recipe the engine runner follows
   sandbox.py       the paper's code runs confined (sandbox-exec, bubblewrap): no network unless the recipe needs it,
                    writes only to the run's folders, no secrets in its environment
   crate.py         read an input crate (one method per workflow); draft.py builds one from a description

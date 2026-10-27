@@ -18,6 +18,9 @@ What the adapters read, by ecosystem:
   apptainer) or conda / mamba / micromamba (each tool installed into an environment instead).
 * **CWL**: the crate's ``FormalParameter``s (WorkflowHub writes them from the workflow), else the workflow's ``inputs``;
   a cwltest ``tests.yml`` gives the job (example data) and the expected outputs' checksums and sizes.
+* **Jupyter notebooks** (WorkflowHub's Jupyter class): run as published with papermill; the data folder injected
+  into the notebook's path variable (its cell tagged ``parameters`` in the run's copy); the printed output each cell
+  stored as the expected results (``code-stated``), its stored images as the published figures.
 * **Snakemake**: ``config/config.yaml`` with ``workflow/schemas/config.schema.yaml``; the authors' ``run_test.sh``
   (one ``snakemake --snakefile … --configfile …`` call per step, in order, with their workflow profile and
   ``prep.sh --what check`` as a preflight) as the published test run, else ``.test/config/config.yaml`` or
@@ -36,7 +39,16 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-LABELS = {"nfcore": "Nextflow", "cwl": "CWL", "snakemake": "Snakemake"}
+LABELS = {"nfcore": "Nextflow", "cwl": "CWL", "snakemake": "Snakemake", "notebook": "Jupyter"}
+# import name -> PyPI name, where they differ (a notebook names what it imports, not what to install)
+PYPI = {"sklearn": "scikit-learn", "skimage": "scikit-image", "cv2": "opencv-python", "PIL": "pillow", "yaml": "pyyaml",
+        "bs4": "beautifulsoup4", "Bio": "biopython", "IPython": "ipython", "mpl_toolkits": "matplotlib", "nb_conda": "",
+        "google": "", "attr": "attrs", "dateutil": "python-dateutil", "dotenv": "python-dotenv", "tf": "tensorflow"}
+STDLIB = {"os", "sys", "re", "csv", "json", "glob", "time", "math", "random", "zipfile", "io", "pathlib", "collections",
+          "itertools", "functools", "datetime", "shutil", "subprocess", "typing", "warnings", "copy", "pickle", "gzip",
+          "string", "struct", "tempfile", "urllib", "statistics", "argparse", "logging", "operator", "textwrap", "abc",
+          "enum", "dataclasses", "decimal", "fractions", "hashlib", "heapq", "numbers", "pprint", "queue", "threading",
+          "multiprocessing", "concurrent", "html", "http", "xml", "tarfile", "unittest", "traceback", "inspect", "ast"}
 RUNTIMES = ["docker", "singularity", "apptainer", "conda", "mamba", "micromamba"]  # the first installed is used
 NF_SKIP_GROUPS = {"institutional_config_options", "max_job_request_options", "generic_options"}
 NF_FILE_FORMATS = {"file-path", "directory-path", "path", "file-path-pattern"}
@@ -80,6 +92,8 @@ def detect_ecosystem(crate_dir: str | Path) -> str | None:
     name = Path(wid).name.lower()
     if name.endswith(".ga") or "galaxy" in lang:
         return None
+    if name.endswith(".ipynb") or "jupyter" in lang:
+        return "notebook"
     if name.endswith(".nf") or "nextflow" in lang:
         if (crate_dir / "nextflow_schema.json").exists() or (crate_dir / "conf" / "test.config").exists():
             return "nfcore"
@@ -853,7 +867,162 @@ def import_snakemake(src: Path, out_dir: Path) -> dict[str, Any]:
         shutil.rmtree(work, ignore_errors=True)
 
 
-IMPORTERS = {"nfcore": import_nfcore, "cwl": import_cwl, "snakemake": import_snakemake}
+# ---- Jupyter notebooks ----------------------------------------------------------------------------------
+
+def _nb_analysis(nb: dict[str, Any]) -> dict[str, Any]:
+    """What a published notebook says about itself: the cell to inject parameters into (one tagged ``parameters``,
+    else the first that assigns a path-like placeholder such as ``path2data = '...'``) and the variables it sets
+    there; the files and patterns it names; the packages it imports; the printed output and the images each code
+    cell stored when the authors ran it (their published results)."""
+    cells = nb.get("cells", [])
+    tagged = next((i for i, c in enumerate(cells) if "parameters" in (c.get("metadata", {}).get("tags") or [])), None)
+    assign = re.compile(r"^([A-Za-z_]\w*)\s*=\s*(['\"])(.*?)\2\s*(?:#.*)?$", re.M)
+    path_params: list[str] = []
+    params_cell = tagged
+    values: list[tuple[str, Any]] = []
+    for i, c in enumerate(cells):
+        if c.get("cell_type") != "code":
+            continue
+        src = "".join(c.get("source") or [])
+        for m in assign.finditer(src):
+            var, val = m.group(1), m.group(3)
+            pathlike = val in {"...", "", "."} or val.endswith("/") or re.search(r"path|dir|folder|data", var, re.I)
+            if pathlike and (tagged is None or i == tagged):
+                if params_cell is None:
+                    params_cell = i
+                if i == params_cell and var not in path_params:
+                    path_params.append(var)
+        if tagged is not None and i == tagged:  # papermill's own convention: simple literal assignments
+            for m in re.finditer(r"^([A-Za-z_]\w*)\s*=\s*(-?\d+(?:\.\d+)?|True|False|'[^']*'|\"[^\"]*\")\s*$", src, re.M):
+                if m.group(1) not in path_params:
+                    raw = m.group(2)
+                    val = (raw == "True") if raw in {"True", "False"} else float(raw) if "." in raw else \
+                        int(raw) if re.fullmatch(r"-?\d+", raw) else raw.strip("'\"")
+                    values.append((m.group(1), val))
+    code = "\n".join("".join(c.get("source") or []) for c in cells if c.get("cell_type") == "code")
+    ext = r"(?:zip|csv|tsv|txt|xlsx|xls|json|npy|npz|h5|hdf5|mat|pkl|fast[aq](?:\.gz)?|vcf(?:\.gz)?|bam|tif|tiff|png|jpg)"
+    written = set(re.findall(r"(?:to_csv|to_excel|to_pickle|savefig|save|to_json)\(\s*['\"]([^'\"]+)['\"]", code))
+    written |= set(re.findall(r"open\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][wa]", code))
+    files = [f for f in re.findall(rf"['\"]([^'\"\n]*?\.{ext})['\"]", code)
+             if f not in written and ("*" in f or Path(f).suffix)  # a name or a pattern, not a bare extension
+             and not f.startswith(("tmp", "./tmp"))]  # what it reads, not what it writes
+    imports = sorted({m for m in re.findall(r"^\s*(?:import|from)\s+([A-Za-z_]\w*)", code, re.M)} - STDLIB)
+    found = {PYPI.get(m, m) for m in imports if PYPI.get(m, m)}
+    found |= set(re.findall(r"engine\s*=\s*['\"](openpyxl|xlrd|pyarrow|fastparquet)['\"]", code))  # pandas' engines
+    packages = sorted(found)
+    printed: list[tuple[int, str]] = []
+    images = 0
+    for i, c in enumerate(cells):
+        if c.get("cell_type") != "code":
+            continue
+        text = "".join("".join(o.get("text") or []) for o in c.get("outputs") or [] if o.get("output_type") == "stream")
+        if text.strip():
+            printed.append((i, text))
+        images += sum(1 for o in c.get("outputs") or [] if any(k.startswith("image/") for k in (o.get("data") or {})))
+    return {"params_cell": params_cell, "path_params": path_params, "values": values, "files": files,
+            "packages": packages, "printed": printed, "images": images}
+
+
+def _cell_rows(printed: list[tuple[int, str]]) -> list[tuple[str, str, int]]:
+    """``(cell-<i>, sha1, size)`` of each code cell's printed output, whitespace at line ends ignored: what the
+    notebook prints is compared as the authors' recorded output (recrate.compare, kind ``files``)."""
+    import hashlib
+
+    rows = []
+    for i, text in printed:
+        norm = "\n".join(ln.rstrip() for ln in text.strip().splitlines())
+        rows.append((f"cell-{i}", hashlib.sha1(norm.encode("utf-8")).hexdigest(), len(norm)))
+    return rows
+
+
+def import_notebook(src: Path, out_dir: Path) -> dict[str, Any]:
+    """A Jupyter notebook published as a workflow (WorkflowHub's Jupyter class), run as the authors ran it with
+    papermill in the crate's own folder: the data folder is injected into the notebook's path variable (the cell that
+    sets it is tagged ``parameters`` in the run's copy, never in the crate), every file the notebook writes is listed,
+    its printed cell outputs are compared with the ones the authors' run stored, and its stored figures are the
+    published figures a person compares the new ones with."""
+    idx, root = _meta(src)
+    wid, wf, _ = _main(idx, root)
+    info = _root_info(src, idx, root, wf)
+    nb = json.loads((src / wid).read_text(encoding="utf-8", errors="replace"))
+    a = _nb_analysis(nb)
+    name = Path(wid).name
+    patterns = sorted({f for f in a["files"] if "*" in f or f.endswith("/")})
+    named = sorted({Path(f).name for f in a["files"] if "*" not in f and not f.endswith("/") and "/" not in f.strip("./")
+                    and not f.startswith("tmp")})
+    wants = ", ".join([*(f"files matching {p}" for p in patterns), *named]) or "the files the notebook reads"
+    inputs: list[dict[str, Any]] = []
+    recipe_inputs: dict[str, str] = {}
+    args = ["papermill", "{workflow}", f"{{output_dir}}/executed-{name}", "--cwd", "{work}"]
+    if a["path_params"]:
+        inputs.append(_param("input_dir", "Directory", None,
+                             f"The data folder, given to the notebook as {', '.join(a['path_params'])}: {wants}"))
+        for var in a["path_params"]:
+            args += ["-p", var, "{input_dir}"]
+    else:
+        inputs.append(_param("input_dir", "Directory", None, f"The notebook's working folder must hold: {wants}"))
+    for var, val in a["values"][:MAX_PARAMS]:
+        typ = {bool: "Boolean", int: "Integer", float: "Float"}.get(type(val), "Text")
+        inputs.append(_param(var, typ, val, "Set in the notebook's parameters cell", role="free"))
+        args += ["-p", var, f"{{param:{var}}}"]
+    recipe: dict[str, Any] = {"engine": "notebook", "network": False, "needs": [], "collect": "new-files",
+                              "results": {"kind": "notebook-cells"}, "inputs": recipe_inputs, "args": args,
+                              "notebook": {"parameters_cell": a["params_cell"], "path_params": a["path_params"]}}
+    rows = _cell_rows(a["printed"])
+    description = ((wf.get("description") or info["description"] or info["name"])
+                   + " Runs as published, with papermill in a copy of the crate's folder"
+                   + (f"; the data folder is injected as {', '.join(a['path_params'])} (cell {a['params_cell']} is "
+                      "tagged as the parameters cell in the run's copy)" if a["path_params"] else "")
+                   + ". Every file the notebook writes is kept."
+                   + (f" Expected results: the printed output of {len(rows)} code cells as the authors' run stored it"
+                      + (f", and {a['images']} stored figures" if a["images"] else "") + "."
+                      if rows else " The notebook stores no printed output to compare with.")
+                   + (f" It imports {', '.join(a['packages'])}." if a["packages"] else ""))
+    software = [{"name": pkg, "version": ""} for pkg in a["packages"]] + [{"name": "papermill", "version": ""},
+                                                                         {"name": "ipykernel", "version": ""}]
+    outputs: list[dict[str, Any]] = [{"id": "out-results", "name": "results", "type": "File", "format": "text/csv",
+                                      "kind": "files"}]
+    if rows:
+        outputs[0]["tolerances"] = {"sha1": {"value": 0.0, "source": "code-stated", "file": name,
+                                              "note": "the printed output each cell stored when the authors ran it"}}
+    method = {
+        "name": _slug_name(wf.get("name") or info["name"]),
+        "description": description,
+        "workflow": {"file": str(out_dir / "workflow" / wid), "language": "Jupyter notebook", "software": software},
+        "inputs": inputs,
+        "outputs": outputs,
+        "properties": {"recrate invocation": recipe},
+    }
+    work = out_dir.parent / f".{out_dir.name}-import"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    expected_csv = None
+    if rows:
+        exp = work / "expected.csv"
+        exp.write_text("file,sha1,size\n" + "".join(f"{f},{h},{z}\n" for f, h, z in rows), encoding="utf-8")
+        expected_csv = str(exp)
+    try:
+        desc = _finish(src, out_dir, info, method, "notebook", {}, expected_csv, work)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if a["images"]:  # the figures the authors' run stored: the published figures, next to the new ones
+        from .notebook_figures import extract_notebook_images
+
+        figdir = Path(out_dir) / "expected" / "figures"
+        images = extract_notebook_images(src / wid, figdir)
+        mpath = Path(out_dir) / "ro-crate-metadata.json"
+        m = json.loads(mpath.read_text(encoding="utf-8"))
+        r = next(e for e in m["@graph"] if e.get("@id") == "./")
+        for img in images:
+            fid = f"expected/figures/{img['path']}"
+            m["@graph"].append({"@id": fid, "@type": ["File", "ImageObject"], "name": f"Published figure {img['path']}",
+                                "description": f"Stored in the published notebook's cell {img['cell_index']} output."})
+            r.setdefault("hasPart", []).append({"@id": fid})
+        mpath.write_text(json.dumps(m, indent=2, ensure_ascii=False), encoding="utf-8")
+    return desc
+
+
+IMPORTERS = {"nfcore": import_nfcore, "cwl": import_cwl, "snakemake": import_snakemake, "notebook": import_notebook}
 
 
 def import_crate(src: str | Path, out_dir: str | Path) -> dict[str, Any]:
