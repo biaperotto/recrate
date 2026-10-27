@@ -6,7 +6,7 @@ Make a paper agent:
     recrate validate agents/my_paper                                            # re-run validation
 
 Use it:
-    recrate serve   agents/my_paper                      # MCP server for Claude
+    recrate serve   agents/my_paper                      # MCP server for Claude (stdio; --http to share it)
     recrate install-mcp agents/my_paper --client desktop # register it with Claude Desktop (or project, claude-code)
     recrate inspect agents/my_paper                      # paper, methods, validation
     recrate ask     agents/my_paper "what pixel size?"   # search the paper
@@ -118,9 +118,9 @@ def cmd_validate(a) -> int:
 
 
 def cmd_serve(a) -> int:
-    from .mcp_server import build_server
+    from .mcp_server import serve
 
-    build_server(a.agent).run()
+    serve(a.agent, "http" if a.http else "stdio", host=a.host, port=a.port)
     return 0
 
 
@@ -217,7 +217,7 @@ def cmd_build(a) -> int:
 def cmd_install_mcp(a) -> int:
     from .install import describe, install
 
-    result = install(a.agent, client=a.client, name=a.name, check=not a.no_check)
+    result = install(a.agent, client=a.client, name=a.name, check=not a.no_check, transport=a.transport, url=a.url)
     print(describe(result))
     return 0 if result.get("check", {"ok": True})["ok"] else 1
 
@@ -366,7 +366,7 @@ def cmd_hardware(a) -> int:
 def cmd_verify_server(a) -> int:
     from .server_check import check_server, describe
 
-    rep = check_server(a.agent, reproduce=a.reproduce)
+    rep = check_server(a.agent, reproduce=a.reproduce, url=a.url)
     print(json.dumps(rep, indent=2, ensure_ascii=False) if a.json else describe(rep))
     return 0 if rep["ok"] else 1
 
@@ -441,8 +441,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--runner", default="auto", choices=CHOICES)
     s.set_defaults(func=cmd_validate)
 
-    s = sub.add_parser("serve", help="Serve a paper agent over MCP (stdio)")
+    s = sub.add_parser("serve", help="Serve a paper agent over MCP: stdio, or streamable HTTP with --http")
     s.add_argument("agent")
+    s.add_argument("--http", action="store_true", help="Serve over streamable HTTP at http://HOST:PORT/mcp, so any "
+                                                        "MCP client can use the agent without installing anything")
+    s.add_argument("--host", default="127.0.0.1", help="With --http: the address to bind (default localhost; "
+                                                        "anything else is reachable from other computers, unauthenticated)")
+    s.add_argument("--port", type=int, default=8765, help="With --http: the port (default 8765)")
     s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("inspect", help="Show the paper agent, or one method's card with --method")
@@ -493,7 +498,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="desktop: Claude Desktop; project: .mcp.json in this folder (Claude Code, VS Code); "
                         "claude-code: all projects (needs the claude CLI); print: show the JSON")
     s.add_argument("--name", help="Server name (default: recrate-<paper>)")
-    s.add_argument("--no-check", action="store_true", help="Don't start the server to check it")
+    s.add_argument("--transport", default="stdio", choices=["stdio", "http"],
+                   help="stdio: the client launches the server itself (default); http: the client connects to a "
+                        "server you run with `recrate serve --http` (here or on another computer)")
+    s.add_argument("--url", help="With --transport http: the server's URL (default http://127.0.0.1:8765/mcp)")
+    s.add_argument("--no-check", action="store_true", help="Don't start (or connect to) the server to check it")
     s.set_defaults(func=cmd_install_mcp)
 
     s = sub.add_parser("export-crate", help="Export the research object's current RO-Crate as a zip")
@@ -580,8 +589,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_hardware)
 
-    s = sub.add_parser("verify-server", help="Launch the agent's MCP server over stdio and check its tools")
+    s = sub.add_parser("verify-server", help="Launch the agent's MCP server over stdio (or connect to one served "
+                                             "with --http, via --url) and check its tools")
     s.add_argument("agent")
+    s.add_argument("--url", help="Check a running HTTP server at this URL instead of launching one over stdio")
     s.add_argument("--reproduce", action="store_true", help="Also call reproduce for every method")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_verify_server)

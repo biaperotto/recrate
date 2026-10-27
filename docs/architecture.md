@@ -93,6 +93,14 @@ The app (`app/app.py`), the CLI (`cli.py`), the chat (`chat.py`) and the MCP ser
 core functions: `agentify`, `diagnose`, `reproduce`, `run_on_data`, `check_inputs`, `run_followup`,
 `make_run_figure`, `review_conclusion`, `publish_back`.
 
+The MCP server runs over stdio, which Claude Desktop and Claude Code launch themselves (`recrate install-mcp`), or
+over streamable HTTP (`recrate serve <agent> --http`, at `http://127.0.0.1:8765/mcp` by default), so an agent on one
+computer is usable from any MCP client without cloning anything, as Paper2Agent's hosted servers are.
+`recrate install-mcp --transport http --url …` writes the client's entry for a running server and checks it by
+connecting, and `recrate verify-server --url …` checks a running server the same way. HTTP has no authentication,
+and the server runs the paper's code on its own machine: it binds to localhost unless told otherwise, and warns when
+it is not.
+
 The MCP server mirrors Paper2Agent's three parts:
 
 | MCP part | ReCRATE |

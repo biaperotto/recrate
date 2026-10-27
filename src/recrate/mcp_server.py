@@ -1,6 +1,7 @@
 """Serve a paper agent over MCP, so a chat agent becomes an expert on the paper.
 
-    recrate serve paper_agents/my_paper          # stdio
+    recrate serve paper_agents/my_paper                       # stdio: what clients launch themselves
+    recrate serve paper_agents/my_paper --http --port 8765    # streamable HTTP: http://127.0.0.1:8765/mcp
 
 Register it with a client (absolute paths, checked after installing; see install.py):
     recrate install-mcp paper_agents/my_paper --client desktop    # Claude Desktop
@@ -496,12 +497,47 @@ def build_server(agent_dir: str | Path) -> FastMCP:
     return mcp
 
 
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def serve(target: str | Path, transport: str = "stdio", host: str = "127.0.0.1", port: int = 8765,
+          path: str = "/mcp") -> None:
+    """Run the agent's server: over stdio (the default, what clients launch themselves) or over streamable HTTP, so
+    an agent on one computer is usable from any MCP client without cloning anything (as Paper2Agent's hosted
+    servers are). HTTP has no authentication, and the server runs the paper's code on this machine: keep it on
+    localhost unless you mean to share it."""
+    server = build_server(target)
+    if transport == "stdio":
+        server.run()
+        return
+    if transport not in {"http", "streamable-http"}:
+        raise ValueError(f"Unknown transport {transport!r}: stdio or http.")
+    url = f"http://{host}:{port}{path}"
+    if host not in LOCAL_HOSTS:
+        print(f"Warning: {url} is reachable from other computers, has no authentication, and runs the paper's code "
+              "on this machine.", file=sys.stderr, flush=True)
+    print(f"ReCRATE agent over streamable HTTP at {url} (stop with Ctrl-C)", flush=True)
+    import inspect
+
+    if "host" in inspect.signature(getattr(server, "run_streamable_http_async", lambda: None)).parameters:
+        server.run(transport="streamable-http", host=host, port=port, streamable_http_path=path)  # SDK 2.x
+    else:  # SDK 1.x: host, port and path are settings on the server
+        server.settings.host, server.settings.port, server.settings.streamable_http_path = host, port, path
+        server.run(transport="streamable-http")
+
+
 def main(argv: list[str] | None = None) -> None:
-    argv = sys.argv[1:] if argv is None else argv
-    target = argv[0] if argv else os.environ.get("RECRATE_AGENT")
-    if not target:
-        raise SystemExit("usage: recrate-mcp <paper agent folder>   (or set RECRATE_AGENT)")
-    build_server(target).run()
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="recrate-mcp", description="Serve a ReCRATE agent over MCP.")
+    ap.add_argument("agent", nargs="?", default=os.environ.get("RECRATE_AGENT"), help="the agent folder")
+    ap.add_argument("--http", action="store_true", help="streamable HTTP instead of stdio")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8765)
+    a = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    if not a.agent:
+        raise SystemExit("usage: recrate-mcp <paper agent folder> [--http --host H --port P]   (or set RECRATE_AGENT)")
+    serve(a.agent, "http" if a.http else "stdio", host=a.host, port=a.port)
 
 
 if __name__ == "__main__":
