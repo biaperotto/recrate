@@ -1,4 +1,5 @@
-"""Check a paper agent's MCP server the way a client will use it: launched over stdio, from its own folder.
+"""Check a paper agent's MCP server the way a client will use it: launched over stdio, from its own folder, or
+already running over streamable HTTP (``url``), as ``recrate serve --http`` serves it.
 
 Paper2Agent verifies each generated MCP server before delivery (tool inventory, schemas, a real call per tool).
 ``check_server`` does the same for a ReCRATE agent:
@@ -37,9 +38,23 @@ def _text(result) -> str:
     return "\n".join(getattr(c, "text", "") for c in result.content if getattr(c, "type", "") == "text")
 
 
-async def _check(agent_dir: Path, reproduce: bool, timeout: float) -> dict[str, Any]:
-    from mcp import ClientSession, StdioServerParameters
+def _transport(agent_dir: Path, url: str | None):
+    """The client transport: the server launched over stdio from its own folder, or a connection to ``url``."""
+    if url:
+        try:
+            from mcp.client.streamable_http import streamable_http_client as http_client  # MCP SDK 2.x
+        except ImportError:
+            from mcp.client.streamable_http import streamablehttp_client as http_client  # MCP SDK 1.x
+        return http_client(url)
+    from mcp import StdioServerParameters
     from mcp.client.stdio import stdio_client
+
+    return stdio_client(StdioServerParameters(command=sys.executable, args=["-m", "recrate.mcp_server", str(agent_dir)],
+                                              cwd=str(agent_dir)))
+
+
+async def _check(agent_dir: Path, reproduce: bool, timeout: float, url: str | None = None) -> dict[str, Any]:
+    from mcp import ClientSession
 
     from .agent import PaperAgent
 
@@ -49,12 +64,11 @@ async def _check(agent_dir: Path, reproduce: bool, timeout: float) -> dict[str, 
     def check(name: str, ok: bool, detail: str = "") -> None:
         checks.append({"check": name, "ok": bool(ok), "detail": detail})
 
-    params = StdioServerParameters(command=sys.executable, args=["-m", "recrate.mcp_server", str(agent_dir)],
-                                   cwd=str(agent_dir))
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
+    async with _transport(agent_dir, url) as streams:  # stdio: (read, write); HTTP 1.x adds a session-id getter
+        async with ClientSession(streams[0], streams[1]) as session:
             info = await asyncio.wait_for(session.initialize(), timeout)
-            check("launch", True, f"{_get(info, 'server_info', 'serverInfo').name} over stdio")
+            check("launch", True, f"{_get(info, 'server_info', 'serverInfo').name} over "
+                                  + (f"streamable HTTP at {url}" if url else "stdio"))
             tools = {t.name: t for t in (await session.list_tools()).tools}
             missing = [t for t in CORE if t not in tools]
             check("core tools", not missing, f"{len(tools)} tools" + (f"; missing {', '.join(missing)}" if missing else ""))
@@ -88,18 +102,20 @@ async def _check(agent_dir: Path, reproduce: bool, timeout: float) -> dict[str, 
                     except Exception as e:  # noqa: BLE001 - a failing method is a finding, not a crash
                         check(f"reproduce {m.id}", False, f"{type(e).__name__}: {e}")
     return {"agent": str(agent_dir), "checked": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "ok": all(c["ok"] for c in checks), "checks": checks}
+            **({"url": url} if url else {}), "ok": all(c["ok"] for c in checks), "checks": checks}
 
 
-def check_server(agent_dir: str | Path, reproduce: bool = False, timeout: float = 600, write: bool = True) -> dict:
+def check_server(agent_dir: str | Path, reproduce: bool = False, timeout: float = 600, write: bool = True,
+                 url: str | None = None) -> dict:
+    """``url``: check a server already running over streamable HTTP there, instead of launching one over stdio."""
     agent_dir = Path(agent_dir).resolve()
     try:
-        report = asyncio.run(_check(agent_dir, reproduce, timeout))
-    except Exception as e:  # noqa: BLE001 - the server failing to start is the result
+        report = asyncio.run(_check(agent_dir, reproduce, timeout, url))
+    except Exception as e:  # noqa: BLE001 - the server failing to start (or answer) is the result
         cause = e
         while getattr(cause, "exceptions", None):  # task groups wrap the real error
             cause = cause.exceptions[0]
-        report = {"agent": str(agent_dir), "ok": False,
+        report = {"agent": str(agent_dir), **({"url": url} if url else {}), "ok": False,
                   "checks": [{"check": "launch", "ok": False, "detail": f"{type(cause).__name__}: {cause}"}]}
     if write:
         (agent_dir / "work").mkdir(exist_ok=True)
