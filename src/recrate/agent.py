@@ -180,7 +180,7 @@ def diagnose(spec: MethodSpec) -> tuple[str, list[str]]:
     from .runners import readiness
 
     blocked = readiness(spec.workflow_language, spec.workflow_path, env_python(spec.path.parent),
-                        env_rscript(spec.path.parent), invocation=spec.invocation)
+                        env_rscript(spec.path.parent), invocation=spec.invocation, entry=spec.entry, spec=spec)
     if blocked:
         return "blocked", [blocked]
     gaps = []
