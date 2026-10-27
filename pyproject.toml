@@ -30,9 +30,10 @@ dependencies = [
 fiji = ["pyimagej>=1.5"]
 draft = ["anthropic>=0.40"]
 mcp = ["mcp>=1.2", "matplotlib>=3.7"]  # mcp 1.x (FastMCP) and 2.x (MCPServer); matplotlib for make_figure
+galaxy = ["bioblend>=1.3"]  # run any Galaxy workflow on a Galaxy server through its API (runners/galaxy_api.py)
 app = ["streamlit>=1.43", "pandas>=2", "matplotlib>=3.7", "roc-validator>=0.12"]  # validator: the sidebar's check
 dev = ["pytest>=7", "roc-validator>=0.12", "ruff", "mypy"]  # roc-validator: run crates are checked against the RO-Crate profiles; ruff and mypy run in CI
-all = ["pyimagej>=1.5", "anthropic>=0.40", "mcp>=1.2", "streamlit>=1.43", "pandas>=2", "matplotlib>=3.7", "pytest>=7"]
+all = ["pyimagej>=1.5", "anthropic>=0.40", "mcp>=1.2", "bioblend>=1.3", "streamlit>=1.43", "pandas>=2", "matplotlib>=3.7", "pytest>=7"]
 
 [project.scripts]
 recrate = "recrate.cli:main"
