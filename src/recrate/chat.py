@@ -125,9 +125,19 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "report_page", "description": "Write one HTML page for this research object (verdict, every compared "
                                            "value, figures, follow-ups, every run) that opens anywhere.",
      "input_schema": _schema({})},
-    {"name": "make_figure", "description": "Plot the published vs reproduced values of a reproduction from its "
-                                           "run's outputs, and record the figure in its run crate.",
-     "input_schema": _schema({"run": _RUN})},
+    {"name": "make_figure", "description": "Make a figure drawn by ReCRATE's code from a file (never by you) and "
+                                           "recorded in the run crate with its data. kind published_vs_reproduced "
+                                           "plots a reproduction's compared values; bar, scatter, line, box or hist "
+                                           "plot columns of a table (y, and x; group optional): the run's results "
+                                           "(source results), its comparison, one of the paper's tables "
+                                           "(source 'table:Table 2'), or a CSV path. Use it when the user asks for a "
+                                           "plot or a chart.",
+     "input_schema": _schema({"run": _RUN, "kind": {"type": "string", "enum": ["published_vs_reproduced", "bar",
+                                                                                 "scatter", "line", "box", "hist"]},
+                              "source": {"type": "string", "description": "results | comparison | table:<label> | "
+                                                                           "a CSV path"},
+                              "x": {"type": "string"}, "y": {"type": "string"}, "group": {"type": "string"},
+                              "title": {"type": "string"}})},
     {"name": "recreated_figures", "description": "The paper's figures a method's latest reproduction redrew, each "
                                                  "shown next to the original with its caption and review. Whether "
                                                  "they show the same thing is for the user to say (review_figure).",
@@ -181,7 +191,15 @@ class ChatTools:
         return summarise_run(run_dir).get("method")
 
     def _run_attachments(self, run_dir: Path) -> list[dict[str, Any]]:
+        from .paper_figures import figure_label
+
         out: list[dict[str, Any]] = [{"type": "results", "csv": str(run_dir / "outputs" / "results.csv")}]
+        for f in sorted((run_dir / "outputs" / "figures").glob("*")):  # the figures the method drew in this run
+            if f.suffix.lower() in {".png", ".jpg", ".jpeg", ".svg"}:
+                label = figure_label(f.name)
+                out.append({"type": "figure", "path": str(f),
+                            "caption": f"The paper's {label}, drawn by the method in this run" if label
+                            else f"{f.stem.replace('_', ' ')}, drawn in this run"})
         overlays = sorted((run_dir / "outputs" / "overlays").glob("*.png"))
         if overlays:
             out.append({"type": "images", "paths": [str(o) for o in overlays]})
@@ -396,14 +414,26 @@ class ChatTools:
         path = build_report(self.agent.path)
         return ToolResult(json.dumps({"report": str(path)}), [{"type": "note", "text": f"Report page written: {path}"}])
 
-    def t_make_figure(self, run: str | None = None) -> ToolResult:
-        from .figures import make_run_figure
+    def t_make_figure(self, run: str | None = None, kind: str = "published_vs_reproduced", source: str = "results",
+                      x: str = "", y: str = "", group: str = "", title: str = "") -> ToolResult:
+        from .figures import PLOT_KINDS, make_run_figure
 
         current = next((m.run_crate for m in self.agent.methods if m.run_crate), None)
-        path = make_run_figure(self._run_dir(run) if run else Path(current) if current else self._run_dir(None))
-        return ToolResult(json.dumps({"figure": str(path)}),
-                          [{"type": "figure", "path": str(path), "caption": "Published vs reproduced, plotted from "
-                                                                            "this run's outputs"}])
+        run_dir = self._run_dir(run) if run else self.last_run or (Path(current) if current else self._run_dir(None))
+        if source.lower().startswith("table:"):  # one of the paper's tables, by label
+            label = source.split(":", 1)[1].strip().lower()
+            t = next((x for x in self.agent.tables() if label in (x["label"].lower(), Path(x["file"]).stem.lower())), None)
+            if t is None:
+                raise ValueError(f"No table {label!r}. Tables: {', '.join(x['label'] for x in self.agent.tables()) or 'none'}")
+            source = str(self.agent.path / "paper" / t["file"])
+        spec = {"source": source, "x": x, "y": y, "group": group, "title": title} if kind in PLOT_KINDS else None
+        path = make_run_figure(run_dir, kind, spec)
+        what = (f"{kind} of {y}" + (f" by {x}" if x else "") + (f", grouped by {group}" if group else "")
+                if kind in PLOT_KINDS else "Published vs reproduced")
+        return ToolResult(json.dumps({"figure": str(path), "plotted": what, "run": run_dir.name}),
+                          [{"type": "figure", "path": str(path),
+                            "caption": f"{title or what}: plotted by ReCRATE from {Path(spec['source']).name if spec else 'this run'}"
+                                       f"{'' if spec else chr(39) + 's outputs'}, recorded in {run_dir.name}"}])
 
     def _recreated(self, method: str) -> tuple[Path, list[dict[str, Any]]]:
         from .paper_figures import recreated

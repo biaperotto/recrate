@@ -62,7 +62,7 @@ class MethodStatus:
     status: str  # validated | differs | not validated | failed: derived from the ladder, kept for compatibility
     detail: str = ""
     run_crate: str | None = None
-    readiness: str = ""  # ready | ready-with-gaps | blocked (can it run here? not whether it reproduced)
+    readiness: str = ""  # ready | ready-with-gaps | reusable | blocked (can it run here? not whether it reproduced)
     gaps: list[str] = field(default_factory=list)  # what the crate leaves open, or why it is blocked
     ladder: dict[str, dict[str, str]] = field(default_factory=dict)  # see model.py
     review: dict[str, Any] | None = None  # a person's review of the conclusion (the ladder's last step)
@@ -125,7 +125,10 @@ class PaperAgent:
 
         return {**{k: self.manifest.get(k) for k in ("name", "title", "doi", "crate_source", "code", "draft",
                                                       "published")},
-                "verdict": (verdict_sentence({m.name: m.ladder for m in self.methods if m.ladder})
+                "verdict": (f"Reusable, not reproducible: {len(self.methods)} method(s) run here, check your data and "
+                            "record each run; the research publishes no results to compare a run with."
+                            if self.methods and all(m.readiness == "reusable" for m in self.methods)
+                            else verdict_sentence({m.name: m.ladder for m in self.methods if m.ladder})
                             if any(m.ladder for m in self.methods) or not self.methods
                             else "Not checked yet: nothing reproduced so far."),
                 "methods": [m.__dict__ for m in self.methods],
@@ -164,8 +167,14 @@ def runs_own_code(language: str | None) -> bool:
     return "galaxy" not in (language or "").lower()
 
 
+REUSABLE = ("Reusable, not reproducible: the workflow runs here, checks your data and records each run, but the "
+            "research publishes no result to compare a run with")
+
+
 def diagnose(spec: MethodSpec) -> tuple[str, list[str]]:
-    """Readiness before anything runs: ``blocked`` (with why), ``ready-with-gaps`` (with the gaps) or ``ready``."""
+    """Readiness before anything runs: ``blocked`` (with why), ``reusable`` (it runs, but there is nothing published
+    to compare with: a workflow registered without a paper or a test), ``ready-with-gaps`` (with the gaps) or
+    ``ready``. Ready never means reproduced."""
     from .env import env_python, env_rscript
     from .profiles import get_profile
     from .runners import readiness
@@ -175,14 +184,19 @@ def diagnose(spec: MethodSpec) -> tuple[str, list[str]]:
     if blocked:
         return "blocked", [blocked]
     gaps = []
-    if spec.needs_data and not (spec.example_data and spec.example_data.exists()):
+    no_data = spec.needs_data and not (spec.example_data and spec.example_data.exists())
+    no_results = not (spec.expected_results and spec.expected_results.exists())
+    if no_results:  # nothing to reproduce: say what the method is for, rather than list what the crate lacks
+        what = " (no published data either)" if no_data else " (its published data can still be run)"
+        gaps.append(REUSABLE + what + ".")
+    elif no_data:
         gaps.append("No published data in the crate: the method can be reused but not reproduced.")
-    if not (spec.expected_results and spec.expected_results.exists()):
-        gaps.append("No published results in the crate to compare with.")
     unsourced = [t.column for t in spec.tolerance_specs() if not t.source]
     if unsourced:
         gaps.append(f"Tolerance with no stated source: {', '.join(unsourced)} (no verdict on those numbers).")
     gaps += get_profile(spec.profile).diagnose_inputs(spec)
+    if no_results:
+        return "reusable", gaps
     return ("ready-with-gaps" if gaps else "ready"), gaps
 
 

@@ -74,7 +74,9 @@ def _print_agent(agent) -> None:
     if card["methods"]:
         print(f"  verdict: {card['verdict']}")
     for m in card["methods"]:
-        print(f"  - {m['name']} [{m['language']}] readiness: {m.get('readiness') or 'unknown'}")
+        print(f"  - {m['name']} [{m['language']}] readiness: {m.get('readiness') or 'unknown'}"
+              + (" (runs, checks your data, records; nothing published to compare with)"
+                 if m.get("readiness") == "reusable" else ""))
         for g in m.get("gaps") or []:
             if m.get("readiness") != "blocked":
                 print(f"      gap: {g}")

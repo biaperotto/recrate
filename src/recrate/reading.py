@@ -11,7 +11,8 @@ structured full text (JATS XML) instead:
       figures/figure-1.jpg ... each figure, with its caption
       supplement/...    supplementary files (PDF, spreadsheets)
 
-For other PDFs, ``figures_from_pdf`` keeps the embedded images (by page), so figures are not lost entirely.
+For other PDFs, ``figures_from_pdf`` keeps the embedded images and pairs them with the "Figure N" captions printed
+on the same page, so a paper from arXiv still has labelled figures to show and to pair with recreated ones.
 """
 
 from __future__ import annotations
@@ -198,31 +199,82 @@ def from_europepmc(doi: str, dest: Path, fetch_json, fetch_bytes) -> Path | None
     return path
 
 
+CAPTION = re.compile(r"^\s*(?:Fig\.?|Figure|FIGURE)\s*(\d+)\s*[.:|\u2013\u2014-]?\s+(\S.{8,})", re.M)
+
+
+def _captions(text: str) -> list[tuple[int, str]]:
+    """``(figure number, caption)`` pairs on one page, in order; a caption is the rest of its line and the next
+    line when the line is cut short."""
+    out: list[tuple[int, str]] = []
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        m = CAPTION.match(line)
+        if not m:
+            continue
+        cap = m.group(2).strip()
+        if not cap.endswith((".", "!", "?")) and i + 1 < len(lines) and lines[i + 1].strip():
+            cap += " " + lines[i + 1].strip()
+        out.append((int(m.group(1)), " ".join(cap.split())[:600]))
+    return out
+
+
 def figures_from_pdf(pdf: Path, dest: Path, min_bytes: int = 8_000, limit: int = 40) -> list[Path]:
-    """Embedded images of a PDF, by page (figures/page-3-1.png ...). Small images (logos, icons) are skipped."""
+    """The figures of a PDF without a structured full text: its embedded images, paired with the "Figure N"
+    captions printed on the same page (as Paper2Agent's reading package pairs figures with captions). A page with
+    as many captions as images pairs them in order; a page with one caption gives it to its largest image. Paired
+    images are written as ``figures/figure-N.<ext>`` and listed with their captions in ``package.json``, so
+    ``get_figure`` and the recreated-figure pairing work for any paper; the others keep their page names
+    (``page-3-1.png``). Small images (logos, icons) are skipped."""
     from pypdf import PdfReader
 
     out: list[Path] = []
+    listed: list[dict] = []
     try:
         reader = PdfReader(str(pdf))
     except Exception:  # noqa: BLE001
         return out
+    taken: set[int] = set()
     for pno, page in enumerate(reader.pages, 1):
         try:
-            images = list(page.images)
+            images = [img for img in page.images if len(img.data) >= min_bytes]
         except Exception:  # noqa: BLE001 - unsupported image encodings: skip the page
             continue
-        for k, img in enumerate(images, 1):
-            data = img.data
-            if len(data) < min_bytes:
-                continue
+        if not images:
+            continue
+        try:
+            caps = [(n, c) for n, c in _captions(page.extract_text() or "") if n not in taken]
+        except Exception:  # noqa: BLE001 - no text layer: no captions
+            caps = []
+        pairs: dict[int, tuple[int, str]] = {}  # image index -> (figure number, caption)
+        if len(caps) == len(images):
+            pairs = {k: cap for k, cap in enumerate(caps)}
+        elif len(caps) == 1:
+            pairs = {max(range(len(images)), key=lambda k: len(images[k].data)): caps[0]}
+        for k, img in enumerate(images):
             suffix = Path(img.name).suffix or ".png"
-            p = Path(dest) / f"page-{pno}-{k}{suffix}"
+            if k in pairs:
+                n, cap = pairs[k]
+                taken.add(n)
+                p = Path(dest) / f"figure-{n}{suffix}"
+                listed.append({"label": f"Figure {n}", "caption": cap, "file": f"figures/{p.name}", "page": pno})
+            else:
+                p = Path(dest) / f"page-{pno}-{k + 1}{suffix}"
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(data)
+            p.write_bytes(img.data)
             out.append(p)
             if len(out) >= limit:
-                return out
+                break
+        if len(out) >= limit:
+            break
+    if listed:
+        meta_path = Path(dest).parent / "package.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        meta["figures"] = sorted(listed, key=lambda f: int(f["label"].split()[1])) + [
+            {"label": p.stem, "caption": "", "file": f"figures/{p.name}"} for p in out
+            if p.name.startswith("page-") and p.suffix.lower() in {".png", ".jpg", ".jpeg"}]
+        meta.setdefault("tables", [])
+        meta["figures_from"] = "PDF: embedded images paired with the captions printed on the same page"
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     return out
 
 
@@ -244,7 +296,7 @@ def copy_package(src_dir: Path, dest_dir: Path) -> bool:
 
 def tables(paper_dir: Path) -> list[dict]:
     meta = Path(paper_dir) / "package.json"
-    if meta.exists():
+    if meta.exists() and json.loads(meta.read_text()).get("tables"):
         return json.loads(meta.read_text()).get("tables", [])
     return [{"label": p.stem, "caption": "", "file": f"tables/{p.name}"} for p in sorted((Path(paper_dir) / "tables").glob("*.csv"))]
 

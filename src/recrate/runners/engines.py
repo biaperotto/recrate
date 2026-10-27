@@ -19,7 +19,8 @@ it produced as ``results.csv``. With a recipe, the runner follows it; without on
 
 The workflow's folder is copied to a scratch folder first, so a render or an engine never writes into the crate.
 Everything the run produced besides ``results.csv`` (the executed notebook, the rendered report, engine logs) is
-kept as an output of the run crate.
+kept as an output of the run crate, and the figures a notebook or a Quarto document drew are written to
+``figures/`` with their provenance (recrate.notebook_figures), so they reach the run crate like any other figure.
 """
 
 from __future__ import annotations
@@ -207,8 +208,11 @@ class QuartoRunner(EngineRunner):
         return args
 
     def collect(self, work, output_dir):
+        from ..notebook_figures import collect_quarto_figures
+
         for f in work.glob("*.html"):  # the rendered report, as the authors would have seen it
             shutil.copy2(f, output_dir / f.name)
+        collect_quarto_figures(work, output_dir / "figures")  # the plots it drew, so the run crate keeps them
 
 
 class NotebookRunner(EngineRunner):
@@ -232,6 +236,12 @@ class NotebookRunner(EngineRunner):
         for k, v in params.items():
             args += ["-p", k, str(v)]
         return args
+
+    def collect(self, work, output_dir):
+        from ..notebook_figures import extract_notebook_images
+
+        for nb in sorted(output_dir.glob("executed-*.ipynb")):  # the plots in its cell outputs, as files
+            extract_notebook_images(nb, output_dir / "figures")
 
 
 class SnakemakeRunner(EngineRunner):

@@ -28,9 +28,11 @@ agents/my_paper/
 `model.py` defines the vocabulary everything else uses.
 
 **Readiness** (before running, `agent.diagnose`): `blocked` when no runner here can run the workflow, naming
-what is missing (an unported Galaxy tool, an interpreter that isn't installed); `ready-with-gaps` with the gaps
-(no published data or results, a tolerance without a source, an input property the crate doesn't state);
-otherwise `ready`. Ready never means reproduced. For a workflow engine, ready also means ReCRATE knows how to call the
+what is missing (an unported Galaxy tool, an interpreter that isn't installed); `reusable` when it runs but the
+research publishes no result to compare a run with (most WorkflowHub entries: a workflow registered without a paper
+or a test), so the deliverable is "runs, checks your data, records", not reproduction; `ready-with-gaps` with the
+gaps (no published data, a tolerance without a source, an input property the crate doesn't state); otherwise
+`ready`. Ready never means reproduced. For a workflow engine, ready also means ReCRATE knows how to call the
 workflow: either the crate carries an invocation recipe or the workflow follows ReCRATE's own contract; a pipeline
 that takes neither is `blocked` ("no adapter knows how to call this pipeline"), as is a recipe whose container
 runtime is not installed.

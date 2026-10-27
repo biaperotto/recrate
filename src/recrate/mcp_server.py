@@ -14,12 +14,15 @@ What the agent gets, mirroring Paper2Agent's tools / resources / prompts:
   read the paper (``about_paper``, ``search_paper``, ``describe_method``, tables and figures);
   check and run (``check_my_data``, ``reproduce``, ``run_on_my_data``, one ``run_<method>`` per method,
   ``followup_checks``, ``run_followup_check``);
-  figures (``make_figure``);
+  figures (``make_figure``: the published-vs-reproduced chart, or a bar, scatter, line, box or histogram of any
+  column of a run's table, the paper's tables or the user's data, drawn by code and recorded with its data);
   record (``review_conclusion``, ``approve_run``, ``methods_text``, ``publish_run``, ``reproducibility_record``,
   ``report_page``, ``export_crate``, ``draft_crate``).
 
 Tools that produce files return ``{"message", "artifacts": [{"description", "path"}]}`` with absolute paths (the
-Paper2Agent convention), so a client can show outputs and figures. Each run writes a fresh run crate folder.
+Paper2Agent convention), so a client can show outputs and figures; a run's figures are also returned inline as
+images (``RECRATE_MCP_IMAGES``, default 4), so a client without file access sees them. Each run writes a fresh run
+crate folder.
 * **Prompts**: reproduce the paper, apply a method to my data.
 
 The agent never computes results: the methods run deterministically and every
@@ -70,6 +73,25 @@ def _run_artifacts(run_dir: Path) -> list[dict[str, str]]:
     items += [(f"Figure: {f.stem}", f) for f in sorted((run_dir / "outputs" / "figures").glob("*"))]
     items += [(f"Overlay: {f.stem}", f) for f in sorted((run_dir / "outputs" / "overlays").glob("*.png"))[:12]]
     return _artifacts(*items)
+
+
+MAX_IMAGES = int(os.environ.get("RECRATE_MCP_IMAGES", "4"))  # figures returned inline per run; 0 for paths only
+
+
+def _run_images(run_dir: Path, limit: int = MAX_IMAGES) -> list:
+    """The figures a run drew (and a few overlays), as image content a client shows inline. Paper2Agent returns
+    paths and relies on Claude Code reading them; a client without file access (Claude Desktop, a remote one) needs
+    the pixels in the reply."""
+    run_dir = Path(run_dir)
+    files = [f for f in sorted((run_dir / "outputs" / "figures").glob("*")) if f.suffix.lower() in {".png", ".jpg", ".jpeg"}]
+    files += sorted((run_dir / "outputs" / "overlays").glob("*.png"))
+    return [Image(path=str(f)) for f in files[:max(0, limit)]]
+
+
+def _with_images(payload: dict[str, Any], run_dir: Path) -> list:
+    """A tool's structured reply followed by its figures as images: one text block (the JSON) and one image block
+    per figure."""
+    return [payload, *_run_images(run_dir)]
 
 
 def _tool_name(method: str) -> str:
@@ -134,8 +156,8 @@ def typed_method_tool(spec, method_id: str, run):
                    and _coerce(v, types[names[k]]) != published.get(names[k])}
         return run(method_id, data, who, adjust, 0, changes, reason, ratio)
 
-    tool.__signature__ = inspect.Signature(params, return_annotation=dict[str, Any])
-    tool.__annotations__ = {p.name: p.annotation for p in params} | {"return": dict[str, Any]}
+    tool.__signature__ = inspect.Signature(params)  # no return annotation: the reply is JSON text plus images
+    tool.__annotations__ = {p.name: p.annotation for p in params}
     tool.__name__ = _tool_name(spec.method_name or method_id)
     return tool
 
@@ -216,7 +238,7 @@ def build_server(agent_dir: str | Path) -> FastMCP:
     @mcp.tool(name="reproduce", description="Run a method on the paper's own data and compare with the "
                                            "paper's reported results. Returns the verdict ladder (materials found, "
                                            "runs, same numbers, same conclusion) and the run crate's files.")
-    def reproduce_tool(method: str, who: str = "anonymous") -> dict[str, Any]:
+    def reproduce_tool(method: str, who: str = "anonymous"):
         from .agent import record_reproduction
 
         out = reproduce(agent.spec(method), _runs(), runner=RUNNER, agent=who)
@@ -224,25 +246,25 @@ def build_server(agent_dir: str | Path) -> FastMCP:
             agent.methods[:] = PaperAgent.load(agent.path).methods
         c = out.comparison
         headline = c.headline() if c else "No published results to compare with."
-        return {"message": headline, "artifacts": _run_artifacts(out.run_dir),
-                "verdict": ("reproduced" if c.reproduced else "differs") if c and c.measures else "not compared",
-                "same_numbers": c.count if c and c.measures else None, "ladder": out.ladder,
-                "headline": headline, "run_crate": str(out.run_dir.resolve())}
+        return _with_images({"message": headline, "artifacts": _run_artifacts(out.run_dir),
+                             "verdict": ("reproduced" if c.reproduced else "differs") if c and c.measures else "not compared",
+                             "same_numbers": c.count if c and c.measures else None, "ladder": out.ladder,
+                             "headline": headline, "run_crate": str(out.run_dir.resolve())}, out.run_dir)
 
     def _run(method: str, data_path: str | None, who: str, auto_adjust: bool, channel: int,
-             changes: dict[str, Any] | None, reason: str, scale_ratio: float | None = None) -> dict[str, Any]:
+             changes: dict[str, Any] | None, reason: str, scale_ratio: float | None = None) -> list:
         from .runcrate import summarise_run
 
         if changes and not reason.strip():
-            return {"message": "Changing a parameter needs a reason (pass reason=...); it is recorded in the run crate.",
-                    "artifacts": []}
+            return [{"message": "Changing a parameter needs a reason (pass reason=...); it is recorded in the run crate.",
+                     "artifacts": []}]
         out = run_on_data(agent.spec(method), data_path, _runs(), runner=RUNNER, agent=who, auto_adjust=auto_adjust,
                           channel=channel, scale_ratio=scale_ratio,
                           overrides={k: (v, reason) for k, v in (changes or {}).items()} or None)
-        return {"message": summarise_run(out.run_dir)["headline"], "artifacts": _run_artifacts(out.run_dir),
-                "checks": out.check.as_rows() if out.check else [], "parameters_used": out.params,
-                "results_csv": (out.run_dir / "outputs" / "results.csv").read_text(encoding="utf-8"),
-                "run_crate": str(out.run_dir.resolve())}
+        return _with_images({"message": summarise_run(out.run_dir)["headline"], "artifacts": _run_artifacts(out.run_dir),
+                             "checks": out.check.as_rows() if out.check else [], "parameters_used": out.params,
+                             "results_csv": (out.run_dir / "outputs" / "results.csv").read_text(encoding="utf-8"),
+                             "run_crate": str(out.run_dir.resolve())}, out.run_dir)
 
     @mcp.tool(description="Run a method of the paper on the user's data after checking it. Applies and records "
                           "adjustments (e.g. rescaling a parameter for a different pixel size or sampling rate); stops if a "
@@ -250,7 +272,7 @@ def build_server(agent_dir: str | Path) -> FastMCP:
                           "needed for methods that take only values.")
     def run_on_my_data(method: str, data_path: str | None = None, who: str = "anonymous", auto_adjust: bool = True,
                        channel: int = 0, parameters: dict[str, Any] | None = None, reason: str = "",
-                       scale_ratio: float | None = None) -> dict[str, Any]:
+                       scale_ratio: float | None = None):
         return _run(method, data_path, who, auto_adjust, channel, parameters, reason, scale_ratio)
 
     # One typed tool per method, like Paper2Agent's tools: each parameter is an argument with its type, unit, the
@@ -308,31 +330,59 @@ def build_server(agent_dir: str | Path) -> FastMCP:
 
     @mcp.tool(description="Run one follow-up check (by id, from followup_checks) on the paper's data. Writes its "
                           "own run crate, linked to the reproduction it follows up.")
-    def run_followup_check(method: str, check: str, who: str = "anonymous") -> dict[str, Any]:
+    def run_followup_check(method: str, check: str, who: str = "anonymous"):
         from .crate import CrateError
         from .followup import run_followup
 
         try:
             out = run_followup(agent.spec(method), check, _runs(), who=who, runner=RUNNER)
         except CrateError as e:  # not runnable here, or no reproduction yet: say what it needs
-            return {"message": str(e), "ran": False, "artifacts": []}
+            return [{"message": str(e), "ran": False, "artifacts": []}]
         from .runcrate import summarise_run
 
         c = out.comparison
-        return {"message": summarise_run(out.run_dir)["headline"], "ran": True,
-                "same_numbers": c.count if c else None,
-                "artifacts": _run_artifacts(out.run_dir), "run_crate": str(out.run_dir.resolve())}
+        return _with_images({"message": summarise_run(out.run_dir)["headline"], "ran": True,
+                             "same_numbers": c.count if c else None,
+                             "artifacts": _run_artifacts(out.run_dir), "run_crate": str(out.run_dir.resolve())},
+                            out.run_dir)
 
     # ---- figures ------------------------------------------------------------------------
-    @mcp.tool(description="Make a figure from a run's outputs (never drawn by the model) and record it in the run "
-                          "crate. kind: published_vs_reproduced (one row per value: published ring, reproduced "
-                          "dot, values outside tolerance marked).")
-    def make_figure(run_crate: str, kind: str = "published_vs_reproduced") -> dict[str, Any]:
-        from .figures import make_run_figure
+    def _latest_run() -> Path:
+        runs = sorted(p for p in _runs().glob("*") if p.is_dir() and (p / "ro-crate-metadata.json").exists())
+        if not runs:
+            raise ValueError("No run yet: reproduce a method or run it on data first.")
+        return runs[-1]
 
-        path = make_run_figure(Path(run_crate), kind)
-        return {"message": f"Figure '{kind}' plotted from {Path(run_crate).name} and recorded in its run crate.",
-                "artifacts": _artifacts((kind.replace("_", " "), path))}
+    def _table_source(source: str) -> str:
+        """``results`` / ``comparison`` as they are; ``table:<label>`` → one of the paper's tables; else a path."""
+        if source.lower().startswith("table:"):
+            label = source.split(":", 1)[1].strip().lower()
+            t = next((x for x in agent.tables() if label in (x["label"].lower(), Path(x["file"]).stem.lower())), None)
+            if t is None:
+                raise ValueError(f"No table {label!r}. Tables: {', '.join(x['label'] for x in agent.tables()) or 'none'}")
+            return str(agent.path / "paper" / t["file"])
+        return source
+
+    @mcp.tool(description="Make a figure, drawn by ReCRATE's code from a file (never by the model) and recorded in "
+                          "the run crate with the data it came from and what was plotted. kind: "
+                          "published_vs_reproduced (one row per compared value: published ring, reproduced dot, "
+                          "values outside tolerance marked), or bar, scatter, line, box, hist of a table's columns: "
+                          "give y (and x; group optional) as column names. source: results (the run's results "
+                          "table), comparison, table:<label> (one of the paper's tables, e.g. 'table:Table 2'), or a "
+                          "CSV path (the user's data). run_crate: a run crate folder, or empty for the latest run. "
+                          "Returns the image inline and its path.")
+    def make_figure(run_crate: str = "", kind: str = "published_vs_reproduced", source: str = "results",
+                    x: str = "", y: str = "", group: str = "", title: str = ""):
+        from .figures import PLOT_KINDS, make_run_figure
+
+        run_dir = Path(run_crate) if run_crate else _latest_run()
+        spec = {"source": _table_source(source), "x": x, "y": y, "group": group, "title": title} \
+            if kind in PLOT_KINDS else None
+        path = make_run_figure(run_dir, kind, spec)
+        what = f"{kind} of {y}" + (f" by {x}" if x else "") + (f" grouped by {group}" if group else "") \
+            if kind in PLOT_KINDS else kind.replace("_", " ")
+        return [{"message": f"Figure plotted from {run_dir.name} ({what}) and recorded in its run crate.",
+                 "artifacts": _artifacts((what, path)), "run_crate": str(run_dir.resolve())}, Image(path=str(path))]
 
     @mcp.tool(description="The paper's figures a method's latest reproduction redrew from the published data, each "
                           "with the original (from the paper's reading package) and its caption, as images. Ask the "

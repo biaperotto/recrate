@@ -433,9 +433,11 @@ def approve(run_dir: Path, who: str, accepted: bool = True, note: str = "") -> N
 
 
 def add_figure(run_dir: Path, data: bytes, filename: str, name: str, description: str,
-               made_from: list[str] | None = None, code: str = "recrate.figures") -> Path:
+               made_from: list[str] | None = None, code: str = "recrate.figures",
+               spec: dict[str, Any] | None = None) -> Path:
     """Record a figure made by code from this run's outputs: the file, and the action that made it from which files.
-    A figure of the same file name is replaced (same inputs, same code)."""
+    A figure of the same file name is replaced (same inputs, same code). ``spec``: what was plotted (kind, source,
+    columns), kept as a property of the figure so the plot can be redrawn from the record."""
     meta = load_run_crate(run_dir)
     idx = entity_index(meta)
     root = idx["./"]
@@ -443,13 +445,19 @@ def add_figure(run_dir: Path, data: bytes, filename: str, name: str, description
     (Path(run_dir) / "outputs" / "figures").mkdir(parents=True, exist_ok=True)
     (Path(run_dir) / fid).write_bytes(data)
     aid = f"#figure-{_slug(filename)}"
-    meta["@graph"] = [e for e in meta["@graph"] if e["@id"] not in {fid, aid}]
+    sid = f"{aid}-spec"
+    meta["@graph"] = [e for e in meta["@graph"] if e["@id"] not in {fid, aid, sid}]
     if "#figures-code" not in idx:
         meta["@graph"].append({"@id": "#figures-code", "@type": "SoftwareApplication",
                                "name": f"ReCRATE figures ({code})", "softwareVersion": __version__})
+    image: dict[str, Any] = {"@id": fid, "@type": ["File", "ImageObject"], "name": name, "description": description,
+                             "encodingFormat": _MEDIA.get(Path(filename).suffix.lower(), "image/png")}
+    if spec:
+        image["additionalProperty"] = [{"@id": sid}]
+        meta["@graph"].append({"@id": sid, "@type": "PropertyValue", "name": "recrate plot spec",
+                               "value": json.dumps(spec, ensure_ascii=False)})
     meta["@graph"].extend([
-        {"@id": fid, "@type": ["File", "ImageObject"], "name": name, "description": description,
-         "encodingFormat": _MEDIA.get(Path(filename).suffix.lower(), "image/png")},
+        image,
         {"@id": aid, "@type": "CreateAction", "name": f"Plot {name}", "instrument": {"@id": "#figures-code"},
          "object": [{"@id": f} for f in (made_from or ["outputs/results.csv"])], "result": {"@id": fid},
          "endTime": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),

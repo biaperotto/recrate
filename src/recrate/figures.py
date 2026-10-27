@@ -11,6 +11,7 @@ import io
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import tifffile
@@ -19,8 +20,9 @@ from PIL import Image
 from .profiles.bioimaging import read_image_metadata, to_um
 from .runners.python_ref import _plane
 
-# Reference categorical slots 1 and 2 (validated palette), neutral ink for text and the paper's band.
-SERIES = ["#2a78d6", "#eb6834"]
+# Categorical slots 1 to 8 of the validated palette (assigned in this fixed order, never cycled), neutral ink for
+# text and the paper's band.
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 INK, INK_MUTED, BAND, GRID = "#0b0b0b", "#52514e", "#e4e2dc", "#ecebe6"
 
 
@@ -252,17 +254,195 @@ def comparison_from_run(run_dir: str | Path):
                                 for r in rows])
 
 
-def make_run_figure(run_dir: str | Path, kind: str = "published_vs_reproduced") -> Path:
-    """Make a figure from a run's outputs and record it in the run crate. Returns the image path."""
+PLOT_KINDS = {
+    "bar": "one bar per category (x) with the value (y); grouped bars with group; repeated categories are averaged",
+    "scatter": "y against x, both numeric; coloured by group",
+    "line": "y along x (sorted), one line per group",
+    "box": "the distribution of y per category (x)",
+    "hist": "the distribution of y; one histogram per group, overlaid",
+}
+MAX_GROUPS = len(SERIES)
+
+
+def read_table(path: str | Path) -> list[dict[str, Any]]:
+    """A CSV as rows; cells that read as numbers become floats."""
+    import csv
+
+    with Path(path).open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    for r in rows:
+        for k, v in r.items():
+            if isinstance(v, str):
+                try:
+                    r[k] = float(v.replace(",", "")) if v.strip() not in {"", "NA", "nan", "None"} else None
+                except ValueError:
+                    pass
+    return rows
+
+
+def _style(ax, xlabel: str, ylabel: str) -> None:
+    ax.set_xlabel(xlabel.replace("_", " "), fontsize=8, color=INK_MUTED)
+    ax.set_ylabel(ylabel.replace("_", " "), fontsize=8, color=INK_MUTED)
+    ax.tick_params(axis="both", labelsize=7, colors=INK_MUTED, length=0)
+    ax.grid(axis="y", color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(GRID)
+
+
+def _numbers(rows: list[dict[str, Any]], col: str) -> list[float]:
+    vals = [r.get(col) for r in rows]
+    bad = [v for v in vals if v is not None and not isinstance(v, (int, float))]
+    if bad:
+        raise ValueError(f"Column {col!r} is not numeric (e.g. {bad[0]!r}); choose a numeric column for y.")
+    return [float(v) if v is not None else math.nan for v in vals]
+
+
+def plot_table(rows: list[dict[str, Any]], kind: str, x: str | None = None, y: str | None = None,
+               group: str | None = None, title: str = "", fmt: str = "png", dpi: int = 200) -> tuple[bytes, str]:
+    """A plot of a table's columns, chosen by name: the model (or a person) picks what to plot, the code draws it
+    from the file, so every number on the figure is in the table. Returns the image and a note of what was drawn
+    (rows, averaging)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if kind not in PLOT_KINDS:
+        raise ValueError(f"Unknown plot kind {kind!r}; available: {', '.join(PLOT_KINDS)}.")
+    if not rows:
+        raise ValueError("The table has no rows to plot.")
+    cols = list(rows[0])
+    for name, c in (("x", x), ("y", y), ("group", group)):
+        if c and c not in cols:
+            raise ValueError(f"No column {c!r} for {name}; the table has: {', '.join(cols)}.")
+    if not y:
+        raise ValueError("Say which column to plot (y).")
+    if kind != "hist" and not x:
+        raise ValueError(f"A {kind} plot needs an x column too.")
+    groups = list(dict.fromkeys(str(r.get(group)) for r in rows)) if group else [None]
+    if len(groups) > MAX_GROUPS:
+        raise ValueError(f"{len(groups)} groups in {group!r}: more than {MAX_GROUPS} can't be told apart by colour; "
+                         "filter the table or plot the groups separately.")
+    colour = {g: SERIES[i] for i, g in enumerate(groups)}
+    note = f"{len(rows)} rows"
+    fig, ax = plt.subplots(figsize=(6.0, 3.4))
+    yv = _numbers(rows, y)
+    if kind == "bar":
+        cats = list(dict.fromkeys(str(r.get(x)) for r in rows))
+        width = 0.8 / len(groups)
+        averaged = False
+        for gi, g in enumerate(groups):
+            heights = []
+            for c in cats:
+                vals = [v for r, v in zip(rows, yv) if str(r.get(x)) == c and (g is None or str(r.get(group)) == g)
+                        and not math.isnan(v)]
+                averaged |= len(vals) > 1
+                heights.append(sum(vals) / len(vals) if vals else math.nan)
+            pos = [i + (gi - (len(groups) - 1) / 2) * width for i in range(len(cats))]
+            ax.bar(pos, heights, width=width * 0.92, color=colour[g], label=g, linewidth=0)
+        ax.set_xticks(range(len(cats)), cats, fontsize=7, color=INK_MUTED)
+        if averaged:
+            note += f"; bars are means over repeated {x} values"
+    elif kind == "box":
+        cats = list(dict.fromkeys(str(r.get(x)) for r in rows))
+        data = [[v for r, v in zip(rows, yv) if str(r.get(x)) == c and not math.isnan(v)] for c in cats]
+        bp = ax.boxplot(data, patch_artist=True, widths=0.5, medianprops={"color": INK, "linewidth": 1.5},
+                        whiskerprops={"color": INK_MUTED}, capprops={"color": INK_MUTED},
+                        flierprops={"marker": "o", "markersize": 3, "markerfacecolor": INK_MUTED, "markeredgecolor": "none"})
+        for patch in bp["boxes"]:
+            patch.set(facecolor=SERIES[0], alpha=0.35, edgecolor=SERIES[0], linewidth=1)
+        ax.set_xticks(range(1, len(cats) + 1), cats, fontsize=7, color=INK_MUTED)
+        note += "; boxes: median and quartiles"
+    elif kind == "hist":
+        for g in groups:
+            vals = [v for r, v in zip(rows, yv) if (g is None or str(r.get(group)) == g) and not math.isnan(v)]
+            ax.hist(vals, bins="auto", color=colour[g], alpha=0.7 if len(groups) > 1 else 1.0, label=g, linewidth=0)
+        ax.set_ylabel("count")
+    else:  # scatter, line: x numeric
+        xv = _numbers(rows, x)
+        for g in groups:
+            pts = sorted((xi, yi) for r, xi, yi in zip(rows, xv, yv) if (g is None or str(r.get(group)) == g)
+                         and not (math.isnan(xi) or math.isnan(yi)))
+            if not pts:
+                continue
+            if kind == "line":
+                ax.plot([p[0] for p in pts], [p[1] for p in pts], color=colour[g], linewidth=2, marker="o",
+                        markersize=4, markeredgecolor="white", markeredgewidth=1, label=g)
+            else:
+                ax.scatter([p[0] for p in pts], [p[1] for p in pts], s=36, color=colour[g], edgecolor="white",
+                           linewidth=1.5, label=g, zorder=3)
+    _style(ax, x or "", "count" if kind == "hist" else y)
+    if len(groups) > 1 and kind != "box":  # a box plot shows one distribution per category; group is not drawn
+        ax.legend(frameon=False, fontsize=7, title=group.replace("_", " "), title_fontsize=7, loc="best")
+    elif kind == "box" and group:
+        note += f"; group {group!r} is not drawn by a box plot (one box per {x})"
+    if title:
+        ax.set_title(title, fontsize=9, color=INK, loc="left")
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format=fmt, dpi=dpi, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue(), note
+
+
+def _slug(s: str) -> str:
+    import re
+
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "value"
+
+
+def make_run_figure(run_dir: str | Path, kind: str = "published_vs_reproduced",
+                    spec: dict[str, Any] | None = None) -> Path:
+    """Make a figure from a run's outputs and record it in the run crate. Returns the image path.
+
+    ``kind`` is ``published_vs_reproduced`` (from the run's recorded comparison) or one of PLOT_KINDS, drawn from a
+    table named by ``spec``: ``{"source": "results" | "comparison" | <CSV path>, "x": ..., "y": ..., "group": ...,
+    "title": ...}``. A table outside the run crate (the user's data, one of the paper's tables) is copied into it,
+    so the record holds exactly what was plotted; the spec is recorded with the figure.
+    """
     from .runcrate import add_figure
 
-    if kind != "published_vs_reproduced":
-        raise ValueError(f"Unknown figure kind {kind!r}; available: published_vs_reproduced")
-    comp = comparison_from_run(run_dir)
-    if comp is None or not comp.measures:
-        raise ValueError("This run has no comparison with published results to plot.")
-    return add_figure(Path(run_dir), published_vs_reproduced(comp), "published_vs_reproduced.png",
-                      "Published vs reproduced",
-                      f"Each published value (ring) and the reproduced one (dot); {comp.count} within tolerance. "
-                      "Plotted by ReCRATE from this run's outputs.",
-                      made_from=["comparison.csv"])
+    run_dir = Path(run_dir)
+    if kind == "published_vs_reproduced":
+        comp = comparison_from_run(run_dir)
+        if comp is None or not comp.measures:
+            raise ValueError("This run has no comparison with published results to plot.")
+        return add_figure(run_dir, published_vs_reproduced(comp), "published_vs_reproduced.png",
+                          "Published vs reproduced",
+                          f"Each published value (ring) and the reproduced one (dot); {comp.count} within tolerance. "
+                          "Plotted by ReCRATE from this run's outputs.",
+                          made_from=["comparison.csv"])
+    if kind not in PLOT_KINDS:
+        raise ValueError(f"Unknown figure kind {kind!r}; available: published_vs_reproduced, {', '.join(PLOT_KINDS)}.")
+    spec = dict(spec or {})
+    source = str(spec.get("source") or "results")
+    if source == "results":
+        src, made_from = run_dir / "outputs" / "results.csv", "outputs/results.csv"
+    elif source == "comparison":
+        src, made_from = run_dir / "comparison.csv", "comparison.csv"
+    else:
+        src = Path(source).expanduser()
+        if not src.is_absolute():
+            src = run_dir / src
+        if not src.exists():
+            raise ValueError(f"No table at {source}.")
+        if src.resolve().is_relative_to(run_dir.resolve()):
+            made_from = src.resolve().relative_to(run_dir.resolve()).as_posix()
+        else:  # a table from outside the run: kept with the figure, so the record holds what was plotted
+            import shutil
+
+            made_from = f"outputs/figures/data/{src.name}"
+            (run_dir / "outputs" / "figures" / "data").mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, run_dir / made_from)
+    if not src.exists():
+        raise ValueError(f"This run has no {made_from} to plot.")
+    x, y, group, title = spec.get("x") or None, spec.get("y") or None, spec.get("group") or None, spec.get("title") or ""
+    data, note = plot_table(read_table(src), kind, x, y, group, title)
+    filename = f"{kind}-{_slug(y or '')}" + (f"-by-{_slug(x)}" if x else "") + (f"-{_slug(group)}" if group else "") + ".png"
+    what = f"{kind} of {y}" + (f" by {x}" if x else "") + (f", grouped by {group}" if group else "")
+    spec = {"kind": kind, "source": made_from, "x": x, "y": y, "group": group, "title": title}
+    return add_figure(run_dir, data, filename, title or what,
+                      f"Plotted by ReCRATE from {made_from}: {what} ({note}). The model chose what to plot; the "
+                      "code drew it from the file.", made_from=[made_from], spec=spec)
