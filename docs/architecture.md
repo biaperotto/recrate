@@ -182,16 +182,22 @@ src/recrate/
   followup.py      follow-up checks when the numbers differ, each its own recorded run
   compare.py       published vs reproduced, with tolerances and their sources
   runcrate.py      Workflow Run Crates, figures, reviews, readable summaries; record.py: the record
-  figures.py       figures plotted from run outputs: published vs reproduced, image panels, comparison charts
+  figures.py       figures plotted by code from files: published vs reproduced, bar/scatter/line/box/histogram of a
+                   table's columns (chosen by the model or a person, drawn from the file, recorded with the spec),
+                   image panels, comparison charts
   report.py        one self-contained HTML report page per research object
   workspace.py     comparison runs, parameter sources, flags, export bundle
-  chat.py          the chat: tools; open models (OpenAI-compatible), Claude, or simple commands
+  chat_tools.py    the chat's tools: what the chat can do (TOOLS) and what each returns (ChatTools)
+  chat.py          the chat engines: Claude Code, Claude, open models (OpenAI-compatible), or simple commands
+  notebook_figures.py  the figures a notebook or Quarto document drew, written out with their provenance
   mcp_server.py    the agent over MCP; server_check.py checks it over stdio; package.py zips it with USAGE.md
   verify.py        check-description: quotes, published values and tolerance sources against the paper
   hardware.py      CPUs, memory, GPU, interpreters; whether a method's needs fit this computer
   workflow_state.py  the /recrate skill's stages, checksums and independence check (work/state.json)
   skill/           the /recrate Claude Code skill and its specialist subagents
-app/app.py         the web app: Reproduce, Reuse, Record, and the chat
+app/app.py         the web app's page: set-up, style, state and layout
+app/ui/            one module per view: common, style, engines, building, chat, helpers, results, reproduce,
+                   reuse, record, sidebar, pages
 ```
 
 Downloaded workflows never run without your say: ReCRATE's own ports run straight away, a crate's own script or

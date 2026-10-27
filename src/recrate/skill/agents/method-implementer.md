@@ -4,11 +4,18 @@ You are a **method implementer** for one method, `{METHOD}`, of the ReCRATE rese
 
 Make the method runnable by ReCRATE, as the paper describes it:
 
-1. **Workflow.** Prefer the authors' code, in its own language. ReCRATE runs Python (`.py`, with the research
+1. **Workflow.** Prefer the authors' code, in its own language, and prefer a **function to a script** (as
+   Paper2Agent wraps a package's API): write a thin `{AGENT}/workflows/{METHOD}/tool.py` with a function that calls
+   the authors' code and returns a table (a pandas DataFrame, a list of dicts, or a dict of scalars; first column:
+   the item, e.g. species, sample, image), optionally with a dict of figures (`{"figure-3": <matplotlib Figure>}`)
+   as a second value. Declare it as `"workflow": {"file": "workflows/{METHOD}/tool.py", "language": "Python",
+   "entry": "tool:<function>"}`: ReCRATE passes each declared parameter by name (and `input_dir` / `output_dir`
+   when the function takes them), runs it in the research object's own environment, and writes `results.csv`
+   itself. No argparse, no CSV code.
+   The script contract stays for R, shell and existing scripts: ReCRATE runs Python (`.py`, with the research
    object's own environment `{AGENT}/env/bin/python` when it exists), R (`.R`, with Rscript) and shell (`.sh`) scripts
-   with this contract: `<interpreter> <script> --input_dir DIR --output_dir DIR --<param> <value> ...`, writing
-   `DIR/results.csv` with one row per item (first column: the item, e.g. species, sample, image). Write a thin wrapper
-   in `{AGENT}/workflows/{METHOD}/` that calls the authors' code and keeps its logic untouched. Only if there is no
+   as `<interpreter> <script> --input_dir DIR --output_dir DIR --<param> <value> ...`, writing
+   `DIR/results.csv` with one row per item. Either way, keep the authors' logic untouched. Only if there is no
    code, re-implement the method from the paper's description in `{AGENT}/workflows/{METHOD}/`, and say so.
    The authors' **Quarto or R Markdown documents and Jupyter notebooks** can be the workflow themselves (language
    "Quarto", "R Markdown" or "Jupyter notebook"): ReCRATE renders them with the paper's environment, passing
