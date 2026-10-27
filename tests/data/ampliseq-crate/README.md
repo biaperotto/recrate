@@ -1,0 +1,1 @@
+Trimmed copy of the nf-core/ampliseq Workflow RO-Crate (WorkflowHub #964) for the tests: real metadata entities, real conf/test.config and one module environment; the schema keeps a few parameters; main.nf is a stub. Made by tests/data/ampliseq-crate from the published crate, nothing edited by hand.

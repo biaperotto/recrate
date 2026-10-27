@@ -113,7 +113,9 @@ def _root_info(src: Path, idx: dict[str, dict[str, Any]], root: dict[str, Any], 
     if isinstance(lic_id, str) and "://" not in lic_id:
         lic_id = f"https://spdx.org/licenses/{lic_id}"
     people = []
-    for r in _as_list(wf.get("creator")) + _as_list(root.get("author")) + _as_list(root.get("creator")):
+    # nf-core crates name their authors on the workflow entity (``author``, ORCID ids resolved to Person entities)
+    for r in (_as_list(wf.get("creator")) + _as_list(wf.get("author")) + _as_list(root.get("author"))
+              + _as_list(root.get("creator"))):
         e = idx.get((r or {}).get("@id", ""), r if isinstance(r, dict) else {})
         n = e.get("name") or (r or {}).get("@id")
         if n and n not in people:
@@ -225,8 +227,23 @@ def _nf_schema(schema: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _nf_test_params(config: Path) -> dict[str, str]:
-    """``name = value`` lines of the ``params {}`` block of a Nextflow config, values as written (quotes removed)."""
+NF_TESTDATA_BASE = "https://raw.githubusercontent.com/nf-core/test-datasets/"
+
+
+def _nf_testdata_base(src: Path) -> str:
+    """Where an nf-core pipeline's test profile fetches its data from (``params.pipelines_testdata_base_path`` in
+    ``nextflow.config``), else nf-core's test-datasets repository."""
+    cfg = src / "nextflow.config"
+    if cfg.exists():
+        m = re.search(r"pipelines_testdata_base_path\s*=\s*['\"]([^'\"]+)['\"]", cfg.read_text(encoding="utf-8", errors="replace"))
+        if m:
+            return m.group(1)
+    return NF_TESTDATA_BASE
+
+
+def _nf_test_params(config: Path, base: str = NF_TESTDATA_BASE) -> dict[str, str]:
+    """``name = value`` lines of the ``params {}`` block of a Nextflow config, values as written (quotes removed).
+    A value built from ``params.pipelines_testdata_base_path`` becomes the full URL the test fetches."""
     text = config.read_text(encoding="utf-8", errors="replace")
     m = re.search(r"params\s*\{(.*?)\n\}", text, re.S)
     block = m.group(1) if m else text
@@ -237,7 +254,9 @@ def _nf_test_params(config: Path) -> dict[str, str]:
         if mm:
             value = mm.group(2).strip()
             if "pipelines_testdata_base_path" in value or "params." in value:
-                value = "https://" + re.sub(r"^.*?\+\s*", "", value).strip("'\" ")  # remote test data
+                literals = re.findall(r"['\"]([^'\"]+)['\"]", value)
+                if literals:  # remote test data: the base path, then the quoted tail
+                    value = base.rstrip("/") + "/" + literals[-1].lstrip("/")
             out[mm.group(1)] = value.strip("'\"")
     return out
 
@@ -250,7 +269,7 @@ def import_nfcore(src: Path, out_dir: Path) -> dict[str, Any]:
         if (src / "nextflow_schema.json").exists() else {}
     params = _nf_schema(schema)
     test = src / "conf" / "test.config"
-    test_params = _nf_test_params(test) if test.exists() else {}
+    test_params = _nf_test_params(test, _nf_testdata_base(src)) if test.exists() else {}
     files = [p for p in params if p["is_file"]]
     values = [p for p in params if not p["is_file"]]
     # the published test's values are the published run: they become the defaults, and come first
@@ -303,6 +322,17 @@ def import_nfcore(src: Path, out_dir: Path) -> dict[str, Any]:
     work = out_dir.parent / f".{out_dir.name}-import"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
+    if test.exists() and remote and not example:
+        # The published test's inputs are fetched by the profile itself when the pipeline runs (nf-core keeps its
+        # test data in a separate repository): the published data is then this note, so the test run is
+        # reproducible here, with ``-profile test`` supplying the inputs the recipe's input flags leave out.
+        note = work / "TEST-PROFILE.md"
+        note.write_text(f"# The published test run ({test.name})\n\nThe test profile fetches its inputs when the "
+                        "pipeline runs (`-profile test`), so this folder holds no data file. The inputs it uses:\n\n"
+                        + "".join(f"- {r}\n" for r in remote)
+                        + "\nTo run the method on your own data, give a folder with the files named in the method's "
+                        "inputs instead.\n", encoding="utf-8")
+        example = {note.name: note}
     try:
         return _finish(src, out_dir, info, method, "nfcore", example, None, work)
     finally:
@@ -404,9 +434,11 @@ def _software(src: Path, eco: str, limit: int = 200) -> list[dict[str, str]]:
                 found[n] = v
 
     if eco == "nfcore":
-        for f in [src / "environment.yml", *sorted((src / "modules").rglob("environment.yml"))]:
-            if f.exists():
-                add(_conda_deps(f))
+        envs = [(f, _conda_deps(f)) for f in [src / "environment.yml", *sorted((src / "modules").rglob("environment.yml"))]
+                if f.exists()]
+        # a module's few pinned tools first; a full environment export (hundreds of packages) fills what room is left
+        for _, deps in sorted(envs, key=lambda fd: len(fd[1])):
+            add(deps)
     elif eco == "snakemake":
         for folder in (src / "workflow" / "envs", src / "envs"):
             for f in sorted(folder.glob("*.y*ml")) if folder.is_dir() else []:
@@ -418,7 +450,8 @@ def _software(src: Path, eco: str, limit: int = 200) -> list[dict[str, str]]:
     elif eco == "cwl":
         for f in sorted(src.rglob("*.cwl"))[:400]:
             add(_cwl_software(f))
-    return [{"name": n, **({"version": v} if v else {})} for n, v in sorted(found.items())][:limit]
+    # the cap keeps what was found first (pinned tools before a full export), then the list is sorted by name
+    return [{"name": n, **({"version": v} if v else {})} for n, v in sorted(list(found.items())[:limit])]
 
 
 # ---- CWL ----------------------------------------------------------------------------------------------
