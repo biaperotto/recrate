@@ -2077,6 +2077,7 @@ def topbar() -> None:
             for k in list(ss.keys()):
                 if k not in {"who", "api_key", "engine_choice", "local_url", "local_model"}:
                     del ss[k]
+            ss.landing = False  # stay on the workspace (chat and Start panel), not the welcome page
             st.rerun()
 
 
