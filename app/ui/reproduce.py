@@ -35,10 +35,11 @@ def validate_section(agent: PaperAgent, runs: list[dict], data_dir: Path) -> Non
         said = list(dict.fromkeys(a for m in agent.methods for a in assumptions(agent.spec(m.id), env)))
         gaps = list(dict.fromkeys(g for m in agent.methods if m.readiness != "blocked" for g in m.gaps
                                   if not g.startswith("Reusable, not reproducible")))  # said on the method itself
-        if said or gaps:
-            with st.expander(f"What the paper doesn't say ({len(said) + len(gaps)})", icon=":material/help:"):
+        unsaid = list(dict.fromkeys(gaps + said))  # a gap and an assumption can be the same sentence: once
+        if unsaid:
+            with st.expander(f"What the paper doesn't say ({len(unsaid)})", icon=":material/help:"):
                 st.caption("Each is an assumption ReCRATE, or whoever drafted the crate, had to make.")
-                st.markdown("\n".join(f"- {html.escape(a)}" for a in gaps + said))
+                st.markdown("\n".join(f"- {html.escape(a)}" for a in unsaid))
     with st.expander("Software environment" + (f" · as of {env.published}" if env and env.published else ""),
                      icon=":material/inventory_2:"):
         if env and env.published:

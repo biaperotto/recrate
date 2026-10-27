@@ -150,3 +150,79 @@ def test_two_follow_up_questions_from_what_the_answer_did(tmp_path):
     assert qs == ["Why do the size dimorphism index results differ from the paper?",
                   "Run the follow-up checks for size dimorphism index: do they explain the difference?"]
     assert qs[0] not in follow_up_questions(a, reply, asked={qs[0]})  # never one already asked
+
+
+def test_follow_ups_come_from_the_question_and_the_answer(tmp_path):
+    """'Ask next' follows what was just asked and answered: the method, table, figure or parameter they name, or the
+    section of the paper nearest to the question's words; not the generic list."""
+    import json
+    from pathlib import Path
+
+    from recrate.agent import agentify
+    from recrate.chat import follow_up_questions, questions_about
+    from recrate.paper import Paper
+
+    ex = Path(__file__).resolve().parent.parent / "examples" / "penguins-dimorphism"
+    a = agentify(tmp_path / "p", paper=ex / "paper.pdf", crate=ex / "crate", search_crate=False, online=False)
+    # a reading package with one table and one figure, as Europe PMC would give
+    (a.path / "paper" / "tables").mkdir(parents=True, exist_ok=True)
+    (a.path / "paper" / "tables" / "table-2.csv").write_text("Species,Culmen length,Body mass\nAdelie,-0.07,-0.14\n")
+    (a.path / "paper" / "figures").mkdir(exist_ok=True)
+    (a.path / "paper" / "figures" / "figure-3.jpg").write_bytes(b"\xff\xd8\xff")
+    (a.path / "paper" / "package.json").write_text(json.dumps({
+        "tables": [{"label": "Table 2", "caption": "SDI", "file": "tables/table-2.csv"}],
+        "figures": [{"label": "Figure 3", "caption": "Isotopes", "file": "figures/figure-3.jpg"}]}))
+
+    # a question about a method, answered in words only (no tool): its status decides the first follow-up
+    reply = [{"kind": "text", "text": "The size dimorphism index is the mean of the larger sex over the smaller, minus one."}]
+    qs = follow_up_questions(a, reply, asked=set(), question="What is the size dimorphism index?")
+    assert qs[0] == "Why do the size dimorphism index results differ from the paper?"
+    assert qs[1].startswith("Which parameters does size dimorphism index use")
+
+    # a question about a table: show it, and plot it with its own columns
+    qs = follow_up_questions(a, [{"kind": "text", "text": "Table 2 lists the index per species."}], asked=set(),
+                             question="What does Table 2 report?")
+    assert qs == ["Show Table 2 and explain what it reports.", "Plot Table 2: Culmen length by Species."]
+    # once the table was shown, the first is not offered again
+    reply = [{"kind": "tool", "name": "get_table", "args": {"table": "Table 2"}}, {"kind": "text", "text": "Table 2: ..."}]
+    assert follow_up_questions(a, reply, asked=set(), question="Show Table 2")[0].startswith("Plot Table 2")
+
+    # a figure named in the answer
+    qs = questions_about(a, "What do the isotopes show?", "See Figure 3 of the paper.", set())
+    assert "Show Figure 3." in qs
+
+    # the section of the paper nearest to the question's words, when the text has sections
+    a.paper = Paper(title="t", text="# Title\n\n## Abstract\n\nx\n\n## Stable isotope analysis\n\nCarbon and nitrogen "
+                                    "signatures were measured in feathers of each penguin.\n\n## References\n\ncarbon nitrogen",
+                    source="test")
+    qs = questions_about(a, "What do the carbon and nitrogen signatures show?", "", set())
+    assert qs == ["What does the paper say about stable isotope analysis?"]
+    # never the question just asked, nor one asked before
+    qs = follow_up_questions(a, [{"kind": "text", "text": "..."}], asked={"What does the paper say about stable isotope analysis?"},
+                             question="What do the carbon and nitrogen signatures show?")
+    assert "What does the paper say about stable isotope analysis?" not in qs
+
+
+def test_simple_commands_plot_a_table_by_its_columns(tmp_path):
+    """The 'Plot Table 2: y by x' suggestion works without a model: the chart is drawn from the table and recorded."""
+    import json
+    from pathlib import Path
+
+    from recrate.agent import agentify
+    from recrate.chat import ChatTools, LocalChat
+
+    ex = Path(__file__).resolve().parent.parent / "examples" / "penguins-dimorphism"
+    a = agentify(tmp_path / "p", paper=ex / "paper.pdf", crate=ex / "crate", search_crate=False, online=False)
+    (a.path / "paper" / "tables").mkdir(parents=True, exist_ok=True)
+    (a.path / "paper" / "tables" / "table-2.csv").write_text(
+        "Species,Culmen length,Body mass\nAdelie,-0.07,-0.14\nChinstrap,-0.11,-0.10\nGentoo,-0.08,-0.15\n")
+    (a.path / "paper" / "package.json").write_text(json.dumps({
+        "tables": [{"label": "Table 2", "caption": "SDI", "file": "tables/table-2.csv"}], "figures": []}))
+    chat = LocalChat(a, ChatTools(a, tmp_path / "uploads"))
+    events = list(chat.send("Plot Table 2: Culmen length by Species."))
+    result = next(e[2] for e in events if e[0] == "result" and e[1] == "make_figure")
+    fig = next(x for x in result.attachments if x["type"] == "figure")
+    assert Path(fig["path"]).name == "bar-culmen-length-by-species.png" and Path(fig["path"]).exists()
+    assert "table-2.csv" in fig["caption"]
+    run = Path(fig["path"]).parent.parent.parent  # outputs/figures/<file> -> the run crate
+    assert (run / "outputs" / "figures" / "data" / "table-2.csv").exists()  # the table plotted, kept with the figure

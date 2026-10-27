@@ -201,9 +201,130 @@ def suggested_questions(agent: PaperAgent, limit: int = 6) -> list[str]:
     return picked[:limit]
 
 
-def follow_up_questions(agent: PaperAgent, reply_parts: list[dict[str, Any]], asked: set[str], n: int = 2) -> list[str]:
-    """Two questions that follow from the last answer: what it ran decides what is worth asking next (a difference
-    leads to its follow-up checks, a check of your data to running on it...). Never one already asked."""
+SECTION_SKIP = {"abstract", "references", "acknowledgements", "acknowledgments", "author contributions", "funding",
+                "competing interests", "conflict of interest", "supporting information", "supplementary material"}
+
+
+def _sections(text: str) -> list[tuple[str, str]]:
+    """``(heading, body)`` for each ``## heading`` of the paper's text (empty for a PDF read as plain text)."""
+    out: list[tuple[str, str]] = []
+    head, buf = None, []  # type: str | None, list[str]
+    for line in text.splitlines():
+        m = re.match(r"^#{1,3}\s+(.+?)\s*$", line)
+        if m:
+            if head is not None:
+                out.append((head, "\n".join(buf)))
+            head, buf = m.group(1), []
+        elif head is not None:
+            buf.append(line)
+    if head is not None:
+        out.append((head, "\n".join(buf)))
+    return out
+
+
+def _terms(text: str) -> set[str]:
+    from .paper import STOPWORDS
+
+    return {w for w in re.findall(r"[a-z][a-z-]{3,}", text.lower()) if w not in STOPWORDS}
+
+
+def _table_axes(path: Path) -> tuple[str, str] | None:
+    """The first column and the first numeric column of a table, as a plot's x and y; None if it has none."""
+    import csv
+
+    try:
+        with path.open(newline="", encoding="utf-8") as fh:
+            rows = list(csv.reader(fh))
+    except OSError:
+        return None
+    if len(rows) < 2 or len(rows[0]) < 2:
+        return None
+    header, first = rows[0], rows[1]
+    for i, cell in enumerate(first[1:], 1):
+        try:
+            float(str(cell).replace(",", "").replace("−", "-"))
+        except ValueError:
+            continue
+        if header[i].strip():
+            return header[0].strip() or "row", header[i].strip()
+    return None
+
+
+def questions_about(agent: PaperAgent, question: str, answer: str, tools_used: set[str] | None = None) -> list[str]:
+    """Questions that follow from what the last question and answer were about: the methods, parameters, follow-up
+    checks, tables and figures they name, and the section of the paper nearest to the question's words. Each
+    suggestion points at something the research object holds; nothing is invented."""
+    from .followup import propose
+
+    tools_used = tools_used or set()
+    text = f"{question}\n{answer}".lower()
+    out: list[str] = []
+    for m in agent.methods:
+        name = m.name.replace("_", " ")
+        if not (name.lower() in text or m.name.lower() in text or m.id.lower() in text):
+            continue
+        try:
+            spec = agent.spec(m.id)
+        except Exception:  # noqa: BLE001 - a method the crate can't describe gets no suggestions
+            continue
+        if m.status == "differs":
+            out.append(f"Why do the {name} results differ from the paper?")
+        elif m.status == "validated":
+            out.append(f"How was {name} checked against the paper's published results?")
+        elif m.status == "failed":
+            out.append(f"Why did {name} fail to run?")
+        elif m.readiness != "blocked":
+            out.append(f"Reproduce {name} on the paper's own data.")
+        for p in spec.value_inputs:  # a parameter the question or answer names
+            if (p.name.replace("_", " ").lower() in text or p.name.lower() in text) and p.prop("quote"):
+                out.append(f"Where does the paper state {p.name.replace('_', ' ')}, and what happens if I change it?")
+        try:
+            for f in propose(spec):  # a follow-up check it names
+                if f.runnable and f.title.lower() in text:
+                    out.append(f"Run the check '{f.title}' for {name}.")
+        except Exception:  # noqa: BLE001
+            pass
+        if any(p.prop("quote") for p in spec.value_inputs):
+            out.append(f"Which parameters does {name} use, and where does the paper state them?")
+        out.append(f"Will {name} work on my data? What should I check first?" if spec.needs_data
+                   else f"Run {name} with my own values: which can I change?")
+    for t in agent.tables():
+        label = t.get("label") or ""
+        if label and label.lower() in text:
+            if "get_table" not in tools_used:
+                out.append(f"Show {label} and explain what it reports.")
+            axes = _table_axes(agent.path / "paper" / t["file"])
+            if axes:
+                out.append(f"Plot {label}: {axes[1]} by {axes[0]}.")
+            if any(label.lower() in (m.description or "").lower() for m in agent.methods):
+                out.append(f"Which method reproduces {label}, and does it match?")
+    for f in agent.figures():
+        label = f.get("label") or ""
+        if label and label.lower() in text:
+            if not {"get_figure", "show_figure"} & tools_used:
+                out.append(f"Show {label}.")
+            if any(m.run_crate for m in agent.methods):
+                out.append(f"Was {label} redrawn by a reproduction? Show both.")
+    if agent.paper and question:  # the section of the paper the question's words point at, not yet asked about
+        terms = _terms(question)
+        best, score = None, 0
+        for head, body in _sections(agent.paper.text):
+            if head.lower() in SECTION_SKIP or not _terms(head) or _terms(head) <= terms:
+                continue
+            n = sum(1 for w in terms if w in body.lower())
+            if n > score:
+                best, score = head, n
+        if best and score >= min(2, len(terms)) and score > 0:
+            out.append(f"What does the paper say about {best[0].lower() + best[1:]}?")
+    return out
+
+
+def follow_up_questions(agent: PaperAgent, reply_parts: list[dict[str, Any]], asked: set[str], n: int = 2,
+                        question: str = "") -> list[str]:
+    """Two questions that follow from the last question and answer: what the answer ran decides first (a
+    difference leads to its follow-up checks, a check of your data to running on it...), then what the question
+    and answer were about (a method, a table, a figure, a parameter, a section of the paper), then the research
+    object's own suggestions. Never one already asked."""
     from .followup import propose
 
     tools = [p for p in reply_parts if p.get("kind") == "tool"]
@@ -232,8 +353,13 @@ def follow_up_questions(agent: PaperAgent, reply_parts: list[dict[str, Any]], as
         out += ["How do my results compare with what the paper reported?", "Write the methods paragraph for this run."]
     if {"make_figure", "report_page"} & set(names):
         out += ["Export the RO-Crate of this research.", "What does the paper not say, that had to be assumed?"]
-    out += suggested_questions(agent, limit=12)  # then the content-based ones, in order
-    seen, picked = set(asked), []
+    answer = "\n".join(p.get("text", "") for p in reply_parts if p.get("kind") == "text")
+    answer += "\n" + "\n".join(i.get("text", "") for p in reply_parts if p.get("kind") == "attachment"
+                               and (p.get("data") or {}).get("type") == "passages"
+                               for i in (p.get("data") or {}).get("items") or [])
+    out += questions_about(agent, question, answer, set(names))  # then what the question and answer were about
+    out += suggested_questions(agent, limit=12)  # then the research object's own, in order
+    seen, picked = set(asked) | {question.strip()}, []
     for q in out:
         if q not in seen:
             seen.add(q)
@@ -430,7 +556,8 @@ class LocalChat:
             "- **compare** with the paper's parameters unchanged\n"
             "- **my pixel size is 0.5 µm** (when your images have no calibration)\n"
             "- **why does it differ?** follow-up checks, and **run check** <id>\n"
-            "- **plot** published vs reproduced, **report** page\n"
+            "- **plot** published vs reproduced, or **plot Table 2: <y> by <x>** (a bar chart; say scatter, line, box or "
+            "hist for another kind), **report** page\n"
             "- **methods** paragraph, **approve** / **reject** the latest run, **record**, **files**, **about**")
 
     def __init__(self, agent: PaperAgent, tools: ChatTools):
@@ -504,7 +631,16 @@ class LocalChat:
             yield from self._do("followup_checks", method=method)
             yield ("text", "Say **run check** and the check's id to run one.")
         elif cmd("plot", "figure", "chart"):
-            yield from self._do("make_figure")
+            # "Plot Table 2: Culmen length by Species", "plot count by image grouped by sex": a chart of a table's
+            # columns, drawn by code from the file; otherwise the published-vs-reproduced chart of the latest run
+            spec = re.search(r"plot\s+(?:(table\s+\S+?)\s*:\s*)?(.+?)\s+by\s+(.+?)(?:\s+grouped\s+by\s+(.+?))?[.?!]?\s*$",
+                             text, re.I)
+            if spec:
+                kind = next((k for k in ("scatter", "line", "box", "hist") if has(k)), "bar")
+                yield from self._do("make_figure", kind=kind, source=f"table:{spec.group(1)}" if spec.group(1) else "results",
+                                    y=spec.group(2).strip(), x=spec.group(3).strip(), group=(spec.group(4) or "").strip())
+            else:
+                yield from self._do("make_figure")
         elif cmd("export ro-crate", "export the ro-crate", "paper's crate", "research object's crate", "ro-crate zip"):
             yield from self._do("export_crate")
         elif cmd("report"):

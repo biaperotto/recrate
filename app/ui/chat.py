@@ -110,7 +110,8 @@ def suggestions(agent: PaperAgent) -> None:
     if not chat_started():
         question_buttons([q for q in suggested_questions(agent, limit=8) if q not in asked][:4], "start", "Try asking")
     elif ss.history and ss.history[-1]["role"] == "assistant":
-        question_buttons(follow_up_questions(agent, ss.history[-1]["parts"], asked), "next", "Ask next")
+        question = next((m["parts"][0]["text"] for m in reversed(ss.history) if m["role"] == "user" and m.get("parts")), "")
+        question_buttons(follow_up_questions(agent, ss.history[-1]["parts"], asked, question=question), "next", "Ask next")
 def chat_card() -> None:
     kind, label = engine_plan()
     color = {"subscription": "#d97757", "claude": "#d97757", "local": "#2A78D6", "commands": "#b8b3a7"}[kind]
