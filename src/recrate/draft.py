@@ -58,6 +58,12 @@ A method may carry ``properties``: named values written on the workflow entity, 
 (how to call a workflow in its own idiom, see recrate.adapters). ``workflow.in_place`` says the file already sits
 inside the crate folder with everything an engine needs around it (modules, tools, configs), so it is not copied.
 
+A Python method may be a **function** rather than a script that parses ``--input_dir``: ``"workflow": {"file":
+"workflows/gc/tool.py", "language": "Python", "entry": "tool:gc_content"}`` (written as the property ``recrate
+entry``). ReCRATE calls it with the method's parameters as keyword arguments (plus ``input_dir`` / ``output_dir``
+when it takes them) and writes what it returns, a DataFrame, a list of dicts or a dict, as ``results.csv``; a
+second return value may be a dict of figures by name (see runners/function_wrapper.py).
+
 A description with a single top-level ``workflow`` / ``inputs`` / ``outputs``
 (no ``methods`` list) is accepted as one method.
 """
@@ -227,7 +233,10 @@ def build_crate(desc: dict[str, Any], out_dir: str | Path, base_dir: str | Path 
             graph.append({"@id": fid, "@type": "PropertyValue", "name": "followup",
                           "value": json.dumps(f, ensure_ascii=False), "description": f.get("title", "")})
             followups.append({"@id": fid})
-        for name, value in (m.get("properties") or {}).items():  # e.g. "recrate invocation" (recrate.adapters)
+        props = dict(m.get("properties") or {})
+        if m["workflow"].get("entry"):  # the method is a Python function: module:function (runners.function)
+            props.setdefault("recrate entry", str(m["workflow"]["entry"]))
+        for name, value in props.items():  # e.g. "recrate invocation" (recrate.adapters)
             pid = f"#{prefix}prop-{_slug(name)}"
             graph.append(_pv(pid, name, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list))
                              else value))

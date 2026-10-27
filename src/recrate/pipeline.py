@@ -90,12 +90,12 @@ def execute(spec: MethodSpec, data: Path, mode: str, runs_dir: Path, runner: str
     """Run, compare or check the results, and write the run crate. ``followup``: the follow-up check this run is."""
     if spec.workflow_path is None or not spec.workflow_path.exists():
         raise CrateError("The crate's workflow file is missing.")
-    run = get_runner(runner, spec.workflow_language, spec.workflow_path)
+    run = get_runner(runner, spec.workflow_language, spec.workflow_path, entry=spec.entry)
     from .env import env_python, env_rscript
 
     agent_dir = spec.path.parent
-    run.spec = spec  # an engine runner reads the crate's invocation recipe from it
-    if run.name in {"script", "notebook"}:
+    run.spec = spec  # an engine runner reads the crate's invocation recipe from it; a function runner its entry
+    if run.name in {"script", "notebook", "function"}:
         run.python = env_python(agent_dir)  # the research object's own environment, when built
     if run.name == "script":
         run.rscript = env_rscript(agent_dir)
