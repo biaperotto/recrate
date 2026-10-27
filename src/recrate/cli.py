@@ -120,7 +120,7 @@ def cmd_validate(a) -> int:
 def cmd_serve(a) -> int:
     from .mcp_server import serve
 
-    serve(a.agent, "http" if a.http else "stdio", host=a.host, port=a.port)
+    serve(a.agent, "http" if a.http else "stdio", host=a.host, port=a.port, token=a.token)
     return 0
 
 
@@ -217,7 +217,8 @@ def cmd_build(a) -> int:
 def cmd_install_mcp(a) -> int:
     from .install import describe, install
 
-    result = install(a.agent, client=a.client, name=a.name, check=not a.no_check, transport=a.transport, url=a.url)
+    result = install(a.agent, client=a.client, name=a.name, check=not a.no_check, transport=a.transport, url=a.url,
+                     token=a.token)
     print(describe(result))
     return 0 if result.get("check", {"ok": True})["ok"] else 1
 
@@ -366,7 +367,7 @@ def cmd_hardware(a) -> int:
 def cmd_verify_server(a) -> int:
     from .server_check import check_server, describe
 
-    rep = check_server(a.agent, reproduce=a.reproduce, url=a.url)
+    rep = check_server(a.agent, reproduce=a.reproduce, url=a.url, token=a.token)
     print(json.dumps(rep, indent=2, ensure_ascii=False) if a.json else describe(rep))
     return 0 if rep["ok"] else 1
 
@@ -448,6 +449,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--host", default="127.0.0.1", help="With --http: the address to bind (default localhost; "
                                                         "anything else is reachable from other computers, unauthenticated)")
     s.add_argument("--port", type=int, default=8765, help="With --http: the port (default 8765)")
+    s.add_argument("--token", default=None, help="With --http: require this bearer token on every request (default "
+                                                 "RECRATE_MCP_TOKEN); clients send it as Authorization: Bearer")
     s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("inspect", help="Show the paper agent, or one method's card with --method")
@@ -502,6 +505,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="stdio: the client launches the server itself (default); http: the client connects to a "
                         "server you run with `recrate serve --http` (here or on another computer)")
     s.add_argument("--url", help="With --transport http: the server's URL (default http://127.0.0.1:8765/mcp)")
+    s.add_argument("--token", help="With --transport http: the bearer token the server was started with "
+                                   "(written into the client's config as the Authorization header)")
     s.add_argument("--no-check", action="store_true", help="Don't start (or connect to) the server to check it")
     s.set_defaults(func=cmd_install_mcp)
 
@@ -593,6 +598,7 @@ def build_parser() -> argparse.ArgumentParser:
                                              "with --http, via --url) and check its tools")
     s.add_argument("agent")
     s.add_argument("--url", help="Check a running HTTP server at this URL instead of launching one over stdio")
+    s.add_argument("--token", help="With --url: the bearer token the server requires")
     s.add_argument("--reproduce", action="store_true", help="Also call reproduce for every method")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_verify_server)

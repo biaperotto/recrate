@@ -44,3 +44,29 @@ def test_all_files_identical_reproduces(tmp_path):
     expected.write_text(f"file,sha1\nr.csv,{sha_r}\n")  # matched by base name too
     c = compare_results(produced, expected, {"sha1": 0.0}, sources={"sha1": "test-stated"})
     assert c.reproduced and c.headline().startswith("Reproduced")
+
+
+def test_files_pinned_by_md5_or_by_name_only(tmp_path):
+    """nf-test snapshots pin a file's md5 (``name:md5,<hash>``) and, for files whose content varies, its name only:
+    the first compares by md5, the second is reproduced when the file is produced at all."""
+    out = tmp_path / "out"
+    (out / "fastqc").mkdir(parents=True)
+    (out / "cowpy.txt").write_text("moo\n")
+    (out / "fastqc" / "report.html").write_text("<html>varies</html>")
+    produced = files_table(out, tmp_path / "produced.csv")
+    assert produced.read_text().splitlines()[0] == "file,sha1,md5,size"
+    expected = tmp_path / "expected.csv"
+    expected.write_text(f"file,md5\ncowpy.txt,{hashlib.md5(b'moo' + chr(10).encode()).hexdigest()}\n"
+                        "fastqc/report.html,\nfastqc/missing.html,\n")
+    c = compare_results(produced, expected, {}, sources={"md5": "test-stated"})
+    by = {m.measure: m for m in c.measures}
+    assert by["md5 · cowpy.txt"].within and by["md5 · cowpy.txt"].note == "identical (md5)"
+    assert by["present · fastqc/report.html"].within and "pins its name" in by["present · fastqc/report.html"].note
+    assert c.missing_images == ["fastqc/missing.html"] and c.count == "2/2"
+    assert all(m.source == "test-stated" for m in c.measures)
+    # a compressed file that differs is said with why it can (gzip headers), not as a plain difference
+    (out / "reads.fastq.gz").write_bytes(b"\x1f\x8b" + b"x" * 20)
+    produced = files_table(out, tmp_path / "produced2.csv")
+    expected.write_text("file,md5\nreads.fastq.gz,00000000000000000000000000000000\n")
+    c = compare_results(produced, expected, {}, sources={"md5": "test-stated"})
+    assert not c.measures[0].within and "timestamp" in c.measures[0].note

@@ -50,12 +50,17 @@ def server_name(agent_dir: Path) -> str:
     return f"recrate-{slug or 'paper'}"
 
 
-def server_entry(agent_dir: Path, transport: str = "stdio", url: str | None = None) -> dict[str, Any]:
+def server_entry(agent_dir: Path, transport: str = "stdio", url: str | None = None,
+                 token: str | None = None) -> dict[str, Any]:
     """The launch command, with absolute paths only. ``sys.executable`` is this environment's interpreter (the
     virtualenv's, not the system's), so the server gets the same packages as this command. For ``http``, the URL
-    of a server already running (``recrate serve --http``)."""
+    of a server already running (``recrate serve --http``) and, when it requires one, the bearer token it was
+    started with, sent as the Authorization header."""
     if transport == "http":
-        return {"type": "http", "url": url or DEFAULT_URL}
+        entry: dict[str, Any] = {"type": "http", "url": url or DEFAULT_URL}
+        if token:
+            entry["headers"] = {"Authorization": f"Bearer {token}"}
+        return entry
     return {"command": sys.executable, "args": ["-m", "recrate.mcp_server", str(Path(agent_dir).resolve())]}
 
 
@@ -86,9 +91,9 @@ def write_config(path: Path, name: str, entry: dict[str, Any]) -> Path | None:
 
 def install(agent_dir: str | Path, client: str = "print", name: str | None = None, project_dir: str | Path = ".",
             config_path: str | Path | None = None, check: bool = True, transport: str = "stdio",
-            url: str | None = None) -> dict[str, Any]:
-    """Register the agent with ``client`` and check it starts (``stdio``) or answers at ``url`` (``http``).
-    ``config_path`` overrides where the config is written."""
+            url: str | None = None, token: str | None = None) -> dict[str, Any]:
+    """Register the agent with ``client`` and check it starts (``stdio``) or answers at ``url`` (``http``, with the
+    server's bearer ``token`` when it requires one). ``config_path`` overrides where the config is written."""
     agent_dir = Path(agent_dir).resolve()
     if not (agent_dir / "agent.json").exists():
         raise ValueError(f"{agent_dir} is not a research object folder (no agent.json): run recrate agentify first.")
@@ -97,7 +102,7 @@ def install(agent_dir: str | Path, client: str = "print", name: str | None = Non
     if transport not in TRANSPORTS:
         raise ValueError(f"Unknown transport {transport!r}; use one of {', '.join(TRANSPORTS)}.")
     name = name or server_name(agent_dir)
-    entry = server_entry(agent_dir, transport, url)
+    entry = server_entry(agent_dir, transport, url, token)
     out: dict[str, Any] = {"name": name, "entry": entry, "client": client, "config": None, "backup": None,
                            "transport": transport}
     if client == "desktop":
@@ -114,8 +119,9 @@ def install(agent_dir: str | Path, client: str = "print", name: str | None = Non
         if exe is None:
             raise RuntimeError("The claude command is not installed here. Use --client project (Claude Code and its VS "
                                "Code extension read .mcp.json) or --client desktop.")
-        add = ([exe, "mcp", "add", "-s", "user", "--transport", "http", name, entry["url"]] if transport == "http"
-               else [exe, "mcp", "add", "-s", "user", name, "--", entry["command"], *entry["args"]])
+        add = ([exe, "mcp", "add", "-s", "user", "--transport", "http",
+                *(["--header", f"Authorization: Bearer {token}"] if token else []), name, entry["url"]]
+               if transport == "http" else [exe, "mcp", "add", "-s", "user", name, "--", entry["command"], *entry["args"]])
         proc = subprocess.run(add, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(f"claude mcp add failed: {proc.stderr.strip() or proc.stdout.strip()}")
@@ -128,7 +134,8 @@ def install(agent_dir: str | Path, client: str = "print", name: str | None = Non
     if check:
         from .server_check import check_server
 
-        report = check_server(agent_dir, write=False, timeout=120, url=entry["url"] if transport == "http" else None)
+        report = check_server(agent_dir, write=False, timeout=120, url=entry["url"] if transport == "http" else None,
+                              token=token)
         out["check"] = report
     return out
 

@@ -53,8 +53,9 @@ The older single status (`validated`, `differs`, `failed`, `not validated`) is d
 A tolerance without a source gives no verdict on those numbers. `recrate check-description` rejects a drafted
 tolerance without one, checks quotes against the paper, and compares `paper-rounding` with the decimals printed.
 
-**Output kinds.** Each output declares a `kind`; `scalar`, `table` and `files` (one row per produced file: sha1 exact,
-else size, as a workflow's own test states them, tolerance source `test-stated`) are compared, any other kind leaves
+**Output kinds.** Each output declares a `kind`; `scalar`, `table` and `files` (one row per produced file: the hash
+exact, sha1 as Planemo tests pin files or md5 as nf-test snapshots do, a row without a hash reproduced when the file
+is produced, as a workflow's own test states them, tolerance source `test-stated`) are compared, any other kind leaves
 "same numbers" at "not checked", with the reason.
 
 **Parameters with meaning.** Each parameter may declare a `unit`, a `scaling` rule (`scales_with:<property>^<exp>`,
@@ -100,6 +101,13 @@ computer is usable from any MCP client without cloning anything, as Paper2Agent'
 connecting, and `recrate verify-server --url …` checks a running server the same way. HTTP has no authentication,
 and the server runs the paper's code on its own machine: it binds to localhost unless told otherwise, and warns when
 it is not.
+
+**Runtimes for published pipelines.** A crate's invocation recipe lists what the engine needs (`needs`): the first one
+installed is used, docker, singularity or apptainer first, else conda, mamba or micromamba, with which a Nextflow
+pipeline runs its conda profile (each tool's environment built by Nextflow and cached in `~/.cache/recrate`, so a
+published pipeline runs on a computer without docker). The runtime and its version are recorded as software in the run
+crate. For pipelines too heavy for that, `.github/workflows/workflowhub-pipeline.yml` runs any WorkflowHub pipeline by
+id on a GitHub runner with docker and keeps the run crates as an artifact.
 
 The MCP server mirrors Paper2Agent's three parts:
 

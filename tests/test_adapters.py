@@ -109,14 +109,14 @@ def test_nfcore_readiness_names_the_missing_runtime(tmp_path, monkeypatch):
     m = a.card()["methods"][0]
     spec = a.spec()
     real_which = shutil.which
-    monkeypatch.setattr(shutil, "which", lambda n: None if n in {"docker", "singularity", "apptainer", "conda"}
-                        else real_which(n))
+    monkeypatch.setattr(shutil, "which", lambda n: None if n in {"docker", "singularity", "apptainer", "conda", "mamba",
+                                                                 "micromamba"} else real_which(n))
     why = readiness(spec.workflow_language, spec.workflow_path, invocation=spec.invocation)
     if real_which("nextflow"):
-        assert why and "container runtime" in why
+        assert why and "container runtime" in why and "micromamba" in why
     else:
         assert why
-    assert m["readiness"] in {"blocked", "ready-with-gaps"}
+    assert m["readiness"] in {"blocked", "ready-with-gaps", "reusable"}  # reusable: a runtime is here, no test outputs
 
 
 @pytest.mark.skipif(not shutil.which("nextflow"), reason="needs nextflow")
@@ -133,12 +133,26 @@ def test_nfcore_pipeline_runs_as_its_authors_run_it(tmp_path, monkeypatch):
     assert readiness(spec.workflow_language, spec.workflow_path, invocation=spec.invocation) is None
     out = run_on_data(spec, spec.example_data, a.runs_dir, agent="test")
     rows = (out.run_dir / "outputs" / "results.csv").read_text().splitlines()
-    assert rows[0] == "file,sha1,size" and any(r.startswith("total.txt,") for r in rows)
+    assert rows[0] == "file,sha1,md5,size" and any(r.startswith("total.txt,") for r in rows)
     assert (out.run_dir / "outputs" / "total.txt").read_text().strip() == "12"  # (1+2+3) * factor 2
     meta = json.loads((out.run_dir / "ro-crate-metadata.json").read_text())
     action = next(e for e in meta["@graph"] if e["@id"] == "#run")
     assert "network allowed" in action["description"] or "unsandboxed" in action["description"] \
         or "no sandbox" in action["description"]
+
+
+def test_recipe_drops_empty_parameters_and_writes_booleans_for_the_engine(tmp_path):
+    """A schema parameter without a default (nf-core's `email`) must not reach the pipeline as `--email None`, which
+    its schema validation rejects, and a boolean goes as `true`/`false`."""
+    from recrate.runners.engines import NextflowRunner
+
+    recipe = {"engine": "nextflow", "args": ["nextflow", "run", "{workflow}", "--email", "{param:email}",
+                                             "--skip_trim", "{param:skip_trim}", "--factor", "{param:factor}"],
+              "needs": ["docker"], "inputs": {}}
+    (tmp_path / "work").mkdir()
+    args = NextflowRunner().recipe_command(recipe, Path("main.nf"), tmp_path, tmp_path / "out",
+                                           {"email": None, "skip_trim": False, "factor": 2}, tmp_path / "work")
+    assert "--email" not in args and args[args.index("--skip_trim") + 1] == "false" and args[-1] == "2"
 
 
 def test_plain_nextflow_without_contract_or_recipe_is_blocked(tmp_path):
@@ -212,7 +226,7 @@ def test_cwl_crate_is_read_with_its_parameters_and_test(tmp_path):
     assert spec.output_kind == "files"
     assert ("gawk", "5.3.0") in spec.software  # the SoftwareRequirement hint
     rows = spec.expected_results.read_text().splitlines()
-    assert rows[0] == "file,sha1,size" and rows[1].startswith("total.txt,") and rows[1].endswith(",3")
+    assert rows[0] == "file,sha1,size" and rows[1].startswith("total.txt,") and rows[1].endswith(",3")  # cwltest: sha1
     tol = spec.tolerance_specs()
     assert tol and tol[0].source == "test-stated" and "tests.yml" in tol[0].evidence
 
@@ -227,10 +241,10 @@ def test_cwl_workflow_runs_from_its_test_job(tmp_path):
     out = run_on_data(spec, spec.example_data, a.runs_dir, agent="test")
     assert (out.run_dir / "outputs" / "total.txt").read_text() == "30\n"
     rows = (out.run_dir / "outputs" / "results.csv").read_text().splitlines()
-    assert rows[0] == "file,sha1,size"
+    assert rows[0] == "file,sha1,md5,size"
     produced = next(r for r in rows if r.startswith("total.txt,"))
-    sha = hashlib.sha1(b"30\n").hexdigest()
-    assert produced == f"total.txt,{sha},3"
+    sha, md5 = hashlib.sha1(b"30\n").hexdigest(), hashlib.md5(b"30\n").hexdigest()
+    assert produced == f"total.txt,{sha},{md5},3"
 
 
 # ---- Snakemake ----------------------------------------------------------------------------------------
@@ -300,7 +314,7 @@ def test_snakemake_workflow_runs_from_its_test_config(tmp_path):
     out = run_on_data(spec, spec.example_data, a.runs_dir, agent="test", overrides={"factor": (10, "a test")})
     assert (out.run_dir / "outputs" / "results" / "total.txt").read_text().strip() == "30"
     rows = (out.run_dir / "outputs" / "results.csv").read_text().splitlines()
-    assert rows[0] == "file,sha1,size" and any(r.startswith("results/total.txt,") for r in rows)
+    assert rows[0] == "file,sha1,md5,size" and any(r.startswith("results/total.txt,") for r in rows)
 
 
 def test_mcp_tool_names_the_files_a_recipe_expects(tmp_path):
@@ -313,3 +327,59 @@ def test_mcp_tool_names_the_files_a_recipe_expects(tmp_path):
 
     desc = str(inspect.signature(fn).parameters["data_path"].annotation)
     assert "values.csv (values)" in desc
+
+
+def test_nfcore_snapshot_gives_the_expected_outputs_by_md5(tmp_path):
+    """The pipeline's nf-test snapshot pins its test outputs: md5 for stable files, names for the others. They become
+    the method's expected results (tolerance source test-stated), so a run without docker is still compared."""
+    c = nfcore_crate(tmp_path)
+    (c / "tests").mkdir()
+    (c / "tests" / "default.nf.test.snap").write_text(json.dumps({"-profile test": {"content": [
+        {"TOTAL": {"awk": "5.3.0"}, "Workflow": {"x": "v1"}},
+        ["total.txt", "logs", "logs/run.log"],
+        ["total.txt:md5,2c36f49a5ccef3eacc3cbe5e3a5ed2e8"]]}}))
+    import_crate(c, tmp_path / "crate")
+    spec = load_crate(tmp_path / "crate")
+    assert spec.expected_results and spec.expected_results.exists()
+    rows = spec.expected_results.read_text().splitlines()
+    assert rows[0] == "file,md5" and "total.txt,2c36f49a5ccef3eacc3cbe5e3a5ed2e8" in rows and "logs/run.log," in rows
+    assert "logs," not in rows  # a folder is not a file
+    tol = spec.tolerance_specs()
+    assert tol and tol[0].column == "md5" and tol[0].source == "test-stated" and "default.nf.test.snap" in tol[0].evidence
+    meta = (tmp_path / "crate" / "ro-crate-metadata.json").read_text()
+    assert "nf-test snapshot default.nf.test.snap (1 files by md5, 1 by name)" in meta  # said on the method
+
+
+@pytest.mark.skipif(not shutil.which("nextflow"), reason="needs nextflow")
+def test_nfcore_pipeline_runs_with_micromamba_when_there_is_no_docker(tmp_path, monkeypatch):
+    """No container runtime, but micromamba: the pipeline's conda profile runs with conda.useMicromamba and a cached
+    environment folder (the test pipeline declares no tool, so no environment is built), and the run records the
+    runtime and compares the outputs with the snapshot's md5."""
+    import shutil as _sh
+
+    c = nfcore_crate(tmp_path)
+    (c / "tests").mkdir()
+    (c / "tests" / "default.nf.test.snap").write_text(json.dumps({"-profile test": {"content": [
+        ["total.txt"], ["total.txt:md5," + __import__("hashlib").md5(b"12\n").hexdigest()]]}}))
+    a = agentify(tmp_path / "agent", crate=c, online=False, validate="none")
+    real_which = _sh.which
+    monkeypatch.setattr(_sh, "which", lambda n: None if n in {"docker", "singularity", "apptainer", "conda", "mamba"}
+                        else ("/usr/local/bin/micromamba" if n == "micromamba" else real_which(n)))
+    monkeypatch.setenv("RECRATE_CONDA_CACHE", str(tmp_path / "conda-cache"))
+    spec = a.spec()
+    assert spec.invocation["needs"][-1] == "micromamba"
+    assert readiness(spec.workflow_language, spec.workflow_path, invocation=spec.invocation) is None
+    from recrate.pipeline import reproduce
+
+    out = reproduce(spec, a.runs_dir, agent="test")
+    assert out.ladder["runs"]["status"] == "passed", out.ladder
+    assert out.ladder["numbers"]["status"] == "passed" and "test-stated" in out.ladder["numbers"]["reason"]
+    log = (out.run_dir / "outputs" / "nextflow.log").read_text() if (out.run_dir / "outputs" / "nextflow.log").exists() else ""
+    meta = json.loads((out.run_dir / "ro-crate-metadata.json").read_text())
+    names = {e.get("name") for e in meta["@graph"] if "SoftwareApplication" in str(e.get("@type"))}
+    assert "micromamba" in names, (names, log[-500:])
+    shim = tmp_path / "bin" / "conda"  # the conda stand-in nf-core's start-up check needs, next to the cache
+    assert shim.exists() and "exec micromamba" in shim.read_text()
+    import subprocess as _sp
+
+    assert _sp.run([str(shim), "config", "--show", "channels"], capture_output=True, text=True).stdout.startswith("channels:")

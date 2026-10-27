@@ -9,8 +9,10 @@ The verdict is on dataset-level means, as papers usually report; per-image
 differences are listed for inspection.
 
 Outputs of kind ``files`` (a workflow's test compares its output files, not numbers) are tables with the columns
-``file``, ``sha1`` and optionally ``size``: each published file is reproduced when the produced file has the same
-sha1; a file of the same size but different content, or a missing file, is a difference.
+``file``, a hash (``sha1`` as Planemo tests record it, or ``md5`` as nf-test snapshots do) and optionally ``size``:
+each published file is reproduced when the produced file has the same hash; a file of the same size but different
+content, or a missing file, is a difference. A published row with no hash (a test that pins the file's name but
+not its content) is reproduced when the file is produced at all.
 """
 
 from __future__ import annotations
@@ -114,24 +116,29 @@ class Comparison:
         return "Found a difference from the published result: " + "; ".join(m.describe() for m in self.measures)
 
 
+HASHES = ("sha1", "md5")  # how a workflow's own test pins a file: Planemo tests by sha1, nf-test snapshots by md5
+
+
 def is_files_table(rows: list[dict[str, str]]) -> bool:
-    """A table of files (``file``, ``sha1`` columns): the output kind ``files``."""
-    return bool(rows) and {"file", "sha1"} <= set(rows[0])
+    """A table of files (a ``file`` column and a hash column): the output kind ``files``."""
+    return bool(rows) and "file" in rows[0] and bool(set(HASHES) & set(rows[0]))
 
 
 def files_table(folder: Path, out: Path, skip: set[str] | None = None) -> Path:
-    """Write ``out`` as a files table of everything under ``folder`` (path relative to it, sha1, size)."""
+    """Write ``out`` as a files table of everything under ``folder`` (path relative to it, sha1, md5, size)."""
     rows = []
     for f in sorted(Path(folder).rglob("*")):
         rel = f.relative_to(folder).as_posix()
         if f.is_file() and rel not in (skip or set()) and f != out:
-            rows.append((rel, hashlib.sha1(f.read_bytes()).hexdigest(), f.stat().st_size))
-    out.write_text("file,sha1,size\n" + "".join(f"{r},{h},{z}\n" for r, h, z in rows), encoding="utf-8")
+            data = f.read_bytes()
+            rows.append((rel, hashlib.sha1(data).hexdigest(), hashlib.md5(data).hexdigest(), f.stat().st_size))
+    out.write_text("file,sha1,md5,size\n" + "".join(f"{r},{h},{m},{z}\n" for r, h, m, z in rows), encoding="utf-8")
     return out
 
 
 def compare_files(got: list[dict[str, str]], want: list[dict[str, str]], source: str | None) -> Comparison:
-    """File by file, keyed by the ``file`` column: the same sha1 reproduces it. Each file is one measure, reported 1
+    """File by file, keyed by the ``file`` column: the same hash (sha1 or md5, whichever the published row has)
+    reproduces it; a row with no hash is reproduced when the file is produced. Each file is one measure, reported 1
     (present) and reproduced 1 (same) or 0 (different), with the finding in ``note``."""
     comp = Comparison()
     by_name = {r.get("file"): r for r in got}
@@ -142,20 +149,32 @@ def compare_files(got: list[dict[str, str]], want: list[dict[str, str]], source:
         if g is None:
             comp.missing_images.append(name)
             continue
-        same = bool(w.get("sha1")) and g.get("sha1") == w.get("sha1")
+        alg = next((h for h in HASHES if w.get(h)), None)
+        if alg is None:  # the test pins the file's name, not its content: produced is reproduced
+            note = "present (the test pins its name, not its content)"
+            comp.measures.append(MeasureComparison(f"present · {name}", 1.0, 1.0, 0.0, 0.0, absolute=True,
+                                                   source=source, note=note))
+            comp.per_image.append({"file": name, "present": {"same": True, "note": note}})
+            continue
         size_w, size_g = _num(w.get("size")), _num(g.get("size"))
+        same = bool(g.get(alg)) and g.get(alg) == w.get(alg)
         if same:
-            note = "identical (sha1)"
+            note = f"identical ({alg})"
+        elif not g.get(alg):
+            note = f"no {alg} recorded for the produced file"
         elif size_w is not None and size_w == size_g:
             note = "same size, different content"
         elif size_w is not None and size_g is not None:
             note = f"different content ({size_g:g} vs {size_w:g} bytes)"
         else:
             note = "different content"
-        comp.measures.append(MeasureComparison(f"sha1 · {name}", 1.0, 1.0 if same else 0.0, 0.0 if same else 1.0,
+        if not same and name.lower().endswith((".gz", ".bgz", ".zip")):
+            note += (": a compressed file; its header carries a timestamp and the compressor's version, so equal data "
+                     "can hash differently (the test pinned the compressed file, not its content)")
+        comp.measures.append(MeasureComparison(f"{alg} · {name}", 1.0, 1.0 if same else 0.0, 0.0 if same else 1.0,
                                                0.0, absolute=True, source=source, note=note))
-        comp.per_image.append({"file": name, "sha1": {"reported": w.get("sha1"), "reproduced": g.get("sha1"),
-                                                      "same": same, "note": note}})
+        comp.per_image.append({"file": name, alg: {"reported": w.get(alg), "reproduced": g.get(alg),
+                                                   "same": same, "note": note}})
     return comp
 
 
@@ -175,7 +194,7 @@ def compare_results(produced: Path, expected: Path, tolerances: dict[str, float]
     abs_tolerances = abs_tolerances or {}
     sources = sources or {}
     if is_files_table(want):  # output kind "files": the workflow's test compares files, so does ReCRATE
-        return compare_files(got, want, sources.get("sha1") or sources.get("file"))
+        return compare_files(got, want, sources.get("sha1") or sources.get("md5") or sources.get("file"))
     key = "image" if "image" in want[0] else next(iter(want[0]))
     cols = list(tolerances) or [c for c in want[0] if c != key and c not in abs_tolerances
                                 and _num(want[0][c]) is not None]

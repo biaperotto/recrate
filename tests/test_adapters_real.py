@@ -39,8 +39,8 @@ def test_the_real_nfcore_ampliseq_crate_is_read(tmp_path, monkeypatch):
                                            spec.default_params(), tmp_path / "work")
     assert "--input" not in args and args[args.index("--primer_fwd") + 1] == "GTGYCAGCMGCCGCGGTAA"
     real_which = _sh.which
-    monkeypatch.setattr(_sh, "which", lambda n: None if n in {"docker", "singularity", "apptainer", "conda"}
-                        else real_which(n))
+    monkeypatch.setattr(_sh, "which", lambda n: None if n in {"docker", "singularity", "apptainer", "conda", "mamba",
+                                                                 "micromamba"} else real_which(n))
     why = readiness(spec.workflow_language, spec.workflow_path, invocation=inv)
     assert why and ("container runtime" in why if real_which("nextflow") else True)
 

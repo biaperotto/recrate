@@ -12,8 +12,10 @@ untouched (as galaxy.import_galaxy_crate does), with an **invocation recipe** on
 What the adapters read, by ecosystem:
 
 * **nf-core / Nextflow**: ``nextflow_schema.json`` (parameters, which are files), ``conf/test.config`` (the published
-  test run: local files become example data, remote ones are listed); runs ``nextflow run <wf> -profile test,<runtime>``,
-  which needs a container runtime (docker, singularity, apptainer or conda) and the network.
+  test run: local files become example data, remote ones are listed), ``tests/*.nf.test.snap`` (the nf-test snapshot
+  of what the test produces: md5 per pinned file, the names of the others, as the expected results); runs
+  ``nextflow run <wf> -profile test,<runtime>``, which needs the network and a container runtime (docker, singularity,
+  apptainer) or conda / mamba / micromamba (each tool installed into an environment instead).
 * **CWL**: the crate's ``FormalParameter``s (WorkflowHub writes them from the workflow), else the workflow's ``inputs``;
   a cwltest ``tests.yml`` gives the job (example data) and the expected outputs' checksums and sizes.
 * **Snakemake**: ``config/config.yaml`` with ``workflow/schemas/config.schema.yaml``; ``.test/config/config.yaml`` or
@@ -32,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 LABELS = {"nfcore": "Nextflow", "cwl": "CWL", "snakemake": "Snakemake"}
-RUNTIMES = ["docker", "singularity", "apptainer", "conda"]
+RUNTIMES = ["docker", "singularity", "apptainer", "conda", "mamba", "micromamba"]  # the first installed is used
 NF_SKIP_GROUPS = {"institutional_config_options", "max_job_request_options", "generic_options"}
 NF_FILE_FORMATS = {"file-path", "directory-path", "path", "file-path-pattern"}
 MAX_PARAMS = 40  # value parameters exposed as tool arguments; the rest stay at the workflow's defaults
@@ -121,17 +123,22 @@ def _root_info(src: Path, idx: dict[str, dict[str, Any]], root: dict[str, Any], 
         if n and n not in people:
             people.append(n)
     article = next((i for i, e in idx.items() if "ScholarlyArticle" in _as_list(e.get("@type")) and "://" in i), None)
+    if article:  # some crates take the article's id from a README badge: cut the badge's query and markup off
+        article = re.split(r"[?)\]\s]", article, 1)[0]
     cit = root.get("citation")
     cit = cit.get("@id") if isinstance(cit, dict) else cit
-    doi = hub.get("doi")
+    doi = hub.get("doi")  # the registry's DOI for the workflow itself: what to cite when the crate names no article
     if doi and "://" not in str(doi):
         doi = f"https://doi.org/{doi}"
+    if isinstance(cit, str) and re.search(r"[?)\]\s]", cit):  # a citation scraped from a README badge, with its debris
+        cit = (doi or re.split(r"[?)\]\s]", cit, 1)[0]) if cit.count("doi.org") > 1 or "labelColor" in cit \
+            else re.split(r"[?)\]\s]", cit, 1)[0]
     return {
         "name": re.sub(r"^Research Object Crate for\s+", "", str(root.get("name") or wf.get("name") or src.name)),
         "description": root.get("description") or wf.get("description") or "",
         "license": lic_id,
         "authors": people,
-        "citation": cit or article or doi,
+        "citation": cit or doi or article,
         "datePublished": str(root.get("datePublished") or hub.get("created_at") or "")[:10] or None,
         "isBasedOn": (root.get("isBasedOn") or {}).get("@id") if isinstance(root.get("isBasedOn"), dict)
         else root.get("isBasedOn"),
@@ -261,6 +268,45 @@ def _nf_test_params(config: Path, base: str = NF_TESTDATA_BASE) -> dict[str, str
     return out
 
 
+def _nf_snapshot(src: Path) -> tuple[Path | None, list[tuple[str, str]]]:
+    """What the pipeline's own test says its test profile produces, from its nf-test snapshot
+    (``tests/default.nf.test.snap``, else the first ``*.nf.test.snap``): ``(file, md5)`` for each output whose
+    content the snapshot pins (``name:md5,<hash>`` entries) and ``(file, "")`` for each whose name only is stable.
+    Version tables in the snapshot are not files and are skipped."""
+    tests = src / "tests"
+    snaps = sorted(tests.glob("*.nf.test.snap")) if tests.is_dir() else []
+    snaps.sort(key=lambda p: p.name != "default.nf.test.snap")
+    for snap in snaps:
+        try:
+            data = json.loads(snap.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for case in (v for v in data.values() if isinstance(v, dict) and isinstance(v.get("content"), list)):
+            names: list[str] = []
+            hashes: dict[str, str] = {}
+
+            def walk(x: Any) -> None:
+                if isinstance(x, str):
+                    if ":md5," in x:
+                        n, h = x.split(":md5,", 1)
+                        hashes[Path(n).name] = h.strip()
+                    elif x and not x.startswith("/"):
+                        names.append(x.strip())
+                elif isinstance(x, list):  # dicts are version tables, not files
+                    for y in x:
+                        walk(y)
+
+            walk(case["content"])
+            dirs = {n for n in names if any(o.startswith(n + "/") for o in names)}
+            files = [n for n in dict.fromkeys(names) if n not in dirs]
+            rows = [(f, hashes.get(Path(f).name, "")) for f in files]
+            seen = {Path(f).name for f in files}
+            rows += [(n, h) for n, h in hashes.items() if n not in seen]
+            if rows:
+                return snap, rows
+    return None, []
+
+
 def import_nfcore(src: Path, out_dir: Path) -> dict[str, Any]:
     idx, root = _meta(src)
     wid, wf, _ = _main(idx, root)
@@ -295,11 +341,15 @@ def import_nfcore(src: Path, out_dir: Path) -> dict[str, Any]:
             remote.append(f"{p['name']}: {v}")
         inputs.setdefault(p["name"], f"{p['name']}{'.csv' if p['name'] == 'input' else ''}")
 
-    runtime_note = " It needs a container runtime (docker, singularity, apptainer or conda) and the network."
+    runtime_note = (" It needs the network and a container runtime (docker, singularity or apptainer), or conda, mamba or "
+                    "micromamba, with which each tool is installed into an environment instead.")
+    snap, snap_rows = _nf_snapshot(src)
+    snap_note = (f" Expected outputs: the pipeline's nf-test snapshot {snap.name} ({sum(1 for _, h in snap_rows if h)} "
+                 f"files by md5, {sum(1 for _, h in snap_rows if not h)} by name)." if snap else "")
     description = (wf.get("description") or root.get("description") or info["name"]) + (
         f" Published test run: {test.name}." if test.exists() else " The crate has no test profile.") + (
         f" The test downloads: {'; '.join(remote)}." if remote else "") + (
-        f" {len(hidden)} further parameters stay at the workflow's defaults." if hidden else "") + runtime_note
+        f" {len(hidden)} further parameters stay at the workflow's defaults." if hidden else "") + snap_note + runtime_note
     args = ["nextflow", "-q", "run", "{workflow}", "-work-dir", "{work}/work", "--outdir", "{output_dir}"]
     if test.exists():
         args[4:4] = ["-profile", "test,{runtime}"]
@@ -322,6 +372,14 @@ def import_nfcore(src: Path, out_dir: Path) -> dict[str, Any]:
     work = out_dir.parent / f".{out_dir.name}-import"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
+    expected_csv = None
+    if snap and snap_rows:  # the snapshot is the published result: md5 per pinned file, presence for the others
+        exp = work / "expected.csv"
+        exp.write_text("file,md5\n" + "".join(f"{f},{h}\n" for f, h in snap_rows), encoding="utf-8")
+        expected_csv = str(exp)
+        method["outputs"][0]["tolerances"] = {"md5": {
+            "value": 0.0, "source": "test-stated", "file": f"tests/{snap.name}",
+            "note": "the pipeline's nf-test snapshot pins these outputs' md5, and the names of the others"}}
     if test.exists() and remote and not example:
         # The published test's inputs are fetched by the profile itself when the pipeline runs (nf-core keeps its
         # test data in a separate repository): the published data is then this note, so the test run is
@@ -334,7 +392,7 @@ def import_nfcore(src: Path, out_dir: Path) -> dict[str, Any]:
                         "inputs instead.\n", encoding="utf-8")
         example = {note.name: note}
     try:
-        return _finish(src, out_dir, info, method, "nfcore", example, None, work)
+        return _finish(src, out_dir, info, method, "nfcore", example, expected_csv, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

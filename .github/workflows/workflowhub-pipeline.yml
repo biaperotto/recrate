@@ -1,0 +1,51 @@
+name: WorkflowHub pipeline (docker)
+# A real published pipeline end to end on a runner that has docker: fetch its crate from WorkflowHub, read it through
+# ReCRATE's adapter, run its published test profile as its authors run it (-profile test,docker), compare the outputs
+# with what the test declares, and keep the run crate as an artifact. Start it from the Actions tab (workflow_dispatch).
+on:
+  workflow_dispatch:
+    inputs:
+      workflow:
+        description: "WorkflowHub workflow id (e.g. 964 for nf-core/ampliseq, 1055 for nf-core/demo) or URL"
+        default: "964"
+        required: true
+      who:
+        description: "Recorded in the run crate as the person who ran it"
+        default: "GitHub Actions"
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[mcp]"
+      - uses: nf-core/setup-nextflow@v2
+      - name: Runtimes on this runner
+        run: |
+          docker info > /dev/null && docker --version
+          nextflow -version | head -3
+          recrate hardware
+      - name: Fetch the crate and read it through the adapter
+        run: |
+          W="${{ inputs.workflow }}"
+          case "$W" in http*) URL="$W" ;; *) URL="https://workflowhub.eu/workflows/$W" ;; esac
+          recrate agentify --crate "$URL" --out agents/pipeline
+          recrate inspect agents/pipeline
+      - name: Run the published test profile and compare with what the test declares
+        env:
+          RECRATE_SANDBOX: "off"  # the pipeline's tools run in docker containers; the runner is disposable
+        run: |
+          recrate reproduce agents/pipeline --who "${{ inputs.who }}" \
+            || echo "::warning::the numbers differ or the run failed; the run crate says what (see the artifact)"
+          recrate inspect agents/pipeline
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: run-crates-${{ inputs.workflow }}
+          path: |
+            agents/pipeline/agent.json
+            agents/pipeline/runs
+          if-no-files-found: warn

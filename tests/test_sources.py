@@ -77,3 +77,36 @@ def test_workflowhub_fetch_saves_the_registry_record(tmp_path, monkeypatch):
     rec = json.loads((tmp_path / "workflowhub.json").read_text())
     assert rec["doi"] == attrs["doi"] and rec["version"] == "2" and rec["workflow_class"] == "Galaxy"
     assert rec["topic_annotations"][0]["label"] == "Microscopy" and rec["internals"]["inputs"][0]["id"] == "#main/input_image"
+
+
+def test_agentify_fetches_a_crate_given_as_a_link(tmp_path, monkeypatch):
+    """`recrate agentify --crate https://workflowhub.eu/workflows/771` fetches the crate (here: a fake fetch that
+    copies the nuclei example) and records where it came from; an unknown string is refused with a clear message."""
+    import shutil
+    from pathlib import Path
+
+    import pytest
+
+    import recrate.sources as sources
+    from recrate.agent import agentify
+    from recrate.crate import CrateError
+
+    example = Path(__file__).resolve().parent.parent / "examples" / "workflowhub-nuclei-segmentation" / "crate"
+    if not example.exists():
+        pytest.skip("WorkflowHub example not present")
+
+    def fake_fetch(ref, dest):
+        assert ref.kind == "workflowhub" and ref.id == "771"
+        shutil.copytree(example, Path(dest) / "crate")
+        return sources.Found("crate", "Nuclei (WorkflowHub #771, v2)", Path(dest) / "crate",
+                             "https://workflowhub.eu/workflows/771?version=2", ["Licence: MIT"])
+
+    monkeypatch.setattr(sources, "fetch", fake_fetch)
+    monkeypatch.delenv("RECRATE_OFFLINE", raising=False)  # a link must be fetched: refused when offline
+    with pytest.raises(CrateError, match="offline"):
+        agentify(tmp_path / "agent0", crate="https://workflowhub.eu/workflows/771", validate="none", online=False)
+    a = agentify(tmp_path / "agent", crate="https://workflowhub.eu/workflows/771", validate="none", search_crate=False)
+    assert a.methods and a.manifest["crate_fetched"]["from"].startswith("https://workflowhub.eu/workflows/771")
+    assert (tmp_path / "agent" / "source" / "crate" / "ro-crate-metadata.json").exists()
+    with pytest.raises(CrateError, match="neither a folder"):
+        agentify(tmp_path / "agent2", crate="not-a-crate-anywhere", validate="none")

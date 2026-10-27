@@ -16,6 +16,9 @@ A crate imported by recrate.adapters carries an **invocation recipe** (``recrate
 command line (``nextflow run … -profile test,docker``, ``cwltool … job.json``, ``snakemake --configfile …``), which
 files the data folder must hold, whether the run needs the network and a container runtime, and how to list what
 it produced as ``results.csv``. With a recipe, the runner follows it; without one, the contract above applies.
+The runtime is the first of the recipe's ``needs`` that is installed: docker, singularity or apptainer, else conda,
+mamba or micromamba, with which a Nextflow pipeline runs its conda profile and builds each tool's environment
+(cached in ~/.cache/recrate), so a published pipeline runs on a computer without docker.
 
 The workflow's folder is copied to a scratch folder first, so a render or an engine never writes into the crate.
 Everything the run produced besides ``results.csv`` (the executed notebook, the rendered report, engine logs) is
@@ -39,6 +42,35 @@ from .. import sandbox
 from .base import Runner, RunResult, now_iso
 
 TIMEOUT = 6 * 3600
+# Runtimes a published pipeline's recipe may need. The conda family installs each tool into an environment instead
+# of pulling a container, so a pipeline runs on a computer without docker: nf-core pipelines have ``conda`` and
+# ``mamba`` profiles; micromamba (which ReCRATE already uses for R environments) runs the conda profile with
+# ``conda.useMicromamba``.
+CONDA_RUNTIMES = {"conda": {}, "mamba": {"useMamba": "true"}, "micromamba": {"useMicromamba": "true"}}
+NF_PROFILE = {"micromamba": "conda"}  # the Nextflow profile a runtime selects, when its name differs
+
+
+def conda_stand_in(folder: Path, runtime: str) -> Path:
+    """A ``conda`` command for a run that has only micromamba or mamba: nf-core pipelines call ``conda config --show
+    channels`` at start-up (their channel check) and stop when no ``conda`` exists, although Nextflow builds the
+    environments with micromamba itself. The stand-in answers that one question with the channels nf-core expects
+    and forwards anything else to the real runtime. Returns the folder to put first on PATH."""
+    folder.mkdir(parents=True, exist_ok=True)
+    shim = folder / "conda"
+    shim.write_text("#!/bin/sh\n"
+                    "# ReCRATE: stands in for conda where only micromamba/mamba is installed (see recrate.runners.engines)\n"
+                    'if [ "$1" = "config" ]; then printf "channels:\\n  - conda-forge\\n  - bioconda\\n"; exit 0; fi\n'
+                    f'exec {runtime} "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    return folder
+
+
+def conda_cache_dir() -> Path:
+    """Where Nextflow keeps the environments it builds (``RECRATE_CONDA_CACHE``, default ~/.cache/recrate/nextflow-conda):
+    a tool cache, so the sandbox lets the run write there, and the environments outlive the run."""
+    d = Path(os.environ.get("RECRATE_CONDA_CACHE") or Path.home() / ".cache" / "recrate" / "nextflow-conda")
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _version(cmd: list[str]) -> str:
@@ -55,6 +87,8 @@ class EngineRunner(Runner):
 
     tool = ""  # the command that must be installed
     env_vars: dict[str, str] = {}  # e.g. which R a Quarto document runs with
+    run_env: dict[str, str] = {}  # set per run by a recipe (e.g. where micromamba keeps its packages)
+    runtime: str | None = None  # the container or conda runtime a recipe chose for this run
     software = ""  # its name, as recorded
     version_args: list[str] = ["--version"]
     install_hint = ""
@@ -81,6 +115,7 @@ class EngineRunner(Runner):
         output_dir.mkdir(parents=True, exist_ok=True)
         recipe = self.recipe()
         network = recipe.get("network") if recipe else None
+        self.run_env, self.runtime = {}, None
         with tempfile.TemporaryDirectory(prefix=f"recrate-{self.name}-") as tmp:
             work = Path(tmp) / "workflow"
             root = Path(workflow).parent
@@ -96,12 +131,18 @@ class EngineRunner(Runner):
             confined, extra_env = sandbox.wrap(cmd, [work, output_dir], network=network)  # writes only to these
             started = now_iso()
             proc = subprocess.run(confined, cwd=work, capture_output=True, text=True, timeout=TIMEOUT,
-                                  env=sandbox.environment({**self.env_vars, **extra_env, "RECRATE_OUTPUT_DIR": str(output_dir)}))
+                                  env=sandbox.environment({**self.env_vars, **extra_env, **self.run_env,
+                                                           "RECRATE_OUTPUT_DIR": str(output_dir)}))
             ended = now_iso()
             (output_dir / f"{self.name}.log").write_text((proc.stdout + "\n" + proc.stderr)[-200000:], encoding="utf-8")
             if proc.returncode != 0:
-                raise RuntimeError(f"{Path(workflow).name} failed in {self.software} (exit {proc.returncode}):\n"
-                                   f"{(proc.stderr or proc.stdout)[-2000:]}")
+                detail = (proc.stderr or proc.stdout)[-2000:]
+                engine_log = work / ".nextflow.log"  # Nextflow's own log says what failed (-q keeps stderr short)
+                if engine_log.exists():
+                    lines = engine_log.read_text(errors="replace").splitlines()
+                    first = next((i for i, ln in enumerate(lines) if "ERROR" in ln), None)
+                    detail += "\n" + "\n".join(lines[first:first + 25] if first is not None else lines[-25:])
+                raise RuntimeError(f"{Path(workflow).name} failed in {self.software} (exit {proc.returncode}):\n{detail}")
             if recipe and recipe.get("collect") == "new-files":  # what the engine left in its own folder (Snakemake)
                 for p in sorted(work.rglob("*")):
                     rel = p.relative_to(work)
@@ -117,24 +158,31 @@ class EngineRunner(Runner):
         if not results.exists():
             raise RuntimeError(f"{Path(workflow).name} ran in {self.software} but wrote no results.csv in output_dir.")
         extra = [f for f in sorted(output_dir.rglob("*")) if f.is_file() and f.name != "results.csv"]
+        software = [(self.software, _version([self.tool, *self.version_args]))]
+        if self.runtime:  # the container or conda runtime the recipe ran with, as provenance
+            software.append((self.runtime, _version([self.runtime, "--version"])))
         return RunResult(results_csv=results, masks_dir=None, started=started, ended=ended, params=dict(params),
-                         software=[(self.software, _version([self.tool, *self.version_args]))],
-                         log=proc.stdout[-4000:], extra_outputs=extra, sandbox=sandbox.describe(network))
+                         software=software, log=proc.stdout[-4000:], extra_outputs=extra,
+                         sandbox=sandbox.describe(network))
 
     def recipe_command(self, recipe: dict[str, Any], workflow: Path, input_dir: Path, output_dir: Path,
                        params: dict[str, Any], work: Path) -> list[str]:
         """The recipe's command line with its placeholders filled; writes the job or config file it names."""
         inputs: dict[str, str] = recipe.get("inputs") or {}
         runtime = next((r for r in recipe.get("needs") or [] if shutil.which(r)), (recipe.get("needs") or ["docker"])[0])
+        self.runtime = runtime
         fixed = {"{workflow}": str(workflow), "{input_dir}": str(input_dir), "{output_dir}": str(output_dir),
-                 "{work}": str(work), "{runtime}": runtime}
+                 "{work}": str(work), "{runtime}": NF_PROFILE.get(runtime, runtime)}
 
         def fill(a: str) -> str | None:
             for k, v in fixed.items():
                 a = a.replace(k, v)
             m = re.fullmatch(r"\{param:(.+)}", a)
-            if m:
-                return str(params.get(m.group(1), ""))
+            if m:  # a parameter with no value is left to the workflow's own default; booleans as the engine reads them
+                v = params.get(m.group(1))
+                if v is None or v == "":
+                    return None
+                return str(v).lower() if isinstance(v, bool) else str(v)
             m = re.fullmatch(r"\{input:(.+)}", a)
             if m:
                 f = input_dir / inputs.get(m.group(1), m.group(1))
@@ -149,6 +197,20 @@ class EngineRunner(Runner):
                     args.pop()
                 continue
             args.append(v)
+        if recipe.get("engine") == "nextflow" and runtime in CONDA_RUNTIMES:
+            # no container runtime here: Nextflow builds each tool's conda environment instead (the pipeline's
+            # conda profile), with micromamba or mamba when that is what is installed, cached across runs
+            cache = conda_cache_dir()
+            opts = {"enabled": "true", "cacheDir": f"'{cache}'", **CONDA_RUNTIMES[runtime]}
+            cfg = work / "recrate-nextflow.config"
+            work.mkdir(parents=True, exist_ok=True)
+            cfg.write_text("conda {\n" + "".join(f"    {k} = {v}\n" for k, v in opts.items()) + "}\n", encoding="utf-8")
+            at = args.index("run") + 1 if "run" in args else 1
+            args[at:at] = ["-c", str(cfg)]
+            self.run_env = {"NXF_CONDA_CACHEDIR": str(cache), "MAMBA_ROOT_PREFIX": str(cache.parent / "micromamba"),
+                            "CONDA_PKGS_DIRS": str(cache.parent / "conda-pkgs")}
+            if runtime != "conda" and not shutil.which("conda"):
+                self.run_env["PATH"] = f"{conda_stand_in(cache.parent / 'bin', runtime)}{os.pathsep}{os.environ.get('PATH', '')}"
         if recipe.get("engine") == "cwl":
             job: dict[str, Any] = dict(recipe.get("job_extra") or {})
             for name, f in inputs.items():
@@ -188,9 +250,10 @@ class EngineRunner(Runner):
         rows = []
         for f in sorted(output_dir.rglob("*")):
             if f.is_file() and f.name not in {"results.csv", f"{self.name}.log"}:
-                rows.append(f"{f.relative_to(output_dir).as_posix()},{hashlib.sha1(f.read_bytes()).hexdigest()},"
-                            f"{f.stat().st_size}\n")
-        (output_dir / "results.csv").write_text("file,sha1,size\n" + "".join(rows), encoding="utf-8")
+                data = f.read_bytes()  # sha1 as Planemo tests pin files, md5 as nf-test snapshots do
+                rows.append(f"{f.relative_to(output_dir).as_posix()},{hashlib.sha1(data).hexdigest()},"
+                            f"{hashlib.md5(data).hexdigest()},{f.stat().st_size}\n")
+        (output_dir / "results.csv").write_text("file,sha1,md5,size\n" + "".join(rows), encoding="utf-8")
 
     def collect(self, work: Path, output_dir: Path) -> None:
         """Bring back what the engine left in the scratch folder (e.g. a rendered report). Default: nothing."""

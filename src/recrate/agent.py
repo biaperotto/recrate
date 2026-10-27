@@ -297,6 +297,22 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     if paper and not crate and online and search_crate:
         crate = _find_published_crate(Path(paper), out, manifest, paper_doi, repo)
 
+    # A crate given as a link or identifier (a WorkflowHub or Zenodo link, a DOI): fetched into the agent folder, as
+    # the app does, so `recrate agentify --crate https://workflowhub.eu/workflows/1055` works from the command line
+    if crate and not Path(crate).exists():
+        from .sources import fetch, identify
+
+        refs = [r for r in identify(str(crate)) if r.kind in {"workflowhub", "zenodo", "doi"}]
+        if not refs:
+            raise CrateError(f"{crate} is neither a folder, a zip nor a WorkflowHub or Zenodo link (or DOI).")
+        if not online:
+            raise CrateError(f"{crate} must be fetched, and this run is offline.")
+        found = fetch(refs[0], out / "source")
+        if found.kind != "crate" or not found.path:
+            raise CrateError(f"{crate} is not an RO-Crate: {found.label}.")
+        manifest["crate_fetched"] = {"from": found.url or str(crate), "label": found.label, "notes": found.notes}
+        crate = found.path
+
     # A Galaxy Workflow RO-Crate (e.g. from WorkflowHub): read its method from the workflow and its tests
     galaxy_src = None
     if crate:

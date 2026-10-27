@@ -38,14 +38,19 @@ def _text(result) -> str:
     return "\n".join(getattr(c, "text", "") for c in result.content if getattr(c, "type", "") == "text")
 
 
-def _transport(agent_dir: Path, url: str | None):
-    """The client transport: the server launched over stdio from its own folder, or a connection to ``url``."""
+def _transport(agent_dir: Path, url: str | None, token: str | None = None):
+    """The client transport: the server launched over stdio from its own folder, or a connection to ``url`` (with
+    ``Authorization: Bearer <token>`` when the server requires one)."""
     if url:
+        headers = {"Authorization": f"Bearer {token}"} if token else None
         try:
-            from mcp.client.streamable_http import streamable_http_client as http_client  # MCP SDK 2.x
+            from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client  # MCP SDK 2.x
+
+            return streamable_http_client(url, http_client=create_mcp_http_client(headers=headers) if headers else None)
         except ImportError:
-            from mcp.client.streamable_http import streamablehttp_client as http_client  # MCP SDK 1.x
-        return http_client(url)
+            from mcp.client.streamable_http import streamablehttp_client  # MCP SDK 1.x
+
+            return streamablehttp_client(url, headers=headers)
     from mcp import StdioServerParameters
     from mcp.client.stdio import stdio_client
 
@@ -53,7 +58,8 @@ def _transport(agent_dir: Path, url: str | None):
                                               cwd=str(agent_dir)))
 
 
-async def _check(agent_dir: Path, reproduce: bool, timeout: float, url: str | None = None) -> dict[str, Any]:
+async def _check(agent_dir: Path, reproduce: bool, timeout: float, url: str | None = None,
+                 token: str | None = None) -> dict[str, Any]:
     from mcp import ClientSession
 
     from .agent import PaperAgent
@@ -64,7 +70,7 @@ async def _check(agent_dir: Path, reproduce: bool, timeout: float, url: str | No
     def check(name: str, ok: bool, detail: str = "") -> None:
         checks.append({"check": name, "ok": bool(ok), "detail": detail})
 
-    async with _transport(agent_dir, url) as streams:  # stdio: (read, write); HTTP 1.x adds a session-id getter
+    async with _transport(agent_dir, url, token) as streams:  # stdio: (read, write); HTTP 1.x adds a session-id getter
         async with ClientSession(streams[0], streams[1]) as session:
             info = await asyncio.wait_for(session.initialize(), timeout)
             check("launch", True, f"{_get(info, 'server_info', 'serverInfo').name} over "
@@ -106,11 +112,12 @@ async def _check(agent_dir: Path, reproduce: bool, timeout: float, url: str | No
 
 
 def check_server(agent_dir: str | Path, reproduce: bool = False, timeout: float = 600, write: bool = True,
-                 url: str | None = None) -> dict:
-    """``url``: check a server already running over streamable HTTP there, instead of launching one over stdio."""
+                 url: str | None = None, token: str | None = None) -> dict:
+    """``url``: check a server already running over streamable HTTP there, instead of launching one over stdio;
+    ``token``: the bearer token it requires, if any."""
     agent_dir = Path(agent_dir).resolve()
     try:
-        report = asyncio.run(_check(agent_dir, reproduce, timeout, url))
+        report = asyncio.run(_check(agent_dir, reproduce, timeout, url, token))
     except Exception as e:  # noqa: BLE001 - the server failing to start (or answer) is the result
         cause = e
         while getattr(cause, "exceptions", None):  # task groups wrap the real error

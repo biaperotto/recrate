@@ -25,7 +25,21 @@ https://doi.org/10.5281/zenodo.10620146.
 """
 
 
+def test_a_readme_badge_does_not_garble_the_doi(tmp_path):
+    """nf-core READMEs carry the DOI in a shields.io badge whose path glues a colour and a query onto it; the DOI in
+    the badge's link is the one to keep."""
+    from recrate.paper import read_paper
+
+    md = tmp_path / "README.md"
+    md.write_text("# nf-core/demo\n\n[![DOI](https://img.shields.io/badge/DOI-10.5281/zenodo.12192442-1073c8"
+                  "?labelColor=000000)](https://doi.org/10.5281/zenodo.12192442)\n\nA demo pipeline.\n")
+    p = read_paper(md)
+    assert p.doi == "10.5281/zenodo.12192442", p.dois
+    assert all("labelColor" not in d and "](" not in d for d in p.dois)
+
+
 def test_links_are_cleaned_of_what_pdf_text_glues_on():
+    assert _clean_link("10.1016/S0140-6736(20)30183-5)") == "10.1016/S0140-6736(20)30183-5"  # a DOI with parentheses
     assert _clean_link("10.64898/2026.04.07.26350296doi:") == "10.64898/2026.04.07.26350296"
     assert _clean_link("10.1177/2515245919858428.August") == "10.1177/2515245919858428"
     assert _clean_link("https://github.com/ropensci/rplos.20") == "https://github.com/ropensci/rplos"

@@ -30,7 +30,8 @@ from pathlib import Path
 OFF = {"off", "0", "no", "false", "unsandboxed"}
 # Tool caches (Quarto's compiled styles, Snakemake, Deno...): writable, as they hold nothing of yours
 # (~/.keras: Keras ignores its model cache unless it can write there)
-CACHES = [str(Path.home() / "Library" / "Caches"), str(Path.home() / ".cache"), str(Path.home() / ".keras")]
+CACHES = [str(Path.home() / "Library" / "Caches"), str(Path.home() / ".cache"), str(Path.home() / ".keras"),
+          str(Path.home() / ".nextflow")]  # ~/.nextflow: Nextflow's framework and plugins (fetched on first use)
 
 
 class SandboxUnavailable(RuntimeError):

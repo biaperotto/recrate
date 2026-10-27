@@ -159,3 +159,49 @@ def test_serve_binds_to_localhost_by_default_and_warns_beyond_it(tmp_path, monke
     monkeypatch.setattr(m, "build_server", lambda target: fake1)
     assert main(["serve", str(a.path), "--http", "--port", "9"]) == 0
     assert fake1.calls == [("streamable-http", {}, "127.0.0.1", 9, "/mcp")]
+
+
+@pytest.fixture()
+def served_with_token(tmp_path):
+    """The agent served over HTTP behind a bearer token (``--token``)."""
+    a = agentify(tmp_path / "agent", crate=EXAMPLE / "crate", validate="none")
+    port = _free_port()
+    proc = subprocess.Popen([sys.executable, "-m", "recrate.mcp_server", str(a.path), "--http", "--port", str(port),
+                             "--token", "s3cret"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            cwd=str(a.path))
+    try:
+        _wait_for(port, proc)
+        yield a, f"http://127.0.0.1:{port}/mcp"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def test_a_token_is_required_when_the_server_asks_for_one(served_with_token, tmp_path):
+    """Without the token the server answers 401 and the check fails; with it, the check and the registration work,
+    and the client's config carries it as the Authorization header."""
+    import urllib.error
+    import urllib.request
+
+    from recrate.install import install
+    from recrate.server_check import check_server
+
+    a, url = served_with_token
+    with pytest.raises(urllib.error.HTTPError) as err:  # no token: 401 before anything MCP happens
+        urllib.request.urlopen(urllib.request.Request(url, data=b"{}", headers={"Content-Type": "application/json"}),
+                               timeout=10)
+    assert err.value.code == 401 and err.value.headers.get("WWW-Authenticate") == "Bearer"
+    rep = check_server(a.path, url=url, write=False, timeout=30)
+    assert not rep["ok"]
+    rep = check_server(a.path, url=url, token="s3cret", write=False)
+    assert rep["ok"]
+    rep = check_server(a.path, url=url, token="wrong", write=False, timeout=30)
+    assert not rep["ok"]
+    cfg = tmp_path / "claude_desktop_config.json"
+    result = install(a.path, client="desktop", config_path=cfg, transport="http", url=url, token="s3cret")
+    assert result["check"]["ok"]
+    entry = json.loads(cfg.read_text())["mcpServers"][result["name"]]
+    assert entry == {"type": "http", "url": url, "headers": {"Authorization": "Bearer s3cret"}}
