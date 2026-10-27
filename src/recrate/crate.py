@@ -20,7 +20,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .model import Tolerance
 
 METADATA_FILE = "ro-crate-metadata.json"
 LEGACY_SCALING = {"inverse_pixel_size": ("pixel size", -1.0), "inverse_pixel_area": ("pixel size", -2.0)}
@@ -147,7 +150,7 @@ class MethodSpec:
         """The kind of the main output (model.OUTPUT_KINDS); a results table unless the crate says otherwise."""
         return str(self.outputs[0].prop("kind") or "table") if self.outputs else "table"
 
-    def tolerance_specs(self) -> list["Tolerance"]:
+    def tolerance_specs(self) -> list[Tolerance]:
         """Every tolerance with its source (``tolerance_source:<column>``): see model.TOLERANCE_SOURCES."""
         from .model import Tolerance
 

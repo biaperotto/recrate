@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
-import shutil
 import zipfile
 from pathlib import Path
 
-import numpy as np
 import tifffile
 
 from recrate.figures import Panel, comparison_chart, panel_figure

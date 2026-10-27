@@ -31,13 +31,21 @@ def test_export_the_crate(tmp_path):
     how = next(e for e in meta["@graph"] if e["@id"] == "#how-this-crate-was-made")
     assert how["@type"] == "CreateAction" and "Galaxy Workflow RO-Crate" in how["description"]
     assert (a.crate_dir / "ro-crate-metadata.json").read_text() == before  # the research object is unchanged
-    if Path(VALIDATOR).exists():
-        out = tmp_path / "v.json"
-        subprocess.run([VALIDATOR, "validate", "-p", "ro-crate-1.1", "--no-paging", "-f", "json", "-o", str(out),
-                        str(tmp_path / "x")], capture_output=True, timeout=600)
-        assert json.loads(out.read_text())["passed"]
 
 
+@pytest.mark.network
+@pytest.mark.skipif(not Path(VALIDATOR).exists(), reason="needs rocrate-validator (pip install roc-validator)")
+def test_the_exported_crate_validates(tmp_path):
+    a = agentify(tmp_path / "agent", crate=EXAMPLE / "crate", validate="none")
+    with zipfile.ZipFile(export_crate(a.path, tmp_path / "out.zip")) as f:
+        f.extractall(tmp_path / "x")
+    out = tmp_path / "v.json"
+    subprocess.run([VALIDATOR, "validate", "-p", "ro-crate-1.1", "--no-paging", "-f", "json", "-o", str(out),
+                    str(tmp_path / "x")], capture_output=True, timeout=600)
+    assert json.loads(out.read_text())["passed"]
+
+
+@pytest.mark.network
 @pytest.mark.skipif(not Path(VALIDATOR).exists(), reason="needs rocrate-validator (pip install roc-validator)")
 def test_the_crate_is_validated_when_created_and_again_when_it_changes(tmp_path, monkeypatch):
     from recrate.export import crate_validation

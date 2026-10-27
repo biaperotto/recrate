@@ -547,7 +547,7 @@ class ClaudeChat:
                 model=self.model,
                 max_tokens=16000,
                 system=self.system,
-                tools=tools_for(agent),
+                tools=tools_for(self.agent),
                 messages=self.messages,
                 output_config={"effort": "medium"},
                 betas=["server-side-fallback-2026-07-01"],

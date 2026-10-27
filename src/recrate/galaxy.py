@@ -30,7 +30,7 @@ import numpy as np
 import tifffile
 
 from . import __version__
-from .runners.base import RunResult, Runner, now_iso
+from .runners.base import Runner, RunResult, now_iso
 
 GIA = "https://github.com/BMCV/galaxy-image-analysis"
 

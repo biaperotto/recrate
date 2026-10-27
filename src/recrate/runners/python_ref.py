@@ -23,7 +23,7 @@ from skimage.measure import label, regionprops
 
 from .. import __version__
 from ..profiles.bioimaging import list_images, read_image_metadata
-from .base import RunResult, Runner, now_iso
+from .base import Runner, RunResult, now_iso
 
 SUPPORTED_WORKFLOWS = {"count_nuclei.ijm"}
 

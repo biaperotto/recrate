@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from recrate.agent import own_doi
 from recrate.crate_search import search_crates
 from recrate.paper import Paper
-from recrate.agent import own_doi
 
 DOI = "10.1093/nargab/lqad104"
 

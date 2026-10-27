@@ -166,10 +166,9 @@ def runs_own_code(language: str | None) -> bool:
 
 def diagnose(spec: MethodSpec) -> tuple[str, list[str]]:
     """Readiness before anything runs: ``blocked`` (with why), ``ready-with-gaps`` (with the gaps) or ``ready``."""
+    from .env import env_python, env_rscript
     from .profiles import get_profile
     from .runners import readiness
-
-    from .env import env_python, env_rscript
 
     blocked = readiness(spec.workflow_language, spec.workflow_path, env_python(spec.path.parent),
                         env_rscript(spec.path.parent))

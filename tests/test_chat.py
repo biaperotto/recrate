@@ -93,10 +93,9 @@ def test_claude_code_engine_streams_tools_and_keeps_the_session(tmp_path):
     import stat
     import sys
 
-    from recrate.agent import PaperAgent
+    from recrate.agent import PaperAgent, agentify
     from recrate.chat import ChatTools, ClaudeCodeChat
     from recrate.demo import make_demo
-    from recrate.agent import agentify
 
     demo = make_demo(tmp_path / "demo")
     agent = agentify(tmp_path / "agent", paper=demo["paper"], crate=demo["crate"], validate="none")

@@ -23,7 +23,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .base import RunResult, Runner, now_iso
+from .. import sandbox
+from .base import Runner, RunResult, now_iso
 
 # suffix -> (software name, environment variable, default command, how to print its version)
 LANGUAGES = {
@@ -67,8 +68,9 @@ class ScriptRunner(Runner):
             cmd += [f"--{k}", str(v)]
         if channel:
             cmd += ["--channel", str(channel)]
+        confined, extra_env = sandbox.wrap(cmd, [output_dir])  # the paper's code: no network, writes only here
         started = now_iso()
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        proc = subprocess.run(confined, capture_output=True, text=True, timeout=3600, env={**os.environ, **extra_env})
         ended = now_iso()
         if proc.returncode != 0:
             raise RuntimeError(f"{Path(workflow).name} failed (exit {proc.returncode}):\n{proc.stderr[-2000:]}")
@@ -103,4 +105,5 @@ class ScriptRunner(Runner):
             params=dict(params),
             log=proc.stdout[-4000:],
             extra_outputs=extra,
+            sandbox=sandbox.describe(),
         )

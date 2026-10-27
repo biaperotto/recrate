@@ -3,8 +3,6 @@ text PDFs glue onto them, and the code read without running it (languages, inter
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from recrate.environment import detect_r_packages
 from recrate.links import classify, survey_code
 from recrate.paper import Paper, _clean_link

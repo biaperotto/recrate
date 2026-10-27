@@ -22,8 +22,8 @@ from recrate.runcrate import review_conclusion
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "workflowhub-nuclei-segmentation"
 VALIDATOR = shutil.which("rocrate-validator") or str(Path(sys.executable).parent / "rocrate-validator")
-pytestmark = pytest.mark.skipif(not Path(VALIDATOR).exists() or not (EXAMPLE / "crate").exists(),
-                                reason="needs rocrate-validator (pip install roc-validator) and the example crate")
+pytestmark = [pytest.mark.network, pytest.mark.skipif(not Path(VALIDATOR).exists() or not (EXAMPLE / "crate").exists(),
+                                reason="needs rocrate-validator (pip install roc-validator) and the example crate")]
 
 
 def validate(run_dir: Path, out: Path) -> dict:

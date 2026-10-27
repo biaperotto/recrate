@@ -41,7 +41,7 @@ try:  # MCP Python SDK 2.x
 except ImportError:  # MCP Python SDK 1.x
     from mcp.server.fastmcp import FastMCP, Image
 
-from .agent import PaperAgent, review_conclusion, revalidate
+from .agent import PaperAgent, revalidate, review_conclusion
 from .draft import build_crate
 from .methods import methods_paragraph
 from .pipeline import check_inputs, reproduce, run_on_data
@@ -305,9 +305,8 @@ def build_server(agent_dir: str | Path) -> FastMCP:
     @mcp.tool(description="Run one follow-up check (by id, from followup_checks) on the paper's data. Writes its "
                           "own run crate, linked to the reproduction it follows up.")
     def run_followup_check(method: str, check: str, who: str = "anonymous") -> dict[str, Any]:
-        from .followup import run_followup
-
         from .crate import CrateError
+        from .followup import run_followup
 
         try:
             out = run_followup(agent.spec(method), check, _runs(), who=who, runner=RUNNER)

@@ -29,19 +29,36 @@ import pandas as pd
 import streamlit as st
 
 from recrate.agent import PaperAgent, agentify, revalidate, review_conclusion, runs_own_code
-from recrate.chat import (LOCAL_URL, ChatTools, ClaudeChat, ClaudeCodeChat, LocalChat, OpenAICompatChat,
-                          claude_available, claude_code_binary, follow_up_questions, local_models,
-                          suggested_questions)
+from recrate.chat import (
+    LOCAL_URL,
+    ChatTools,
+    ClaudeChat,
+    ClaudeCodeChat,
+    LocalChat,
+    OpenAICompatChat,
+    claude_available,
+    claude_code_binary,
+    follow_up_questions,
+    local_models,
+    suggested_questions,
+)
 from recrate.crate import CrateError
 from recrate.figures import Panel, comparison_chart, panel_figure, pixel_size_um
 from recrate.paper import passages
 from recrate.pipeline import check_inputs, run_on_data
 from recrate.profiles.bioimaging import list_images
-from recrate.record import find_runs, headline, publish_back, summarise_record
+from recrate.record import find_runs
 from recrate.runcrate import approve, image_reviews, review_image, run_story, summarise_run
 from recrate.sources import fetch, fetch_dataset, from_upload, identify
-from recrate.workspace import (comparable_with_paper, export_bundle, flag_images, methods_markdown, numeric_columns,
-                               parameter_sources, read_rows, references_bib, references_csl, whatif)
+from recrate.workspace import (
+    comparable_with_paper,
+    flag_images,
+    methods_markdown,
+    numeric_columns,
+    parameter_sources,
+    read_rows,
+    whatif,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 IMG = ROOT / "docs" / "img"
@@ -1118,7 +1135,7 @@ def verdict(agent: PaperAgent) -> None:
 
 
 def method_card(agent: PaperAgent, m, runs: list[dict], data_dir: Path) -> None:
-    from recrate.figures import comparison_from_run, make_run_figure
+    from recrate.figures import comparison_from_run
     from recrate.model import STEPS
 
     spec = agent.spec(m.id)
@@ -1548,7 +1565,8 @@ def reuse_section(agent: PaperAgent, runs: list[dict], data_dir: Path, files: li
             if missing:
                 st.warning(f"Give a reason for: {', '.join(missing)}.")
             run = latest(runs, m.name, "reuse")
-            if run and st.toggle("Show the latest run on new data", key=f"showrun-{m.id}",
+            # keyed by the run: a new run gets a new switch, open, since Streamlit applies `value` only once
+            if run and st.toggle("Show the latest run on new data", key=f"showrun-{m.id}-{run.name}",
                                  value=ss.get("run_name") == run.name):
                 results_tab(agent, run, data_dir)
     if missing_px:

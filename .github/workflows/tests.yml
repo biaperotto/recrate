@@ -11,7 +11,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev,mcp]"
+      - run: pip install -e ".[dev,mcp]" ruff mypy
+      - name: Lint (ruff)
+        run: ruff check src app tests
+      - name: Types (mypy, the modules listed in pyproject.toml)
+        run: mypy
+      - name: Sandbox for the papers' code (bubblewrap)
+        run: |
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          if bwrap --ro-bind / / --dev /dev --unshare-net true; then echo "bubblewrap works"; else
+            echo "::warning::bubblewrap can't run on this runner: the tests run the papers' code unsandboxed"
+            echo "RECRATE_SANDBOX=off" >> "$GITHUB_ENV"; fi
       - name: Make the half-resolution reuse example
         run: python examples/workflowhub-nuclei-segmentation/make_half_resolution.py
       - name: Validate run crates (rocrate-validator, Workflow Run Crate 0.5)

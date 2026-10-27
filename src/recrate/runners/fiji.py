@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .base import RunResult, Runner, now_iso
+from .base import Runner, RunResult, now_iso
 
 _IJ = None  # PyImageJ gateway; starting the JVM is slow, so do it once
 

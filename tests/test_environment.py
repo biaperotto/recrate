@@ -5,8 +5,14 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from recrate.environment import (date_from_arxiv, date_from_text, detect_from_repo, detect_software,
-                                 environment_for, publication_date)
+from recrate.environment import (
+    date_from_arxiv,
+    date_from_text,
+    detect_from_repo,
+    detect_software,
+    environment_for,
+    publication_date,
+)
 from recrate.paper import Paper
 from recrate.paper_crate import build_paper_crate
 

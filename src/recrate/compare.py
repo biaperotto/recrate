@@ -12,8 +12,8 @@ differences are listed for inspection.
 from __future__ import annotations
 
 import csv
-from decimal import ROUND_HALF_UP, Decimal
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from statistics import mean
 from typing import Any

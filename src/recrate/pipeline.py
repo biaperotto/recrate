@@ -25,7 +25,6 @@ from .profiles import CheckReport, get_profile
 from .runcrate import write_run_crate
 from .runners import get_runner
 
-
 OVERLAY_LIMIT = 48  # overlays written per run, for the per-image review
 
 

@@ -43,6 +43,7 @@ An agent is only as trustworthy as the rules its tools follow. ReCRATE enforces 
 * **Verdicts are graded, and a person has the last word.** "Ready" never means "reproduced"; the ladder advances only on evidence from a run. *Same conclusion* is a person's call: the app and CLI require a name, and over MCP (which the app's Claude chat also uses) the tool records only a verdict the user gives in the conversation.
 * **Nothing changes silently.** A parameter is adjusted only by a declared rule (`scales_with:<data property>^<exponent>`), and any other change needs a reason. Changing what is compared, such as grouping by island instead of species, is recorded as a different question, never as a reproduction.
 * **The record is append-only.** Differing runs, failed runs and follow-up checks stay. Nothing replaces the first result.
+* **A paper's code runs sandboxed.** The authors' scripts, notebooks and Quarto documents run in the operating system's sandbox (`sandbox-exec` on macOS, `bubblewrap` on Linux): no network, and writes only to the run's own folders, temporary files and tool caches. Without a sandbox, ReCRATE refuses to run the code; running it unsandboxed is an explicit choice (`recrate --unsandboxed …` or `RECRATE_SANDBOX=off`), and every run crate records which. A method that needs the network at run time is allowed it with `RECRATE_SANDBOX_NETWORK=1`.
 * **The core is field-independent.** Field-specific knowledge lives in profiles that read properties from your files. Three exist today: `generic` (files, formats, table columns), `bioimaging` (calibration, channels, bit depth, object size) and `timeseries` (sampling rate, channels). Outputs declare a kind; scalars and tables are compared today, and other kinds are reported as not checked rather than compared the wrong way. See [docs/domain-profiles.md](docs/domain-profiles.md).
 
 ## The Paper2Agent idea, and more
@@ -100,7 +101,7 @@ Needs Python 3.10 or later.
 ```bash
 git clone https://github.com/biaperotto/recrate.git && cd recrate
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[app,mcp]"
+pip install -e ".[app,mcp]"       # or, with the exact versions tested: pip install -r requirements.lock -e . --no-deps
 streamlit run app/app.py          # the app: press Start, or Try an example
 ```
 
@@ -152,7 +153,7 @@ ReCRATE is a proof of concept, built at the *Reinvent the Wheel* hackathon (Lond
 
 | Today | Next |
 | --- | --- |
-| Python code runs in the paper's own virtual environment (`uv`), with every package recorded. R, Quarto and shell code use the interpreters on your computer (R packages are listed with their versions as of publication, but not installed for you), and nothing is sandboxed | R environments built per paper, and containers for isolation |
+| Python code runs in the paper's own virtual environment (`uv`), with every package recorded. R, Quarto and shell code use the interpreters on your computer (R packages are listed with their versions as of publication, but not installed for you). The code runs sandboxed (no network; writes only to the run's folders), but it can still read your files | R environments built per paper, and containers, so the code sees only its own files |
 | Galaxy runs through ported tools only; other workflows are reported *blocked*, naming the tool | planemo, cwltool, Nextflow and Snakemake |
 | Scalars and tables are compared; `timeseries` is tested on synthetic data only | IoU for label images, tests for distributions, reruns to measure method noise; genomics and single-cell profiles; OME-Zarr, IDR and OMERO sources |
 | Follow-ups for software and data versions are proposed, not run | Running them in pinned environments |

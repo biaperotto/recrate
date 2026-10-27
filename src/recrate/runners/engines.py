@@ -28,7 +28,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .base import RunResult, Runner, now_iso
+from .. import sandbox
+from .base import Runner, RunResult, now_iso
 
 TIMEOUT = 6 * 3600
 
@@ -71,9 +72,10 @@ class EngineRunner(Runner):
             shutil.copytree(Path(workflow).parent, work, ignore=shutil.ignore_patterns(".git", "*_cache", ".snakemake"))
             wf = work / Path(workflow).name
             cmd = self.command(wf, Path(input_dir).resolve(), output_dir, params, work)
+            confined, extra_env = sandbox.wrap(cmd, [work, output_dir])  # no network, writes only to these
             started = now_iso()
-            proc = subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=TIMEOUT,
-                                  env={**os.environ, **self.env_vars, "RECRATE_OUTPUT_DIR": str(output_dir)})
+            proc = subprocess.run(confined, cwd=work, capture_output=True, text=True, timeout=TIMEOUT,
+                                  env={**os.environ, **self.env_vars, **extra_env, "RECRATE_OUTPUT_DIR": str(output_dir)})
             ended = now_iso()
             (output_dir / f"{self.name}.log").write_text((proc.stdout + "\n" + proc.stderr)[-200000:], encoding="utf-8")
             if proc.returncode != 0:
@@ -86,7 +88,7 @@ class EngineRunner(Runner):
         extra = [f for f in sorted(output_dir.rglob("*")) if f.is_file() and f.name != "results.csv"]
         return RunResult(results_csv=results, masks_dir=None, started=started, ended=ended, params=dict(params),
                          software=[(self.software, _version([self.tool, *self.version_args]))],
-                         log=proc.stdout[-4000:], extra_outputs=extra)
+                         log=proc.stdout[-4000:], extra_outputs=extra, sandbox=sandbox.describe())
 
     def collect(self, work: Path, output_dir: Path) -> None:
         """Bring back what the engine left in the scratch folder (e.g. a rendered report). Default: nothing."""

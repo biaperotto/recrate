@@ -14,10 +14,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .base import RunResult, Runner
+from .base import Runner, RunResult
+from .engines import ENGINES, engine_for
 from .fiji import FijiRunner
 from .python_ref import SUPPORTED_WORKFLOWS, PythonReferenceRunner
-from .engines import ENGINES, engine_for
 from .script import ScriptRunner
 
 CHOICES = ["auto", "fiji", "reference", "script", "galaxy", *ENGINES]

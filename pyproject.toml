@@ -44,5 +44,50 @@ where = ["src"]
 [tool.setuptools.package-data]
 recrate = ["workflows/*.ijm", "workflows/*.py", "skill/*.md", "skill/agents/*.md", "favicon.svg"]
 
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["agents", "examples/*/paper_agent", "examples/*/paper-download"]
+
+[tool.ruff.lint]
+select = ["E9", "F", "I"]  # syntax errors, pyflakes (undefined names, unused imports), import order
+
+[tool.mypy]
+# Type-checked in CI: the modules that pass today, so they stay clean. The others are listed by
+# `mypy src/recrate` and join this list as they are fixed.
+python_version = "3.10"
+ignore_missing_imports = true
+follow_imports = "silent"
+files = [
+    "src/recrate/__init__.py",
+    "src/recrate/cli.py",
+    "src/recrate/compare.py",
+    "src/recrate/drafter.py",
+    "src/recrate/export.py",
+    "src/recrate/figures.py",
+    "src/recrate/hardware.py",
+    "src/recrate/install.py",
+    "src/recrate/methods.py",
+    "src/recrate/model.py",
+    "src/recrate/overlay.py",
+    "src/recrate/package.py",
+    "src/recrate/paper_crate.py",
+    "src/recrate/paper_figures.py",
+    "src/recrate/profiles/__init__.py",
+    "src/recrate/profiles/generic.py",
+    "src/recrate/profiles/timeseries.py",
+    "src/recrate/record.py",
+    "src/recrate/report.py",
+    "src/recrate/runners/base.py",
+    "src/recrate/runners/engines.py",
+    "src/recrate/runners/fiji.py",
+    "src/recrate/runners/python_ref.py",
+    "src/recrate/sandbox.py",
+    "src/recrate/sources.py",
+    "src/recrate/verify.py",
+    "src/recrate/workflow_state.py",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["network: needs network access (the RO-Crate validator); skipped offline, RECRATE_TEST_NETWORK=1 forces"]

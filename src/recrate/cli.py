@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import textwrap
 from pathlib import Path
@@ -242,9 +243,8 @@ def cmd_report(a) -> int:
 
 
 def cmd_check(a) -> int:
-    from .pipeline import check_inputs
-
     from .model import parameter_plan
+    from .pipeline import check_inputs
 
     spec = _agent(a.target).spec(a.method)
     report = check_inputs(spec, a.data, scale_ratio=a.scale_ratio)
@@ -406,6 +406,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="recrate", description="Turn a paper into an agent that runs its methods "
                                                             "on your data, checked and recorded.")
     p.add_argument("--version", action="version", version=f"recrate {__version__}")
+    p.add_argument("--unsandboxed", action="store_true",
+                   help="Run the paper's code without a sandbox (only for code you trust; recorded in each run crate)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def runner_opts(sp, who: bool = True):
@@ -609,6 +611,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.unsandboxed:
+        os.environ["RECRATE_SANDBOX"] = "off"
     try:
         return args.func(args)
     except (CrateError, ValueError, RuntimeError) as e:

@@ -244,7 +244,8 @@ def write_run_crate(
         "@type": "CreateAction",
         "name": f"ReCRATE {mode} run of {spec.name}",
         "description": f"Mode: {mode}." + (f" Adjustments: {adjust_txt}." if adjust_txt else " No adjustments.")
-                       + (f" Follow-up check of run {followup['of']}: {followup['title']}." if followup else ""),
+                       + (f" Follow-up check of run {followup['of']}: {followup['title']}." if followup else "")
+                       + (f" The workflow's code ran {result.sandbox}." if getattr(result, "sandbox", "") else ""),
         "instrument": {"@id": wf_id},
         "agent": person_ref,
         "object": input_refs + pv_refs,
