@@ -9,9 +9,8 @@
 
 from __future__ import annotations
 
-import json
-
 import csv
+import json
 import re
 import shutil
 import statistics
@@ -56,7 +55,8 @@ def whatif(spec: MethodSpec, data: Path, params: dict[str, Any], runner: str = "
            out_dir: Path | None = None) -> dict[str, Any]:
     """Run without writing a run crate. Returns parameters, per-image rows and overlays by image stem."""
     out = Path(out_dir or tempfile.mkdtemp(prefix="recrate-whatif-"))
-    run = get_runner(runner, spec.workflow_language, spec.workflow_path)
+    run = get_runner(runner, spec.workflow_language, spec.workflow_path, entry=spec.entry)
+    run.spec = spec
     result = run.run(spec.workflow_path, Path(data), out / "out", params, channel=channel)
     rows = read_rows(result.results_csv)
     overlays = (make_overlays(Path(data), result.masks_dir, out / "overlays", channel, limit=OVERLAY_LIMIT)

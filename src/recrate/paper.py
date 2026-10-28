@@ -12,7 +12,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s\"<>,;]+[^\s\"<>,;.)\]])", re.I)
+DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s\"<>,;?#]+[^\s\"<>,;.)\]?#])", re.I)  # ? and #: a URL's query, never a DOI
+LINKED_DOI_RE = re.compile(r"doi\.org/(10\.\d{4,9}/[^\s\"<>,;?#)\]]+)", re.I)  # a DOI inside a doi.org link
 REPO_RE = re.compile(
     r"https?://(?:www\.)?(?:github\.com|gitlab\.com|bitbucket\.org|codeberg\.org)/[\w.-]+/[\w.-]+"
     r"|https?://(?:doi\.org/10\.5281/zenodo\.\d+|zenodo\.org/(?:records?|doi)/[\w./-]+)"
@@ -102,6 +103,9 @@ def _rank_repos(repos: list[str], text: str) -> list[str]:
 def _clean_link(link: str) -> str:
     """Drop what PDF text glues onto the end of a DOI or URL: a following word ("…26350296doi:", "….August"),
     a reference number ("…/rplos.20" from "rplos.\n20.") or a trailing full stop."""
+    link = re.split(r"\]\(|\)\(", link, maxsplit=1)[0]  # a Markdown badge: "[![DOI](...zenodo.123-1073c8)](https://doi.org/...)"
+    while link.endswith(")") and link.count(")") > link.count("("):
+        link = link[:-1]
     link = link.rstrip(".")
     link = re.sub(r"(?<=\d)(?:doi|https?|available|retrieved|accessed):?$", "", link, flags=re.I)
     link = re.sub(r"\.(?:January|February|March|April|May|June|July|August|September|October|November|December|"
@@ -129,7 +133,9 @@ def read_paper(path: str | Path) -> Paper:
     flat = re.sub(r"-\n(?=[a-z])", "", text)  # undo hyphenation at line breaks
     # undo URLs broken across lines, but not into the next reference's number ("…10620146.\n31. Harris…")
     flat = re.sub(r"(?<=[/._-])\n(?!\s*\d{1,3}\.\s)", "", flat)
-    dois = _dedupe(list(dict.fromkeys(_clean_link(m.group(1)) for m in DOI_RE.finditer(flat))))
+    # a DOI written as a doi.org link first: a README's badge image carries the DOI with a colour suffix glued on
+    linked = [_clean_link(m.group(1)) for m in LINKED_DOI_RE.finditer(flat)]
+    dois = _dedupe(list(dict.fromkeys(linked + [_clean_link(m.group(1)) for m in DOI_RE.finditer(flat)])))
     repos = _dedupe(list(dict.fromkeys(_clean_link(m.group(0).rstrip(".)")) for m in REPO_RE.finditer(flat))))
     repos = _rank_repos(repos, flat)
     title = (_pdf_title(path) if path.suffix.lower() == ".pdf" else None) or _guess_title(text)

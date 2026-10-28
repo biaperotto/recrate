@@ -26,10 +26,12 @@ class RunResult:
     params: dict[str, Any]
     log: str = ""
     extra_outputs: list[Path] = field(default_factory=list)
+    sandbox: str = ""  # how the paper's code was confined (sandbox.describe()); empty for ReCRATE's own code
 
 
 class Runner:
     name = "base"
+    spec: Any = None  # the MethodSpec being run, set by pipeline.execute (engines read its invocation recipe)
 
     def available(self) -> bool:
         return True

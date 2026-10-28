@@ -16,16 +16,24 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import skimage
 import tifffile
 from skimage.filters import threshold_otsu
 from skimage.measure import label, regionprops
 
 from .. import __version__
 from ..profiles.bioimaging import list_images, read_image_metadata
-from .base import RunResult, Runner, now_iso
+from .base import Runner, RunResult, now_iso
 
 SUPPORTED_WORKFLOWS = {"count_nuclei.ijm"}
+
+
+def _pkg_version(name: str) -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def _plane(arr: np.ndarray, axes: str, channel: int) -> np.ndarray:
@@ -84,7 +92,7 @@ class PythonReferenceRunner(Runner):
         return RunResult(
             results_csv=results,
             masks_dir=masks_dir,
-            software=[("ReCRATE Python reference runner", __version__), ("scikit-image", skimage.__version__)],
+            software=[("ReCRATE Python reference runner", __version__), ("scikit-image", _pkg_version("scikit-image"))],
             started=started,
             ended=now_iso(),
             params={"threshold_method": method, "min_size_px": min_size},

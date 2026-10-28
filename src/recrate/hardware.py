@@ -21,6 +21,8 @@ INTERPRETERS = {  # name -> (command, arguments that print its version)
     "java": ("java", ["-version"]),
     "docker": ("docker", ["--version"]),
     "apptainer": ("apptainer", ["--version"]),
+    "micromamba": ("micromamba", ["--version"]),
+    "conda": ("conda", ["--version"]),
     "nextflow": ("nextflow", ["-version"]),
     "snakemake": ("snakemake", ["--version"]),
     "galaxy (planemo)": ("planemo", ["--version"]),

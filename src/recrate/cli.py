@@ -6,7 +6,7 @@ Make a paper agent:
     recrate validate agents/my_paper                                            # re-run validation
 
 Use it:
-    recrate serve   agents/my_paper                      # MCP server for Claude
+    recrate serve   agents/my_paper                      # MCP server for Claude (stdio; --http to share it)
     recrate install-mcp agents/my_paper --client desktop # register it with Claude Desktop (or project, claude-code)
     recrate inspect agents/my_paper                      # paper, methods, validation
     recrate ask     agents/my_paper "what pixel size?"   # search the paper
@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import textwrap
 from pathlib import Path
@@ -73,7 +74,9 @@ def _print_agent(agent) -> None:
     if card["methods"]:
         print(f"  verdict: {card['verdict']}")
     for m in card["methods"]:
-        print(f"  - {m['name']} [{m['language']}] readiness: {m.get('readiness') or 'unknown'}")
+        print(f"  - {m['name']} [{m['language']}] readiness: {m.get('readiness') or 'unknown'}"
+              + (" (runs, checks your data, records; nothing published to compare with)"
+                 if m.get("readiness") == "reusable" else ""))
         for g in m.get("gaps") or []:
             if m.get("readiness") != "blocked":
                 print(f"      gap: {g}")
@@ -115,9 +118,9 @@ def cmd_validate(a) -> int:
 
 
 def cmd_serve(a) -> int:
-    from .mcp_server import build_server
+    from .mcp_server import serve
 
-    build_server(a.agent).run()
+    serve(a.agent, "http" if a.http else "stdio", host=a.host, port=a.port, token=a.token)
     return 0
 
 
@@ -214,7 +217,8 @@ def cmd_build(a) -> int:
 def cmd_install_mcp(a) -> int:
     from .install import describe, install
 
-    result = install(a.agent, client=a.client, name=a.name, check=not a.no_check)
+    result = install(a.agent, client=a.client, name=a.name, check=not a.no_check, transport=a.transport, url=a.url,
+                     token=a.token)
     print(describe(result))
     return 0 if result.get("check", {"ok": True})["ok"] else 1
 
@@ -242,9 +246,8 @@ def cmd_report(a) -> int:
 
 
 def cmd_check(a) -> int:
-    from .pipeline import check_inputs
-
     from .model import parameter_plan
+    from .pipeline import check_inputs
 
     spec = _agent(a.target).spec(a.method)
     report = check_inputs(spec, a.data, scale_ratio=a.scale_ratio)
@@ -364,9 +367,21 @@ def cmd_hardware(a) -> int:
 def cmd_verify_server(a) -> int:
     from .server_check import check_server, describe
 
-    rep = check_server(a.agent, reproduce=a.reproduce)
+    rep = check_server(a.agent, reproduce=a.reproduce, url=a.url, token=a.token)
     print(json.dumps(rep, indent=2, ensure_ascii=False) if a.json else describe(rep))
     return 0 if rep["ok"] else 1
+
+
+def cmd_runtime(a) -> int:
+    from .runtime_vm import describe, remove_vm, setup, status
+
+    if a.action == "setup":
+        print(describe(setup(cpus=a.cpus, memory_gb=a.memory, disk_gb=a.disk)))
+    elif a.action == "remove":
+        print("VM removed." if remove_vm() else "No VM to remove.")
+    else:
+        print(describe(status()))
+    return 0
 
 
 def cmd_mark(a) -> int:
@@ -406,6 +421,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="recrate", description="Turn a paper into an agent that runs its methods "
                                                             "on your data, checked and recorded.")
     p.add_argument("--version", action="version", version=f"recrate {__version__}")
+    p.add_argument("--unsandboxed", action="store_true",
+                   help="Run the paper's code without a sandbox (only for code you trust; recorded in each run crate)")
+    p.add_argument("--remote", metavar="USER@HOST", help="Run workflow engines on that machine over SSH (its "
+                   "runtimes count for readiness; the workflow is copied there and the outputs come back). "
+                   "Default: RECRATE_REMOTE")
+    p.add_argument("--remote-dir", metavar="DIR", help="With --remote: the folder there for workflows and runs "
+                   "(default RECRATE_REMOTE_DIR, else ~/recrate-runs)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def runner_opts(sp, who: bool = True):
@@ -437,8 +459,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--runner", default="auto", choices=CHOICES)
     s.set_defaults(func=cmd_validate)
 
-    s = sub.add_parser("serve", help="Serve a paper agent over MCP (stdio)")
+    s = sub.add_parser("serve", help="Serve a paper agent over MCP: stdio, or streamable HTTP with --http")
     s.add_argument("agent")
+    s.add_argument("--http", action="store_true", help="Serve over streamable HTTP at http://HOST:PORT/mcp, so any "
+                                                        "MCP client can use the agent without installing anything")
+    s.add_argument("--host", default="127.0.0.1", help="With --http: the address to bind (default localhost; "
+                                                        "anything else is reachable from other computers, unauthenticated)")
+    s.add_argument("--port", type=int, default=8765, help="With --http: the port (default 8765)")
+    s.add_argument("--token", default=None, help="With --http: require this bearer token on every request (default "
+                                                 "RECRATE_MCP_TOKEN); clients send it as Authorization: Bearer")
     s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("inspect", help="Show the paper agent, or one method's card with --method")
@@ -489,7 +518,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="desktop: Claude Desktop; project: .mcp.json in this folder (Claude Code, VS Code); "
                         "claude-code: all projects (needs the claude CLI); print: show the JSON")
     s.add_argument("--name", help="Server name (default: recrate-<paper>)")
-    s.add_argument("--no-check", action="store_true", help="Don't start the server to check it")
+    s.add_argument("--transport", default="stdio", choices=["stdio", "http"],
+                   help="stdio: the client launches the server itself (default); http: the client connects to a "
+                        "server you run with `recrate serve --http` (here or on another computer)")
+    s.add_argument("--url", help="With --transport http: the server's URL (default http://127.0.0.1:8765/mcp)")
+    s.add_argument("--token", help="With --transport http: the bearer token the server was started with "
+                                   "(written into the client's config as the Authorization header)")
+    s.add_argument("--no-check", action="store_true", help="Don't start (or connect to) the server to check it")
     s.set_defaults(func=cmd_install_mcp)
 
     s = sub.add_parser("export-crate", help="Export the research object's current RO-Crate as a zip")
@@ -576,8 +611,19 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_hardware)
 
-    s = sub.add_parser("verify-server", help="Launch the agent's MCP server over stdio and check its tools")
+    s = sub.add_parser("runtime", help="A Linux VM for workflows that need containers (docker, apptainer): setup, "
+                                       "status or remove. Made once with Lima, in user space; used on its own after that")
+    s.add_argument("action", choices=["setup", "status", "remove"])
+    s.add_argument("--cpus", type=int, default=4)
+    s.add_argument("--memory", type=int, default=8, help="GB of RAM for the VM while it runs (default 8)")
+    s.add_argument("--disk", type=int, default=100, help="GB of disk the VM may grow to (default 100)")
+    s.set_defaults(func=cmd_runtime)
+
+    s = sub.add_parser("verify-server", help="Launch the agent's MCP server over stdio (or connect to one served "
+                                             "with --http, via --url) and check its tools")
     s.add_argument("agent")
+    s.add_argument("--url", help="Check a running HTTP server at this URL instead of launching one over stdio")
+    s.add_argument("--token", help="With --url: the bearer token the server requires")
     s.add_argument("--reproduce", action="store_true", help="Also call reproduce for every method")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_verify_server)
@@ -609,6 +655,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.unsandboxed:
+        os.environ["RECRATE_SANDBOX"] = "off"
+    if getattr(args, "remote", None):
+        os.environ["RECRATE_REMOTE"] = args.remote
+    if getattr(args, "remote_dir", None):
+        os.environ["RECRATE_REMOTE_DIR"] = args.remote_dir
     try:
         return args.func(args)
     except (CrateError, ValueError, RuntimeError) as e:

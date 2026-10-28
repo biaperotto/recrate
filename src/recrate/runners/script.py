@@ -23,7 +23,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .base import RunResult, Runner, now_iso
+from .. import sandbox
+from .base import Runner, RunResult, now_iso
 
 # suffix -> (software name, environment variable, default command, how to print its version)
 LANGUAGES = {
@@ -67,40 +68,52 @@ class ScriptRunner(Runner):
             cmd += [f"--{k}", str(v)]
         if channel:
             cmd += ["--channel", str(channel)]
-        started = now_iso()
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-        ended = now_iso()
-        if proc.returncode != 0:
-            raise RuntimeError(f"{Path(workflow).name} failed (exit {proc.returncode}):\n{proc.stderr[-2000:]}")
-        results = output_dir / "results.csv"
-        if not results.exists():
-            raise RuntimeError(f"{Path(workflow).name} finished but wrote no results.csv in output_dir.")
-        v = subprocess.run([cmd0, *version_args], capture_output=True, text=True)
-        m = re.search(r"\d+\.\d+(\.\d+)?", v.stdout + v.stderr)
-        version = m.group(0) if m else (platform.python_version() if lang == "Python" else "unknown")
-        masks = output_dir / "masks"
-        extra, software = [], [(lang, version)]
-        total = 0  # every other file the method wrote (e.g. a random split, a fitted model's table), up to 50 MB
-        for f in sorted(output_dir.rglob("*")):
-            if (f.is_file() and f.name != "results.csv" and not f.is_relative_to(masks)
-                    and not f.is_relative_to(output_dir / "figures") and total + f.stat().st_size <= 50 * 2 ** 20):
-                total += f.stat().st_size
-                extra.append(f)
-        if lang == "Python":  # every installed package, as provenance (FAIR4RS R2)
-            from ..env import installed_packages
+        return run_command(cmd, cmd0, lang, version_args, output_dir, params, Path(workflow).name)
 
-            pkgs = installed_packages(cmd0)
-            if pkgs:
-                (output_dir / "packages.txt").write_text("\n".join(pkgs) + "\n", encoding="utf-8")
-                extra.append(output_dir / "packages.txt")
-                software += [tuple(p.split("==", 1)) for p in pkgs][:300]
-        return RunResult(
-            results_csv=results,
-            masks_dir=masks if masks.exists() else None,
-            software=software,
-            started=started,
-            ended=ended,
-            params=dict(params),
-            log=proc.stdout[-4000:],
-            extra_outputs=extra,
-        )
+
+def run_command(cmd: list[str], cmd0: str, lang: str, version_args: list[str], output_dir: Path,
+                params: dict[str, Any], name: str, extra_env: dict[str, str] | None = None) -> RunResult:
+    """Run a paper's code as a command, sandboxed, and collect what it produced: ``results.csv`` (required), masks,
+    every other file it wrote (up to 50 MB) and, for Python, the packages installed in its interpreter as
+    provenance (FAIR4RS R2). Shared by the script runner and the function runner."""
+    output_dir = Path(output_dir)
+    confined, env = sandbox.wrap(cmd, [output_dir])  # the paper's code: no network, writes only here
+    started = now_iso()
+    proc = subprocess.run(confined, capture_output=True, text=True, timeout=3600,
+                          env=sandbox.environment({**env, **(extra_env or {})}))
+    ended = now_iso()
+    if proc.returncode != 0:
+        raise RuntimeError(f"{name} failed (exit {proc.returncode}):\n{proc.stderr[-2000:]}")
+    results = output_dir / "results.csv"
+    if not results.exists():
+        raise RuntimeError(f"{name} finished but wrote no results.csv in output_dir.")
+    v = subprocess.run([cmd0, *version_args], capture_output=True, text=True)
+    m = re.search(r"\d+\.\d+(\.\d+)?", v.stdout + v.stderr)
+    version = m.group(0) if m else (platform.python_version() if lang == "Python" else "unknown")
+    masks = output_dir / "masks"
+    extra, software = [], [(lang, version)]
+    total = 0  # every other file the method wrote (e.g. a random split, a fitted model's table), up to 50 MB
+    for f in sorted(output_dir.rglob("*")):
+        if (f.is_file() and f.name != "results.csv" and not f.is_relative_to(masks)
+                and not f.is_relative_to(output_dir / "figures") and total + f.stat().st_size <= 50 * 2 ** 20):
+            total += f.stat().st_size
+            extra.append(f)
+    if lang == "Python":  # every installed package, as provenance (FAIR4RS R2)
+        from ..env import installed_packages
+
+        pkgs = installed_packages(cmd0)
+        if pkgs:
+            (output_dir / "packages.txt").write_text("\n".join(pkgs) + "\n", encoding="utf-8")
+            extra.append(output_dir / "packages.txt")
+            software += [tuple(p.split("==", 1)) for p in pkgs][:300]
+    return RunResult(
+        results_csv=results,
+        masks_dir=masks if masks.exists() else None,
+        software=software,
+        started=started,
+        ended=ended,
+        params=dict(params),
+        log=proc.stdout[-4000:],
+        extra_outputs=extra,
+        sandbox=sandbox.describe(),
+    )

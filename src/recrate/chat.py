@@ -1,6 +1,6 @@
 """Chat with a paper agent: ask the paper, check and run its methods on your files, export run crates.
 
-Two engines share the same tools (``ChatTools``):
+The engines share the same tools (``ChatTools``, in recrate.chat_tools):
 
 * ``ClaudeChat``: Claude decides which tools to call (needs ``pip install "recrate[draft]"`` and
   ``ANTHROPIC_API_KEY``; model ``RECRATE_CHAT_MODEL``, default ``claude-opus-5-5``).
@@ -17,460 +17,22 @@ import json
 import os
 import re
 import shutil
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
 from .agent import PaperAgent
-from .methods import methods_paragraph
-from .pipeline import check_inputs, reproduce, run_on_data
-from .record import find_runs, headline, publish_back, summarise_record
-from .runcrate import approve, summarise_run
-from .runners import FijiRunner
 
 MODEL = os.environ.get("RECRATE_CHAT_MODEL", "claude-opus-5-5")
 MAX_PAPER_CHARS = 400_000  # papers longer than this are reached through search_paper only
 
 
-def runner_choices() -> list[str]:
-    """Runners that can work on this machine (Fiji only when FIJI_PATH and PyImageJ are set up)."""
-    return ["auto", "fiji", "reference", "script"] if FijiRunner().available() else ["auto", "reference", "script"]
-
-
-def _schema(props: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
-    return {"type": "object", "properties": props, "required": required or []}
-
-
-_METHOD = {"type": "string", "description": "Method name, as listed by about_paper."}
-_DATA = {"type": "string", "description": "Folder with the user's data. Omit to use the files the user uploaded."}
-_RUN = {"type": "string", "description": "Run crate folder or run name, as returned by reproduce/run_on_my_data. "
-                                         "Omit for the latest run in this conversation."}
-
-_RATIO = {"type": "number", "description": "Only when the research doesn't state the scale its parameters depend on "
-          "(e.g. pixel size, sampling rate) and the user says how theirs compares: theirs ÷ the research's"}
-TOOLS: list[dict[str, Any]] = [
-    {"name": "about_paper", "description": "Title, DOI, crate source, and the paper's methods with their "
-                                           "reproduction status (the verdict ladder) against the paper's reported results.",
-     "input_schema": _schema({})},
-    {"name": "search_paper", "description": "Search the paper's text; returns the most relevant passages. Use it "
-                                            "to quote the paper when answering.",
-     "input_schema": _schema({"query": {"type": "string"}, "k": {"type": "integer", "default": 4}}, ["query"])},
-    {"name": "describe_method", "description": "One method's card: what its input must look like (format, and the "
-                                               "properties that matter for its field), parameters and defaults, "
-                                               "software, tolerances.",
-     "input_schema": _schema({"method": _METHOD}, ["method"])},
-    {"name": "list_tables", "description": "The paper's tables (label, caption). Read one with get_table.",
-     "input_schema": _schema({})},
-    {"name": "get_table", "description": "One of the paper's tables, as printed, by label (e.g. 'Table 2').",
-     "input_schema": _schema({"table": {"type": "string"}}, ["table"])},
-    {"name": "list_figures", "description": "The paper's figures (label, caption). Show one with show_figure.",
-     "input_schema": _schema({})},
-    {"name": "show_figure", "description": "Show one of the paper's figures to the user, by label (e.g. 'Figure 3'); "
-                                           "returns its caption.",
-     "input_schema": _schema({"figure": {"type": "string"}}, ["figure"])},
-    {"name": "list_my_files", "description": "The user's data files, with what ReCRATE reads from them for "
-                                             "the methods' field (e.g. pixel size for images, columns for tables).",
-     "input_schema": _schema({})},
-    {"name": "check_my_data", "description": "Check whether the user's data fits a method (domain profile checks). "
-                                             "Returns ok / warn / fail per check and parameter adjustments.",
-     "input_schema": _schema({"method": _METHOD, "data_path": _DATA, "scale_ratio": _RATIO}, ["method"])},
-    {"name": "reproduce", "description": "Run a method on the paper's own data and compare with the paper's "
-                                         "reported results. Writes a run crate.",
-     "input_schema": _schema({"method": _METHOD}, ["method"])},
-    {"name": "run_on_my_data", "description": "Run a method on the user's data after checking it. Applies and "
-                                              "records adjustments (e.g. rescaling size parameters for a different "
-                                              "pixel size or sampling rate); stops if a check fails. Writes a run crate.",
-     "input_schema": _schema({"method": _METHOD, "data_path": _DATA, "scale_ratio": _RATIO,
-                              "auto_adjust": {"type": "boolean", "default": True},
-                              "channel": {"type": "integer", "default": 0, "description": "0-based channel"},
-                              "overrides": {"type": "object", "description": (
-                                  "Parameter values the user chose, each {\"value\": ..., \"reason\": ...}. They win "
-                                  "over automatic adjustments and are recorded with the reason. Only use values "
-                                  "the user asked for.")}},
-                             ["method"])},
-    {"name": "compare_paper_parameters", "description": "Run a method on the user's data with the paper's "
-                                                        "parameters unchanged (not recorded), to show what the "
-                                                        "adjustments change. Use after a run with adjustments.",
-     "input_schema": _schema({"method": _METHOD, "data_path": _DATA}, ["method"])},
-    {"name": "set_pixel_size", "description": "Give the user's images a pixel size when they have no calibration, "
-                                              "using a value the user states (e.g. from the microscope). Recorded "
-                                              "as user-provided. Never guess the value.",
-     "input_schema": _schema({"pixel_size": {"type": "number"}, "unit": {"type": "string", "default": "µm"},
-                              "source": {"type": "string", "description": "Where the value comes from."}},
-                             ["pixel_size"])},
-    {"name": "methods_text", "description": "A methods paragraph written from a run crate, ready to paste.",
-     "input_schema": _schema({"run": _RUN})},
-    {"name": "approve_run", "description": "Record that the user looked at a run's results (and overlays, for "
-                                           "images) and accepted or rejected them. Only call this when the user says "
-                                           "so.",
-     "input_schema": _schema({"run": _RUN, "accepted": {"type": "boolean"}, "note": {"type": "string"}},
-                             ["accepted"])},
-    {"name": "create_output_crate", "description": "Package a run as an output RO-Crate (zip) the user can "
-                                                   "download and deposit, and add it to the paper's "
-                                                   "reproducibility record.",
-     "input_schema": _schema({"run": _RUN})},
-    {"name": "reproducibility_record", "description": "Every run based on the paper's crate: by whom, on what "
-                                                      "data, with which adjustments and verdicts.",
-     "input_schema": _schema({})},
-    {"name": "followup_checks", "description": "When a method's numbers differ from the paper's: the follow-up "
-                                               "checks proposed (inclusion rules, rounding, versions), with what each "
-                                               "changes and why, and those already run.",
-     "input_schema": _schema({"method": {"type": "string"}}, ["method"])},
-    {"name": "run_followup_check", "description": "Run one follow-up check by id. It is its own recorded run, "
-                                                  "linked to the reproduction; the original result is never replaced.",
-     "input_schema": _schema({"method": {"type": "string"}, "check": {"type": "string"}}, ["method", "check"])},
-    {"name": "export_crate", "description": "Export this research object's RO-Crate as a zip the user can download, "
-                                            "with a record of how it was obtained.",
-     "input_schema": _schema({})},
-    {"name": "report_page", "description": "Write one HTML page for this research object (verdict, every compared "
-                                           "value, figures, follow-ups, every run) that opens anywhere.",
-     "input_schema": _schema({})},
-    {"name": "make_figure", "description": "Plot the published vs reproduced values of a reproduction from its "
-                                           "run's outputs, and record the figure in its run crate.",
-     "input_schema": _schema({"run": _RUN})},
-    {"name": "recreated_figures", "description": "The paper's figures a method's latest reproduction redrew, each "
-                                                 "shown next to the original with its caption and review. Whether "
-                                                 "they show the same thing is for the user to say (review_figure).",
-     "input_schema": _schema({"method": _METHOD}, ["method"])},
-    {"name": "review_figure", "description": "Record the user's judgement of a recreated figure against the paper's: "
-                                             "same, differs or can't tell, and why. Only when the user says so.",
-     "input_schema": _schema({"method": _METHOD, "figure": {"type": "string", "description": "e.g. Figure 3"},
-                              "verdict": {"type": "string", "enum": ["same", "differs", "can't tell"]},
-                              "note": {"type": "string"}}, ["method", "figure", "verdict"])},
-]
-
-
-@dataclass
-class ToolResult:
-    text: str  # JSON for the model
-    attachments: list[dict[str, Any]] = field(default_factory=list)
-    error: bool = False
-
-
-class ChatTools:
-    """The paper agent's tools for one conversation: uploads folder, runner, user name, latest run."""
-
-    def __init__(self, agent: PaperAgent, uploads: Path, runner: str = "auto", who: str = "anonymous"):
-        self.agent, self.uploads, self.runner, self.who = agent, Path(uploads), runner, who
-        self.last_run: Path | None = None
-        self.data_dir: Path | None = None  # a folder on this computer, used instead of the uploads
-        self.progress = None  # progress(done, total, name), set by the UI
-        self.whatifs: dict[str, dict[str, Any]] = {}  # run name -> what-if with the paper's parameters
-
-    # ---- helpers -------------------------------------------------------------------
-    def current_data(self) -> Path:
-        return self.data_dir or self.uploads
-
-    def _data(self, data_path: str | None) -> Path:
-        if data_path:
-            return Path(data_path).expanduser()
-        d = self.current_data()
-        if not d.exists() or not any(p.is_file() and not p.name.startswith(".") for p in d.rglob("*")):
-            raise ValueError("No data yet. Attach files to a message, or choose a folder.")
-        return d
-
-    def _run_dir(self, run: str | None) -> Path:
-        if not run:
-            if self.last_run is None:
-                raise ValueError("No run yet in this conversation. Reproduce or run a method first.")
-            return self.last_run
-        p = Path(run)
-        return p if p.is_absolute() or p.exists() else self.agent.runs_dir / run
-
-    def _method_of(self, run_dir: Path) -> str | None:
-        return summarise_run(run_dir).get("method")
-
-    def _run_attachments(self, run_dir: Path) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = [{"type": "results", "csv": str(run_dir / "outputs" / "results.csv")}]
-        overlays = sorted((run_dir / "outputs" / "overlays").glob("*.png"))
-        if overlays:
-            out.append({"type": "images", "paths": [str(o) for o in overlays]})
-        out.append({"type": "run", "run_dir": str(run_dir)})
-        return out
-
-    # ---- dispatch --------------------------------------------------------------------
-    def call(self, name: str, args: dict[str, Any]) -> ToolResult:
-        fn = getattr(self, f"t_{name}", None)
-        if fn is None:
-            return ToolResult(json.dumps({"error": f"Unknown tool {name}"}), error=True)
-        try:
-            return fn(**args)
-        except Exception as e:  # noqa: BLE001 - every failure goes back to the chat, not a crash
-            from .crate import CrateError
-
-            expected = isinstance(e, (ValueError, FileNotFoundError, CrateError))  # a situation, not a bug
-            msg = str(e) if expected else f"{type(e).__name__}: {e}"
-            return ToolResult(json.dumps({"error": msg}), [{"type": "error", "text": msg}], error=True)
-
-    # ---- tools -----------------------------------------------------------------------
-    def t_about_paper(self) -> ToolResult:
-        card = self.agent.card()
-        return ToolResult(json.dumps(card, ensure_ascii=False), [{"type": "methods_table", "methods": card["methods"]}])
-
-    def t_search_paper(self, query: str, k: int = 4) -> ToolResult:
-        hits = self.agent.search(query, k)
-        return ToolResult(json.dumps(hits, ensure_ascii=False), [{"type": "passages", "items": hits}] if hits else [])
-
-    def t_describe_method(self, method: str) -> ToolResult:
-        card = self.agent.spec(method).summary()
-        return ToolResult(json.dumps(card, ensure_ascii=False, default=str), [{"type": "method_card", "card": card}])
-
-    def _find(self, items: list[dict], name: str) -> dict | None:
-        n = name.lower().strip()
-        return next((x for x in items if n in (x["label"].lower(), x["file"].lower(), Path(x["file"]).stem.lower())
-                     or x["label"].lower().replace(" ", "") == n.replace(" ", "")), None)
-
-    def t_list_tables(self) -> ToolResult:
-        t = self.agent.tables()
-        return ToolResult(json.dumps(t, ensure_ascii=False), [{"type": "table", "rows": [
-            {"table": x["label"], "caption": x["caption"]} for x in t]}] if t else [])
-
-    def t_get_table(self, table: str) -> ToolResult:
-        t = self._find(self.agent.tables(), table)
-        if t is None:
-            raise ValueError(f"No table {table!r} in this paper.")
-        import csv as _csv
-        with (self.agent.path / "paper" / t["file"]).open(newline="", encoding="utf-8") as fh:
-            rows = list(_csv.reader(fh))
-        head, body = rows[0], rows[1:]
-        recs = [dict(zip(head, r)) for r in body]
-        return ToolResult(json.dumps({"label": t["label"], "caption": t["caption"], "rows": recs}, ensure_ascii=False),
-                          [{"type": "note", "text": f"{t['label']}: {t['caption']}"}, {"type": "table", "rows": recs}])
-
-    def t_list_figures(self) -> ToolResult:
-        f = self.agent.figures()
-        return ToolResult(json.dumps(f, ensure_ascii=False), [{"type": "table", "rows": [
-            {"figure": x["label"], "caption": x["caption"][:160]} for x in f]}] if f else [])
-
-    def t_show_figure(self, figure: str) -> ToolResult:
-        f = self._find(self.agent.figures(), figure)
-        if f is None:
-            raise ValueError(f"No figure {figure!r} in this paper.")
-        return ToolResult(json.dumps({"label": f["label"], "caption": f["caption"]}, ensure_ascii=False),
-                          [{"type": "figure", "path": str(self.agent.path / "paper" / f["file"]),
-                            "caption": f"{f['label']}: {f['caption']}"}])
-
-    def t_list_my_files(self) -> ToolResult:
-        from .profiles import get_profile
-
-        d = self.current_data()
-        names = list(dict.fromkeys(self.agent.spec(m.id).profile for m in self.agent.methods)) or ["generic"]
-        rows: list[dict[str, Any]] = []
-        for name in names:  # read as each method's field reads it: image metadata, table columns, sampling rate...
-            try:
-                files = get_profile(name).inspect(d).get("files", []) if d.exists() else []
-            except Exception:  # noqa: BLE001 - files this field can't read are listed by the others
-                files = []
-            for f in files:
-                row = {k: (", ".join(map(str, v)) if isinstance(v, list) else v) for k, v in f.items()
-                       if k not in ("shape",)}
-                if not any(r.get("file") == row.get("file") for r in rows):
-                    rows.append(row)
-        return ToolResult(json.dumps({"folder": str(d), "files": rows}, default=str),
-                          [{"type": "table", "rows": rows}] if rows else [])
-
-    def t_check_my_data(self, method: str, data_path: str | None = None, scale_ratio: float | None = None) -> ToolResult:
-        r = check_inputs(self.agent.spec(method), self._data(data_path), scale_ratio=scale_ratio)
-        adj = [a.__dict__ for a in r.adjustments]
-        payload = {"status": r.status, "can_run": r.can_run, "checks": r.as_rows(), "adjustments": adj}
-        return ToolResult(json.dumps(payload, default=str),
-                          [{"type": "checks", "status": r.status, "rows": r.as_rows(), "adjustments": adj}])
-
-    def t_reproduce(self, method: str) -> ToolResult:
-        out = reproduce(self.agent.spec(method), self.agent.runs_dir, runner=self.runner, agent=self.who,
-                        progress=self.progress)
-        self.last_run = out.run_dir
-        from .agent import PaperAgent, record_reproduction
-
-        if record_reproduction(self.agent.path, method, out):
-            self.agent.methods[:] = PaperAgent.load(self.agent.path).methods
-        c = out.comparison
-        verdict = ("reproduced" if c.reproduced else "differs") if c and c.measures else "not compared"
-        rows = [{"measure": m.measure, "reported": m.reported, "reproduced": m.reproduced,
-                 "difference": f"±{m.rel_diff:.3g}" if m.absolute else f"{m.rel_diff:.1%}",
-                 "tolerance": m.tolerance_label, "within": "yes" if m.within else "no"}
-                for m in (c.measures if c else [])]
-        payload = {"verdict": verdict, "headline": c.headline() if c else None, "same_numbers": c.count if c else None,
-                   "ladder": out.ladder, "measures": rows, "run": out.run_dir.name}
-        return ToolResult(json.dumps(payload, default=str),
-                          [{"type": "comparison", "ok": verdict == "reproduced",
-                            "headline": c.headline() if c else verdict, "rows": rows},
-                           *self._run_attachments(out.run_dir)])
-
-    def t_run_on_my_data(self, method: str, data_path: str | None = None, auto_adjust: bool = True,
-                         channel: int = 0, overrides: dict[str, Any] | None = None,
-                         scale_ratio: float | None = None) -> ToolResult:
-        ov = {k: (v["value"], v.get("reason") or "chosen by the user") if isinstance(v, dict) else
-              (v, "chosen by the user") for k, v in (overrides or {}).items()}
-        out = run_on_data(self.agent.spec(method), self._data(data_path), self.agent.runs_dir, runner=self.runner,
-                          agent=self.who, auto_adjust=auto_adjust, channel=channel, overrides=ov,
-                          progress=self.progress, scale_ratio=scale_ratio)
-        self.last_run = out.run_dir
-        csv_text = (out.run_dir / "outputs" / "results.csv").read_text(encoding="utf-8")
-        lines = csv_text.splitlines()
-        payload = {"parameters_used": out.params, "checks": out.check.as_rows() if out.check else [],
-                   "adjustments": [a.__dict__ for a in out.check.adjustments] if out.check else [],
-                   "results_csv": "\n".join(lines[:50]) + ("\n..." if len(lines) > 50 else ""),
-                   "run": out.run_dir.name}
-        return ToolResult(json.dumps(payload, default=str),
-                          [{"type": "params", "params": out.params}, *self._run_attachments(out.run_dir)])
-
-    def t_compare_paper_parameters(self, method: str, data_path: str | None = None) -> ToolResult:
-        from .workspace import whatif
-
-        spec = self.agent.spec(method)
-        w = whatif(spec, self._data(data_path), spec.default_params(), runner=self.runner)
-        if self.last_run is not None:
-            self.whatifs[self.last_run.name] = w
-        rows = w["rows"]
-        return ToolResult(json.dumps({"parameters": w["params"], "results": rows[:50],
-                                      "note": "Not recorded: a comparison only."}, default=str),
-                          [{"type": "whatif", "params": w["params"], "rows": rows}])
-
-    def t_set_pixel_size(self, pixel_size: float, unit: str = "µm", source: str = "") -> ToolResult:
-        from .profiles.bioimaging import set_calibration
-
-        src = self._data(None)
-        dest = src if src == self.uploads else self.uploads / "calibrated"
-        changed = set_calibration(src, dest, float(pixel_size), unit, who=self.who, source=source)
-        if dest != src:
-            self.data_dir = dest
-        msg = (f"Pixel size {pixel_size:g} {unit} set for {len(changed)} uncalibrated file(s), recorded as "
-               f"provided by {self.who}." if changed else "All files already had a calibration; nothing changed.")
-        return ToolResult(json.dumps({"calibrated": changed, "data": str(dest)}), [{"type": "note", "text": msg}])
-
-    def t_methods_text(self, run: str | None = None) -> ToolResult:
-        text = methods_paragraph(self._run_dir(run))
-        return ToolResult(json.dumps({"methods_paragraph": text}), [{"type": "methods_text", "text": text}])
-
-    def t_approve_run(self, accepted: bool, run: str | None = None, note: str = "") -> ToolResult:
-        d = self._run_dir(run)
-        approve(d, self.who, accepted, note)
-        word = "approval" if accepted else "rejection"
-        return ToolResult(json.dumps({"recorded": word, "by": self.who, "run": d.name}),
-                          [{"type": "note", "text": f"Recorded {word} by {self.who} in {d.name}."}])
-
-    def t_create_output_crate(self, run: str | None = None) -> ToolResult:
-        d = self._run_dir(run)
-        method = self._method_of(d)
-        spec = self.agent.spec(method)
-        record = publish_back(spec, d)
-        archive = next(r["archive"] for r in record["runs"] if r["run"] == d.name)
-        h = "The paper's record: " + headline(summarise_record(find_runs(spec, self.agent.runs_dir)))
-        return ToolResult(json.dumps({"crate_zip": archive, "run": d.name, "record": h}),
-                          [{"type": "crate", "zip": archive, "run_dir": str(d), "record": h}])
-
-    def t_followup_checks(self, method: str) -> ToolResult:
-        from .followup import followups_for, propose
-
-        done = followups_for(self.agent.runs_dir, self.agent.spec(method))
-        payload = {"proposed": [f.as_dict() for f in propose(self.agent.spec(method))],
-                   "already_run": [{k: r[k] for k in ("run", "followup", "headline")} for r in done]}
-        rows = [{"id": f["id"], "kind": f["kind"], "check": f["title"], "why": f["why"],
-                 "can run here": "yes" if f["runnable"] else f"needs {f['needs']}"} for f in payload["proposed"]]
-        done_rows = [{"ran": r["followup"], "result": r["headline"]} for r in done]
-        return ToolResult(json.dumps(payload, default=str),
-                          [{"type": "table", "rows": rows}] + ([{"type": "table", "rows": done_rows}] if done else []))
-
-    def t_run_followup_check(self, method: str, check: str) -> ToolResult:
-        from .followup import run_followup
-        from .runcrate import summarise_run
-
-        out = run_followup(self.agent.spec(method), check, self.agent.runs_dir, who=self.who, runner=self.runner)
-        self.last_run = out.run_dir
-        h = summarise_run(out.run_dir)["headline"]
-        return ToolResult(json.dumps({"headline": h, "same_numbers": out.comparison.count if out.comparison else None,
-                                      "run": out.run_dir.name}),
-                          [{"type": "note", "text": h}, *self._run_attachments(out.run_dir)])
-
-    def t_export_crate(self) -> ToolResult:
-        from .export import export_crate
-
-        path = export_crate(self.agent.path)
-        return ToolResult(json.dumps({"crate": str(path)}),
-                          [{"type": "crate", "zip": str(path), "record": "The research object's RO-Crate."}])
-
-    def t_report_page(self) -> ToolResult:
-        from .report import build_report
-
-        path = build_report(self.agent.path)
-        return ToolResult(json.dumps({"report": str(path)}), [{"type": "note", "text": f"Report page written: {path}"}])
-
-    def t_make_figure(self, run: str | None = None) -> ToolResult:
-        from .figures import make_run_figure
-
-        current = next((m.run_crate for m in self.agent.methods if m.run_crate), None)
-        path = make_run_figure(self._run_dir(run) if run else Path(current) if current else self._run_dir(None))
-        return ToolResult(json.dumps({"figure": str(path)}),
-                          [{"type": "figure", "path": str(path), "caption": "Published vs reproduced, plotted from "
-                                                                            "this run's outputs"}])
-
-    def _recreated(self, method: str) -> tuple[Path, list[dict[str, Any]]]:
-        from .paper_figures import recreated
-
-        m = next((x for x in self.agent.methods if method in (x.name, x.id)), None)
-        if m is None or not m.run_crate or not Path(m.run_crate).exists():
-            raise ValueError(f"No reproduction of {method} yet: reproduce it first.")
-        return Path(m.run_crate), recreated(Path(m.run_crate), self.agent.path / "paper")
-
-    def t_recreated_figures(self, method: str) -> ToolResult:
-        _, figs = self._recreated(method)
-        if not figs:
-            raise ValueError(f"{method} redraws none of the paper's figures.")
-        att: list[dict[str, Any]] = []
-        for f in figs:
-            if f["original"]:
-                att.append({"type": "figure", "path": str(f["original"]), "caption": f"{f['label']}, the paper"})
-            att.append({"type": "figure", "path": str(f["recreated"]), "caption": f"{f['label']}, recreated"})
-        info = [{"figure": f["label"], "caption": f["caption"], "original_available": bool(f["original"]),
-                 "review": f["review"]} for f in figs]
-        return ToolResult(json.dumps(info, ensure_ascii=False, default=str), att)
-
-    def t_review_figure(self, method: str, figure: str, verdict: str, note: str = "") -> ToolResult:
-        from .paper_figures import review_figure
-
-        run, figs = self._recreated(method)
-        f = next((x for x in figs if x["label"].lower() == figure.lower().strip() or x["recreated"].name == figure), None)
-        if f is None:
-            raise ValueError(f"{method} didn't recreate {figure}.")
-        review_figure(run, self.who, f["recreated"].name, verdict, note)
-        msg = f"Recorded: {f['label']} judged '{verdict}' by {self.who}."
-        return ToolResult(json.dumps({"message": msg}), [{"type": "note", "text": msg}])
-
-    def t_reproducibility_record(self) -> ToolResult:
-        if not self.agent.has_methods:
-            return ToolResult(json.dumps({"headline": "No runnable method yet, so no runs.", "runs": []}))
-        runs = find_runs(self.agent.spec(), self.agent.runs_dir)
-        h = headline(summarise_record(runs))
-        rows = [{k: r[k] for k in ("when", "method", "mode", "verdict", "by", "images", "approved")} for r in runs]
-        return ToolResult(json.dumps({"headline": h, "runs": rows}, default=str),
-                          [{"type": "record", "headline": h, "rows": rows}])
-
-
-# ---- events streamed to the UI ------------------------------------------------------------
-# ("text", str) | ("tool", name, input) | ("result", name, ToolResult)
-
-
-def tools_for(agent: PaperAgent) -> list[dict[str, Any]]:
-    """The tools for this research object's fields: no pixel sizes or channels for a paper analysing tables."""
-    import copy
-
-    from .profiles import fields_of
-
-    fields = fields_of(agent)
-    scale = any(f.scale for f in fields)
-    images = any(f.scale == "pixel size" for f in fields)
-    out = []
-    for t in copy.deepcopy(TOOLS):
-        if t["name"] == "set_pixel_size" and not images:
-            continue
-        props = t["input_schema"].get("properties", {})
-        if not scale:
-            props.pop("scale_ratio", None)
-        if not any(f.visual for f in fields):
-            props.pop("channel", None)
-        out.append(t)
-    return out
+from .chat_tools import (  # noqa: F401 - re-exported: the chat's tools live in chat_tools
+    TOOLS,
+    ChatTools,
+    ToolResult,
+    runner_choices,
+    tools_for,
+)
 
 
 def system_prompt(agent: PaperAgent, max_paper_chars: int = MAX_PAPER_CHARS) -> str:
@@ -547,7 +109,7 @@ class ClaudeChat:
                 model=self.model,
                 max_tokens=16000,
                 system=self.system,
-                tools=tools_for(agent),
+                tools=tools_for(self.agent),
                 messages=self.messages,
                 output_config={"effort": "medium"},
                 betas=["server-side-fallback-2026-07-01"],
@@ -639,9 +201,130 @@ def suggested_questions(agent: PaperAgent, limit: int = 6) -> list[str]:
     return picked[:limit]
 
 
-def follow_up_questions(agent: PaperAgent, reply_parts: list[dict[str, Any]], asked: set[str], n: int = 2) -> list[str]:
-    """Two questions that follow from the last answer: what it ran decides what is worth asking next (a difference
-    leads to its follow-up checks, a check of your data to running on it...). Never one already asked."""
+SECTION_SKIP = {"abstract", "references", "acknowledgements", "acknowledgments", "author contributions", "funding",
+                "competing interests", "conflict of interest", "supporting information", "supplementary material"}
+
+
+def _sections(text: str) -> list[tuple[str, str]]:
+    """``(heading, body)`` for each ``## heading`` of the paper's text (empty for a PDF read as plain text)."""
+    out: list[tuple[str, str]] = []
+    head, buf = None, []  # type: str | None, list[str]
+    for line in text.splitlines():
+        m = re.match(r"^#{1,3}\s+(.+?)\s*$", line)
+        if m:
+            if head is not None:
+                out.append((head, "\n".join(buf)))
+            head, buf = m.group(1), []
+        elif head is not None:
+            buf.append(line)
+    if head is not None:
+        out.append((head, "\n".join(buf)))
+    return out
+
+
+def _terms(text: str) -> set[str]:
+    from .paper import STOPWORDS
+
+    return {w for w in re.findall(r"[a-z][a-z-]{3,}", text.lower()) if w not in STOPWORDS}
+
+
+def _table_axes(path: Path) -> tuple[str, str] | None:
+    """The first column and the first numeric column of a table, as a plot's x and y; None if it has none."""
+    import csv
+
+    try:
+        with path.open(newline="", encoding="utf-8") as fh:
+            rows = list(csv.reader(fh))
+    except OSError:
+        return None
+    if len(rows) < 2 or len(rows[0]) < 2:
+        return None
+    header, first = rows[0], rows[1]
+    for i, cell in enumerate(first[1:], 1):
+        try:
+            float(str(cell).replace(",", "").replace("−", "-"))
+        except ValueError:
+            continue
+        if header[i].strip():
+            return header[0].strip() or "row", header[i].strip()
+    return None
+
+
+def questions_about(agent: PaperAgent, question: str, answer: str, tools_used: set[str] | None = None) -> list[str]:
+    """Questions that follow from what the last question and answer were about: the methods, parameters, follow-up
+    checks, tables and figures they name, and the section of the paper nearest to the question's words. Each
+    suggestion points at something the research object holds; nothing is invented."""
+    from .followup import propose
+
+    tools_used = tools_used or set()
+    text = f"{question}\n{answer}".lower()
+    out: list[str] = []
+    for m in agent.methods:
+        name = m.name.replace("_", " ")
+        if not (name.lower() in text or m.name.lower() in text or m.id.lower() in text):
+            continue
+        try:
+            spec = agent.spec(m.id)
+        except Exception:  # noqa: BLE001 - a method the crate can't describe gets no suggestions
+            continue
+        if m.status == "differs":
+            out.append(f"Why do the {name} results differ from the paper?")
+        elif m.status == "validated":
+            out.append(f"How was {name} checked against the paper's published results?")
+        elif m.status == "failed":
+            out.append(f"Why did {name} fail to run?")
+        elif m.readiness != "blocked":
+            out.append(f"Reproduce {name} on the paper's own data.")
+        for p in spec.value_inputs:  # a parameter the question or answer names
+            if (p.name.replace("_", " ").lower() in text or p.name.lower() in text) and p.prop("quote"):
+                out.append(f"Where does the paper state {p.name.replace('_', ' ')}, and what happens if I change it?")
+        try:
+            for f in propose(spec):  # a follow-up check it names
+                if f.runnable and f.title.lower() in text:
+                    out.append(f"Run the check '{f.title}' for {name}.")
+        except Exception:  # noqa: BLE001
+            pass
+        if any(p.prop("quote") for p in spec.value_inputs):
+            out.append(f"Which parameters does {name} use, and where does the paper state them?")
+        out.append(f"Will {name} work on my data? What should I check first?" if spec.needs_data
+                   else f"Run {name} with my own values: which can I change?")
+    for t in agent.tables():
+        label = t.get("label") or ""
+        if label and label.lower() in text:
+            if "get_table" not in tools_used:
+                out.append(f"Show {label} and explain what it reports.")
+            axes = _table_axes(agent.path / "paper" / t["file"])
+            if axes:
+                out.append(f"Plot {label}: {axes[1]} by {axes[0]}.")
+            if any(label.lower() in (m.description or "").lower() for m in agent.methods):
+                out.append(f"Which method reproduces {label}, and does it match?")
+    for f in agent.figures():
+        label = f.get("label") or ""
+        if label and label.lower() in text:
+            if not {"get_figure", "show_figure"} & tools_used:
+                out.append(f"Show {label}.")
+            if any(m.run_crate for m in agent.methods):
+                out.append(f"Was {label} redrawn by a reproduction? Show both.")
+    if agent.paper and question:  # the section of the paper the question's words point at, not yet asked about
+        terms = _terms(question)
+        best, score = None, 0
+        for head, body in _sections(agent.paper.text):
+            if head.lower() in SECTION_SKIP or not _terms(head) or _terms(head) <= terms:
+                continue
+            n = sum(1 for w in terms if w in body.lower())
+            if n > score:
+                best, score = head, n
+        if best and score >= min(2, len(terms)) and score > 0:
+            out.append(f"What does the paper say about {best[0].lower() + best[1:]}?")
+    return out
+
+
+def follow_up_questions(agent: PaperAgent, reply_parts: list[dict[str, Any]], asked: set[str], n: int = 2,
+                        question: str = "") -> list[str]:
+    """Two questions that follow from the last question and answer: what the answer ran decides first (a
+    difference leads to its follow-up checks, a check of your data to running on it...), then what the question
+    and answer were about (a method, a table, a figure, a parameter, a section of the paper), then the research
+    object's own suggestions. Never one already asked."""
     from .followup import propose
 
     tools = [p for p in reply_parts if p.get("kind") == "tool"]
@@ -670,8 +353,13 @@ def follow_up_questions(agent: PaperAgent, reply_parts: list[dict[str, Any]], as
         out += ["How do my results compare with what the paper reported?", "Write the methods paragraph for this run."]
     if {"make_figure", "report_page"} & set(names):
         out += ["Export the RO-Crate of this research.", "What does the paper not say, that had to be assumed?"]
-    out += suggested_questions(agent, limit=12)  # then the content-based ones, in order
-    seen, picked = set(asked), []
+    answer = "\n".join(p.get("text", "") for p in reply_parts if p.get("kind") == "text")
+    answer += "\n" + "\n".join(i.get("text", "") for p in reply_parts if p.get("kind") == "attachment"
+                               and (p.get("data") or {}).get("type") == "passages"
+                               for i in (p.get("data") or {}).get("items") or [])
+    out += questions_about(agent, question, answer, set(names))  # then what the question and answer were about
+    out += suggested_questions(agent, limit=12)  # then the research object's own, in order
+    seen, picked = set(asked) | {question.strip()}, []
     for q in out:
         if q not in seen:
             seen.add(q)
@@ -868,7 +556,8 @@ class LocalChat:
             "- **compare** with the paper's parameters unchanged\n"
             "- **my pixel size is 0.5 µm** (when your images have no calibration)\n"
             "- **why does it differ?** follow-up checks, and **run check** <id>\n"
-            "- **plot** published vs reproduced, **report** page\n"
+            "- **plot** published vs reproduced, or **plot Table 2: <y> by <x>** (a bar chart; say scatter, line, box or "
+            "hist for another kind), **report** page\n"
             "- **methods** paragraph, **approve** / **reject** the latest run, **record**, **files**, **about**")
 
     def __init__(self, agent: PaperAgent, tools: ChatTools):
@@ -942,7 +631,16 @@ class LocalChat:
             yield from self._do("followup_checks", method=method)
             yield ("text", "Say **run check** and the check's id to run one.")
         elif cmd("plot", "figure", "chart"):
-            yield from self._do("make_figure")
+            # "Plot Table 2: Culmen length by Species", "plot count by image grouped by sex": a chart of a table's
+            # columns, drawn by code from the file; otherwise the published-vs-reproduced chart of the latest run
+            spec = re.search(r"plot\s+(?:(table\s+\S+?)\s*:\s*)?(.+?)\s+by\s+(.+?)(?:\s+grouped\s+by\s+(.+?))?[.?!]?\s*$",
+                             text, re.I)
+            if spec:
+                kind = next((k for k in ("scatter", "line", "box", "hist") if has(k)), "bar")
+                yield from self._do("make_figure", kind=kind, source=f"table:{spec.group(1)}" if spec.group(1) else "results",
+                                    y=spec.group(2).strip(), x=spec.group(3).strip(), group=(spec.group(4) or "").strip())
+            else:
+                yield from self._do("make_figure")
         elif cmd("export ro-crate", "export the ro-crate", "paper's crate", "research object's crate", "ro-crate zip"):
             yield from self._do("export_crate")
         elif cmd("report"):

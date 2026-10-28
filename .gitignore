@@ -8,7 +8,7 @@ runs/
 deposits/
 examples/demo/paper_crate/reproducibility-record.json
 .DS_Store
-agents/
+/agents/
 examples/demo/paper_agent/
 examples/workflowhub-nuclei-segmentation/paper_agent/
 .mcp.json
@@ -18,3 +18,4 @@ examples/workflowhub-nuclei-segmentation/my-data-half-resolution/
 examples/medrxiv-inferential-reproducibility/paper_agent/
 examples/stardist-nuclei/paper_agent/
 examples/stardist-nuclei/paper-download/
+.claude/worktrees/

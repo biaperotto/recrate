@@ -164,15 +164,22 @@ def crate_fingerprint(agent_dir: str | Path) -> str:
     meta = crate / "ro-crate-metadata.json"
     if meta.exists():
         h.update(meta.read_bytes())
-    for f in sorted(p for p in crate.rglob("*") if p.is_file()):
+    for f in sorted(p for p in crate.rglob("*") if p.is_file() and not _incidental(p)):
         h.update(f"{f.relative_to(crate)}:{f.stat().st_size}".encode())
     return h.hexdigest()[:16]
 
 
-def crate_validation(agent_dir: str | Path, refresh: bool = False) -> dict[str, Any] | None:
+def _incidental(p: Path) -> bool:
+    """Files that appear on their own and say nothing about the crate (Finder's .DS_Store, Python's bytecode): they
+    must not make a validated crate look changed, which used to re-run the validator while the app drew its page."""
+    return p.name == ".DS_Store" or p.suffix == ".pyc" or "__pycache__" in p.parts
+
+
+def crate_validation(agent_dir: str | Path, refresh: bool = False, run: bool = True) -> dict[str, Any] | None:
     """The validation of the research object's current RO-Crate, run when the crate is created and again whenever it
     changes. Stored in agent.json (``crate_validation``) with the crate's fingerprint. None without a crate or the
-    validator, or with RECRATE_NO_VALIDATE set."""
+    validator, or with RECRATE_NO_VALIDATE set. ``run=False`` never starts the validator (it takes a minute or more:
+    it fetches its profiles): the stored result comes back, marked ``stale`` when the crate changed since."""
     import os
 
     agent_dir = Path(agent_dir)
@@ -184,7 +191,7 @@ def crate_validation(agent_dir: str | Path, refresh: bool = False) -> dict[str, 
     fp = crate_fingerprint(agent_dir)
     if stored and stored.get("fingerprint") == fp and not refresh:
         return stored
-    if os.environ.get("RECRATE_NO_VALIDATE") or validator() is None:
+    if not run or os.environ.get("RECRATE_NO_VALIDATE") or validator() is None:
         return {**stored, "stale": True} if stored else None
     v = validate_crate(agent_dir)
     v.update(fingerprint=fp, when=datetime.now(timezone.utc).replace(microsecond=0).isoformat())

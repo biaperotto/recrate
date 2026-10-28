@@ -34,6 +34,7 @@ TOLERANCE_SOURCES = {
     "method-noise": "measured by rerunning a stochastic method",
     "person": "set by a named person, with a reason",
     "code-stated": "stated by the authors' code or tutorial output (file named)",
+    "test-stated": "stated by the workflow's own published test (file named)",
 }
 
 
@@ -169,8 +170,9 @@ OUTPUT_KINDS = {
     "metric": "within the paper's reported CI, or a stated tolerance",
     "figure": "never compared as pixels: compare the data behind it",
     "text": "exact match or set overlap",
+    "files": "one row per produced file: sha1 exact, else size",
 }
-COMPARED_KINDS = {"scalar", "table"}
+COMPARED_KINDS = {"scalar", "table", "files"}
 
 # ---- parameters with meaning ------------------------------------------------------------------------------------
 PARAMETER_ROLES = {
@@ -230,9 +232,9 @@ def assumptions(spec, environment=None) -> list[str]:
             out.append(f"Tolerance for {t.column}: no stated source.")
         elif "wider" in t.evidence:
             out.append(f"Tolerance for {t.column} (±{t.value:g}): {t.evidence}.")
-    if "pixel size" not in spec.data_input.properties and any(
-            (p.scaling_rule or ("",))[0] == "pixel size" for p in spec.value_inputs):
-        out.append("The pixel size of the paper's images is not stated.")
+    from .profiles import get_profile  # local: profiles build on this module
+
+    out += get_profile(spec.profile).diagnose_inputs(spec)  # an input property the paper doesn't state (e.g. pixel size)
     for name, version in spec.software:
         if not version:
             out.append(f"{name}: version not stated.")

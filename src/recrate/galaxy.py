@@ -9,6 +9,12 @@ next to the original, which is left untouched:
 * example data and expected results: the Planemo test's input image and expected object count;
 * the input: a 2D single-channel image, as the workflow's tools require.
 
+A Galaxy workflow outside imaging (climate, genomics, text) is imported too: its inputs from the workflow's own
+input steps, its outputs from the declared workflow outputs (compared as files), the parameters from each step's
+tool state, and the field from the WorkflowHub record (EDAM topics, tags) when ``workflowhub.json`` sits next to
+the crate (sources.fetch_workflowhub writes it). Such a workflow is reported *blocked* until its tools are ported
+or a Galaxy server runs it: readiness lists every unported tool.
+
 ``GalaxyRunner`` runs the workflow without a Galaxy server. Each supported tool is a port of the Galaxy
 imaging tool's own code (BMCV/galaxy-image-analysis) at the version the workflow pins, and steps run in
 the workflow's own wiring. Only what the scientific outputs need is computed; steps whose outputs are
@@ -19,7 +25,9 @@ Unsupported tools stop the run with a clear message.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import re
 import shutil
 import warnings
 from datetime import datetime, timezone
@@ -30,7 +38,7 @@ import numpy as np
 import tifffile
 
 from . import __version__
-from .runners.base import RunResult, Runner, now_iso
+from .runners.base import Runner, RunResult, now_iso
 
 GIA = "https://github.com/BMCV/galaxy-image-analysis"
 
@@ -178,9 +186,15 @@ def result_steps(wf: dict[str, Any]) -> set[str]:
             conn = conn[0] if isinstance(conn, list) else conn
             visit(str(conn["id"]))
 
-    for sid, _ in _outputs(wf).values():
-        if tool_key(steps[sid].get("tool_id")) not in VISUAL_ONLY:
-            visit(sid)
+    outs = _outputs(wf)
+    if outs:
+        for sid, _ in outs.values():
+            if tool_key(steps[sid].get("tool_id")) not in VISUAL_ONLY:
+                visit(sid)
+    else:  # nothing declared as an output: every step may feed a result, so every tool is needed
+        for sid, s in steps.items():
+            if s.get("type") == "tool" and tool_key(s.get("tool_id")) not in VISUAL_ONLY:
+                visit(sid)
     return need
 
 
@@ -191,24 +205,172 @@ def unported_tools(wf: dict[str, Any]) -> list[str]:
                    if sid in needed and s["type"] == "tool" and tool_key(s.get("tool_id")) not in TOOLS})
 
 
+GENERIC_PARAMETER_CAP = 40  # parameters exposed from the tool states of unported tools, by step order
+_SKIP_KEYS = {"chromInfo", "dbkey", "__page__", "__rerun_remap_job_id__"}
+PARAMETER_TYPES = {"integer": "Integer", "float": "Float", "boolean": "Boolean", "text": "Text", "color": "Text"}
+
+
+def _scalar(v: Any) -> Any:
+    """A tool-state value as a scalar: JSON-encoded strings (``"\"no\""``) decoded; dicts, lists and empty
+    strings are not scalars (None)."""
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except ValueError:
+            pass
+    if isinstance(v, bool) or isinstance(v, (int, float)):
+        return v
+    if isinstance(v, str) and v.strip():
+        return v
+    return None
+
+
+def _scalars(state: dict[str, Any], nested: bool = False) -> list[tuple[tuple[str, ...], Any]]:
+    """The scalar values of a tool state, one level of conditional or section deep (``filter`` → ``filter_type``).
+    Connected inputs, runtime values and Galaxy's own keys are left out."""
+    out: list[tuple[tuple[str, ...], Any]] = []
+    for k, v in state.items():
+        if k.startswith("__") or k in _SKIP_KEYS:
+            continue
+        if isinstance(v, str) and v[:1] in "{[":
+            try:
+                v = json.loads(v)
+            except ValueError:
+                pass
+        if isinstance(v, dict):
+            if v.get("__class__") in {"ConnectedValue", "RuntimeValue"} or nested:
+                continue
+            out += [((k, *path), val) for path, val in _scalars(v, nested=True)]
+            continue
+        if isinstance(v, list):
+            continue
+        val = _scalar(v)
+        if val is not None:
+            out.append(((k,), val))
+    return out
+
+
+def _type_of(value: Any) -> str:
+    if isinstance(value, bool):
+        return "Boolean"
+    if isinstance(value, int):
+        return "Integer"
+    if isinstance(value, float):
+        return "Float"
+    return "Text"
+
+
+def _param_name(label: str | None, fallback: str) -> str:
+    return re.sub(r"\W+", "_", (label or "").strip().lower()).strip("_") or fallback
+
+
+def input_parameters(wf: dict[str, Any]) -> list[dict[str, Any]]:
+    """The workflow's data inputs (one per input step), as crate parameters: name from the step's label,
+    description from its annotation, the Galaxy datatype as the format when it has a media type."""
+    out = []
+    for sid, step in sorted(wf["steps"].items(), key=lambda kv: int(kv[0])):
+        if step.get("type") not in {"data_input", "data_collection_input"}:
+            continue
+        first = (step.get("inputs") or [{}])[0]
+        label = step.get("label") or first.get("name") or f"input_{sid}"
+        name = _param_name(label, f"input_{sid}")
+        fmt = _state(step).get("format")
+        fmt = fmt[0] if isinstance(fmt, list) and fmt else fmt
+        desc = step.get("annotation") or first.get("description") or f"Galaxy input '{label}'"
+        if fmt and not isinstance(fmt, dict):
+            desc += f" (Galaxy datatype: {fmt})"
+        p = {"id": f"in-{name}", "name": name, "description": desc,
+             "type": "Dataset" if step["type"] == "data_collection_input" else "File"}
+        media = GALAXY_FORMATS.get(str(fmt).lower()) if fmt and not isinstance(fmt, dict) else None
+        if media:
+            p["format"] = media
+        out.append(p)
+    return out
+
+
+GALAXY_FORMATS = {"tabular": "text/tab-separated-values", "tsv": "text/tab-separated-values", "csv": "text/csv",
+                  "txt": "text/plain", "tiff": "image/tiff", "tif": "image/tiff", "png": "image/png",
+                  "jpg": "image/jpeg", "netcdf": "application/x-netcdf", "json": "application/json",
+                  "pdf": "application/pdf", "fasta": "fasta", "fastq": "fastq", "fastqsanger": "fastq",
+                  "fastqsanger.gz": "fastq", "vcf": "vcf", "bam": "bam", "gff3": "gff3", "bed": "bed"}
+
+
 def exposed_parameters(wf: dict[str, Any]) -> list[dict[str, Any]]:
-    """The parameters that change the results, with their values in the workflow."""
+    """The parameters that change the results, with their values in the workflow: for ported tools the ones
+    EXPOSED lists; for the workflow's own parameter inputs their declared type and default; for any other tool the
+    scalar values of its tool state (named ``<tool>_<key>``, as published), up to GENERIC_PARAMETER_CAP."""
     out, seen = [], set()
     needed = result_steps(wf)
+    generic = 0
     for sid, step in sorted(wf["steps"].items(), key=lambda kv: int(kv[0])):
-        if sid not in needed:
-            continue
-        key = tool_key(step.get("tool_id"))
-        for name, path, typ, desc, scaling in EXPOSED.get(key, []):
+        if step.get("type") == "parameter_input":  # a parameter the workflow's authors meant to be set
+            st = _state(step)
+            name = _param_name(step.get("label"), f"parameter_{sid}")
             n = name if name not in seen else f"{name}_step{sid}"
             seen.add(n)
-            value = _get(_state(step), path)
-            if typ == "Float" and value is not None:
-                value = float(value)
-            out.append({"name": n, "step": sid, "path": path, "type": typ, "default": value,
-                        "description": f"{desc}. Galaxy step {sid}: {step.get('label') or step.get('name')}.",
-                        **({"scaling": scaling} if scaling else {})})
+            out.append({"name": n, "step": sid, "path": ("default",), "default": _scalar(st.get("default")),
+                        "type": PARAMETER_TYPES.get(str(st.get("parameter_type", "text")), "Text"), "role": "free",
+                        "description": (step.get("annotation") or f"Workflow parameter '{step.get('label') or n}'")
+                                       + f". Galaxy input step {sid}."})
+            continue
+        if sid not in needed or step.get("type") != "tool":
+            continue
+        key = tool_key(step.get("tool_id"))
+        if key in EXPOSED:
+            for name, path, typ, desc, scaling in EXPOSED[key]:
+                n = name if name not in seen else f"{name}_step{sid}"
+                seen.add(n)
+                value = _get(_state(step), path)
+                if typ == "Float" and value is not None:
+                    value = float(value)
+                out.append({"name": n, "step": sid, "path": path, "type": typ, "default": value,
+                            "description": f"{desc}. Galaxy step {sid}: {step.get('label') or step.get('name')}.",
+                            **({"scaling": scaling} if scaling else {})})
+            continue
+        if key in TOOLS:  # ported, with nothing worth exposing (a format conversion, a count)
+            continue
+        for path, value in _scalars(_state(step)):
+            if generic >= GENERIC_PARAMETER_CAP:
+                break
+            name = _param_name(f"{key}_{'_'.join(path)}", f"step{sid}_{'_'.join(path)}")
+            n = name if name not in seen else f"{name}_step{sid}"
+            seen.add(n)
+            generic += 1
+            out.append({"name": n, "step": sid, "path": path, "type": _type_of(value), "default": value, "role": "fixed",
+                        "description": f"'{'.'.join(path)}' of {key} {step.get('tool_version') or ''}".rstrip()
+                                       + f". Galaxy step {sid}: {step.get('label') or step.get('name')} (as published)."})
     return out
+
+
+def imaging_workflow(wf: dict[str, Any]) -> bool:
+    """Whether every tool is an imaging tool ReCRATE knows (ported, or another ``ip_*`` imgteam tool): then the
+    input is an image and the result an object count, as the ported tools compute."""
+    keys = [tool_key(s.get("tool_id")) for s in wf["steps"].values() if s.get("type") == "tool"]
+    return bool(keys) and all(k in TOOLS or k in VISUAL_ONLY or str(k).startswith("ip_") for k in keys)
+
+
+def _hub_metadata(src: Path) -> dict[str, Any]:
+    """The WorkflowHub record saved by sources.fetch_workflowhub (``workflowhub.json`` next to, or in, the crate)."""
+    for p in (src / "workflowhub.json", src.parent / "workflowhub.json"):
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except ValueError:
+                pass
+    return {}
+
+
+def profile_for(wf: dict[str, Any], hub: dict[str, Any]) -> str:
+    """The domain profile: bioimaging for an imaging workflow; else read from the record's EDAM topics and tags."""
+    if imaging_workflow(wf):
+        return "bioimaging"
+    words = " ".join([*(t.get("label", "") if isinstance(t, dict) else str(t) for t in hub.get("topic_annotations") or []),
+                      *(str(t) for t in hub.get("tags") or [])]).lower()
+    if any(w in words for w in ("imaging", "microscopy", "image analysis")):
+        return "bioimaging"
+    if any(w in words for w in ("time series", "electrophysiology", "eeg", "ecg")):
+        return "timeseries"
+    return "generic"
 
 
 def _outputs(wf: dict[str, Any]) -> dict[str, tuple[str, str]]:
@@ -322,14 +484,29 @@ class GalaxyRunner(Runner):
 
 # ---- importing a WorkflowHub crate --------------------------------------------------------------
 
+def _main_entity(root: dict[str, Any]) -> str:
+    m = root.get("mainEntity")
+    return str(m.get("@id", "") if isinstance(m, dict) else m or "")
+
+
 def is_galaxy_crate(crate_dir: Path) -> bool:
+    """A crate whose main workflow is Galaxy: a ``.ga`` file, or one whose programming language is Galaxy."""
     meta = Path(crate_dir) / "ro-crate-metadata.json"
     if not meta.exists():
         return False
-    graph = json.loads(meta.read_text(encoding="utf-8"))["@graph"]
-    root = next((e for e in graph if e.get("@id") == "./"), {})
-    main = (root.get("mainEntity") or {}).get("@id", "")
-    return main.endswith(".ga")
+    try:
+        graph = json.loads(meta.read_text(encoding="utf-8")).get("@graph", [])
+    except ValueError:
+        return False
+    idx = {e.get("@id"): e for e in graph if isinstance(e, dict)}
+    main = _main_entity(idx.get("./", {}))
+    if not main:
+        return False
+    if main.endswith(".ga"):
+        return True
+    lang = idx.get(main, {}).get("programmingLanguage")
+    lid = str(lang.get("@id", "") if isinstance(lang, dict) else lang or "")
+    return "galaxy" in (lid + " " + str(idx.get(lid, {}).get("name", ""))).lower()
 
 
 def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
@@ -343,13 +520,23 @@ def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
 
     src, out_dir = Path(src), Path(out_dir)
     meta = json.loads((src / "ro-crate-metadata.json").read_text(encoding="utf-8"))
-    idx = {e["@id"]: e for e in meta["@graph"]}
+    idx = {e["@id"]: e for e in meta["@graph"] if "@id" in e}
     root = idx["./"]
-    ga = src / root["mainEntity"]["@id"]
-    wf_entity = idx.get(root["mainEntity"]["@id"], {})
+    ga = src / _main_entity(root)
+    wf_entity = idx.get(_main_entity(root), {})
     wf = load_workflow(ga)
-    authors = [idx.get(c["@id"], {}).get("name") or c["@id"] for c in wf_entity.get("creator", [])]
+    hub = _hub_metadata(src)
+    imaging = imaging_workflow(wf)
+    authors = [idx.get(c["@id"], {}).get("name") or c["@id"] for c in wf_entity.get("creator", [])
+               if isinstance(c, dict)]
     authors = [a for a in authors if a] or [c.get("name") for c in wf.get("creator", []) if c.get("name")]
+    origin = root.get("isBasedOn") or root.get("identifier") or hub.get("url") or root.get("name") or src.name
+    origin = origin.get("@id", "") if isinstance(origin, dict) else str(origin)
+    article = next((e["@id"] for e in meta["@graph"] if "ScholarlyArticle" in (e.get("@type") if isinstance(
+        e.get("@type"), list) else [e.get("@type")]) and "@id" in e), None)
+    citation = root.get("citation")
+    citation = citation.get("@id") if isinstance(citation, dict) else citation
+    citation = citation or article or (f"https://doi.org/{hub['doi']}" if hub.get("doi") else None)
 
     # Example data and expected results, from the Planemo test
     tests = next((src / e["@id"] for e in meta["@graph"]
@@ -358,16 +545,28 @@ def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
     shutil.rmtree(work, ignore_errors=True)
     (work / "example").mkdir(parents=True)
     expected, tolerance = None, 0.0  # no source unless the published test states how it compares (no verdict)
+    tolerances: dict[str, Any] = {}
     case: dict[str, Any] = {}
     if tests and tests.exists():
         case = (yaml.safe_load(tests.read_text(encoding="utf-8")) or [{}])[0]
         job_files = [v["path"] for v in (case.get("job") or {}).values() if isinstance(v, dict) and v.get("path")]
         for p in job_files:
             shutil.copy2(tests.parent / p, work / "example" / Path(p).name)
+        if not imaging:  # the test's expected files, compared file by file (sha1), as the test itself does
+            rows = []
+            for name, o in (case.get("outputs") or {}).items():
+                f = tests.parent / str(o.get("path", "")) if isinstance(o, dict) and o.get("path") else None
+                if f is not None and f.is_file():
+                    rows.append((name, hashlib.sha1(f.read_bytes()).hexdigest(), f.stat().st_size))
+            if rows:
+                expected = work / "expected.csv"
+                expected.write_text("file,sha1,size\n" + "".join(f"{n},{h},{z}\n" for n, h, z in rows), encoding="utf-8")
+                tolerances = {"sha1": {"value": 0.0, "source": "test-stated", "file": tests.name,
+                                       "note": "the workflow's published test compares these outputs"}}
         count_name, count_out = next(((k, v) for k, v in (case.get("outputs") or {}).items()
                                       if isinstance(v, dict) and str(v.get("path", "")).endswith((".tabular", ".tsv", ".csv"))),
                                      (None, None))
-        if count_out and job_files:
+        if imaging and count_out and job_files:
             rows = (tests.parent / count_out["path"]).read_text(encoding="utf-8").split()
             if len(rows) >= 2 and rows[-1].isdigit():
                 expected = work / "expected.csv"
@@ -380,29 +579,54 @@ def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
     params = exposed_parameters(wf)
     tools = [f"{tool_key(s.get('tool_id'))} {s.get('tool_version')}" for _, s in sorted(wf["steps"].items(),
              key=lambda kv: int(kv[0])) if s["type"] == "tool"]
+    wf_name = wf.get("name") or wf_entity.get("name") or src.name
+    license_ = root.get("license")
+    license_ = license_.get("@id") if isinstance(license_, dict) else license_
+    if isinstance(license_, str) and "://" not in license_:
+        license_ = f"https://spdx.org/licenses/{license_}"
+    counts = any(tool_key(s.get("tool_id")) == "ip_count_objects" for s in wf["steps"].values())
+    if imaging:
+        data_inputs: list[dict[str, Any]] = [
+            {"id": "in-image", "name": "input_image", "type": "File", "format": "image/tiff",
+             "description": "Fluorescence image of cell nuclei, a single 2D channel (as the workflow's tools require)",
+             "properties": {"channels": {"value": 1}, "dimensions": {"value": "2D"}}}]
+        outputs: list[dict[str, Any]] = [{"id": "out-results", "name": "objects_count", "type": "File",
+                                          "format": "text/csv", "tolerances": {"count": tolerance}}]
+        method_name = "segmentation_and_counting" if counts else _param_name(wf_name, Path(ga).stem)
+    else:
+        data_inputs = input_parameters(wf)
+        outputs = []
+        for label, (sid, oname) in _outputs(wf).items():
+            step = wf["steps"][sid]
+            outputs.append({"id": f"out-{_param_name(label, oname)}", "name": _param_name(label, oname), "type": "File",
+                            "description": f"Workflow output '{label}' (step {sid}: {step.get('label') or step.get('name')})"})
+        if not outputs:
+            outputs = [{"id": "out-results", "name": "results", "type": "File",
+                        "description": "What the workflow produces (it declares no named outputs)."}]
+        outputs[0]["kind"] = "files"  # compared file by file, as the workflow's test does (model.OUTPUT_KINDS)
+        if tolerances:
+            outputs[0]["tolerances"] = tolerances
+        method_name = _param_name(wf_name, Path(ga).stem)
     desc = {
-        "name": wf.get("name") or wf_entity.get("name") or src.name,
-        "description": (wf.get("annotation") or "") + f" Derived by ReCRATE from the Galaxy Workflow RO-Crate "
-                       f"{root.get('isBasedOn', '')} (original left unchanged).",
-        "identifier": f"{root.get('isBasedOn') or src.resolve().as_uri()}#recrate",
-        "citation": root.get("isBasedOn"),
-        "license": f"https://spdx.org/licenses/{root['license']}" if isinstance(root.get("license"), str) else None,
-        "authors": authors, "profile": "bioimaging", "draft": False,
+        "name": wf_name,
+        "description": ((wf.get("annotation") or "") + f" Derived by ReCRATE from the Galaxy Workflow RO-Crate "
+                        f"{origin} (original left unchanged).").strip(),
+        "identifier": f"{origin if '://' in origin else src.resolve().as_uri()}#recrate",
+        "citation": citation,
+        "license": license_ if isinstance(license_, str) else None,
+        "authors": authors, "profile": profile_for(wf, hub), "draft": False,
         "datePublished": str(root.get("datePublished") or "")[:10] or None,
         "methods": [{
-            "name": "segmentation_and_counting" if "count" in (wf.get("name") or "").lower() else Path(ga).stem,
+            "name": method_name,
             "description": wf.get("annotation") or "",
             "workflow": {"file": str(ga), "language": "Galaxy",
                          "software": [{"name": "Galaxy tool " + t.split()[0], "version": t.split()[1]} for t in tools]},
-            "inputs": [{"id": "in-image", "name": "input_image", "type": "File", "format": "image/tiff",
-                        "description": "Fluorescence image of cell nuclei, a single 2D channel (as the workflow's tools require)",
-                        "properties": {"channels": {"value": 1}, "dimensions": {"value": "2D"}}}]
+            "inputs": data_inputs
                       + [{"id": f"in-{p['name']}", "name": p["name"], "type": p["type"], "default": p["default"],
                           "description": p["description"], **({"scaling": p["scaling"]} if p.get("scaling") else {}),
-                          **MEANING.get(p["name"], {})}
+                          **({"role": p["role"]} if p.get("role") else {}), **MEANING.get(p["name"], {})}
                          for p in params],
-            "outputs": [{"id": "out-results", "name": "objects_count", "type": "File", "format": "text/csv",
-                         "tolerances": {"count": tolerance}}],
+            "outputs": outputs,
             **({"example_data": str(work / "example")} if any((work / "example").iterdir()) else {}),
             **({"expected": str(expected)} if expected else {}),
         }],
@@ -413,7 +637,7 @@ def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
     mpath = out_dir / "ro-crate-metadata.json"
     m = json.loads(mpath.read_text(encoding="utf-8"))
     r = next(e for e in m["@graph"] if e.get("@id") == "./")
-    r["isBasedOn"] = {"@id": root.get("isBasedOn") or str(src)}
+    r["isBasedOn"] = {"@id": origin if "://" in origin else str(src)}
     r["dateModified"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     # The test's published pictures (e.g. the overlay), kept so a reproduction can be shown next to them
     for name, out in (case.get("outputs") or {}).items():

@@ -54,3 +54,59 @@ def test_preprint_links_keep_the_version_out_of_the_doi():
     bio = identify("https://www.biorxiv.org/content/10.1101/2023.01.02.522345v1.full")
     assert (bio[0].kind, bio[0].id, bio[0].version) == ("preprint", "10.1101/2023.01.02.522345", "v1")
     assert identify("10.1101/2023.01.02.522345v3")[0].id == "10.1101/2023.01.02.522345"  # a bare DOI too
+
+
+def test_workflowhub_fetch_saves_the_registry_record(tmp_path, monkeypatch):
+    """What the crate itself rarely says (DOI, EDAM topics, parsed inputs) is kept next to it, offline afterwards."""
+    import io
+    import json
+
+    from recrate import sources
+
+    attrs = {"title": "Nuclei", "license": "MIT", "latest_version": 2, "doi": "10.48546/workflowhub.workflow.771.2",
+             "workflow_class": {"title": "Galaxy"}, "tags": ["imaging"],
+             "topic_annotations": [{"label": "Microscopy", "identifier": "http://edamontology.org/topic_3382"}],
+             "internals": {"inputs": [{"id": "#main/input_image", "type": [{"type": "File"}]}], "outputs": [], "steps": []}}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ro-crate-metadata.json", json.dumps({"@graph": [{"@id": "./", "@type": "Dataset", "name": "Nuclei"}]}))
+    monkeypatch.setattr(sources, "_json", lambda url: {"data": {"attributes": attrs}})
+    monkeypatch.setattr(sources, "_get", lambda url, accept=None, timeout=60: (buf.getvalue(), "application/zip"))
+    found = sources.fetch_workflowhub("771", None, tmp_path)
+    assert found.kind == "crate" and found.path == tmp_path / "crate" and "DOI: 10.48546/workflowhub.workflow.771.2" in found.notes
+    rec = json.loads((tmp_path / "workflowhub.json").read_text())
+    assert rec["doi"] == attrs["doi"] and rec["version"] == "2" and rec["workflow_class"] == "Galaxy"
+    assert rec["topic_annotations"][0]["label"] == "Microscopy" and rec["internals"]["inputs"][0]["id"] == "#main/input_image"
+
+
+def test_agentify_fetches_a_crate_given_as_a_link(tmp_path, monkeypatch):
+    """`recrate agentify --crate https://workflowhub.eu/workflows/771` fetches the crate (here: a fake fetch that
+    copies the nuclei example) and records where it came from; an unknown string is refused with a clear message."""
+    import shutil
+    from pathlib import Path
+
+    import pytest
+
+    import recrate.sources as sources
+    from recrate.agent import agentify
+    from recrate.crate import CrateError
+
+    example = Path(__file__).resolve().parent.parent / "examples" / "workflowhub-nuclei-segmentation" / "crate"
+    if not example.exists():
+        pytest.skip("WorkflowHub example not present")
+
+    def fake_fetch(ref, dest):
+        assert ref.kind == "workflowhub" and ref.id == "771"
+        shutil.copytree(example, Path(dest) / "crate")
+        return sources.Found("crate", "Nuclei (WorkflowHub #771, v2)", Path(dest) / "crate",
+                             "https://workflowhub.eu/workflows/771?version=2", ["Licence: MIT"])
+
+    monkeypatch.setattr(sources, "fetch", fake_fetch)
+    monkeypatch.delenv("RECRATE_OFFLINE", raising=False)  # a link must be fetched: refused when offline
+    with pytest.raises(CrateError, match="offline"):
+        agentify(tmp_path / "agent0", crate="https://workflowhub.eu/workflows/771", validate="none", online=False)
+    a = agentify(tmp_path / "agent", crate="https://workflowhub.eu/workflows/771", validate="none", search_crate=False)
+    assert a.methods and a.manifest["crate_fetched"]["from"].startswith("https://workflowhub.eu/workflows/771")
+    assert (tmp_path / "agent" / "source" / "crate" / "ro-crate-metadata.json").exists()
+    with pytest.raises(CrateError, match="neither a folder"):
+        agentify(tmp_path / "agent2", crate="not-a-crate-anywhere", validate="none")

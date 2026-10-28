@@ -19,7 +19,7 @@ agents/my_paper/
 
 | Input | What happens |
 | --- | --- |
-| RO-Crate (folder, zip, WorkflowHub, Zenodo) | Used as published. For a Galaxy crate, parameters come from the `.ga` file and the published data and expected count from its Planemo test. |
+| RO-Crate (folder, zip, WorkflowHub, Zenodo) | Used as published when it is a ReCRATE crate. A Workflow RO-Crate from WorkflowHub is first *derived* into one: for Galaxy, inputs, outputs and parameters from the `.ga` file and the published data and expected outputs from its Planemo test (`galaxy.py`); for nf-core, CWL and Snakemake, from their own conventions (`adapters.py`): parameters, the published test as example data and expected results, and an *invocation recipe* that says how the engine is called, which named inputs map to which files, and whether the run needs the network or a container runtime. The original stays in `source-crate/`, and `workflowhub.json` keeps what the registry knows (DOI, EDAM topics, parsed inputs). |
 | Paper, with a crate published somewhere | `crate_search.py` looks in the paper's links, WorkflowHub, Zenodo, DataCite and the code repository, and uses what it finds, saying where. |
 | Paper only | `paper_crate.py` recreates a crate as of publication (date, software, data), marked draft. It has no runnable method until one is described (by the `/recrate` agent, or `--draft claude`). |
 
@@ -28,9 +28,14 @@ agents/my_paper/
 `model.py` defines the vocabulary everything else uses.
 
 **Readiness** (before running, `agent.diagnose`): `blocked` when no runner here can run the workflow, naming
-what is missing (an unported Galaxy tool, an interpreter that isn't installed); `ready-with-gaps` with the gaps
-(no published data or results, a tolerance without a source, an input property the crate doesn't state);
-otherwise `ready`. Ready never means reproduced.
+what is missing (an unported Galaxy tool, an interpreter that isn't installed); `reusable` when it runs but the
+research publishes no result to compare a run with (most WorkflowHub entries: a workflow registered without a paper
+or a test), so the deliverable is "runs, checks your data, records", not reproduction; `ready-with-gaps` with the
+gaps (no published data, a tolerance without a source, an input property the crate doesn't state); otherwise
+`ready`. Ready never means reproduced. For a workflow engine, ready also means ReCRATE knows how to call the
+workflow: either the crate carries an invocation recipe or the workflow follows ReCRATE's own contract; a pipeline
+that takes neither is `blocked` ("no adapter knows how to call this pipeline"), as is a recipe whose container
+runtime is not installed.
 
 **The verdict ladder**, per method, each step `passed`, `partial`, `failed` or `not checked`:
 
@@ -48,8 +53,10 @@ The older single status (`validated`, `differs`, `failed`, `not validated`) is d
 A tolerance without a source gives no verdict on those numbers. `recrate check-description` rejects a drafted
 tolerance without one, checks quotes against the paper, and compares `paper-rounding` with the decimals printed.
 
-**Output kinds.** Each output declares a `kind`; `scalar` and `table` are compared, any other kind leaves "same
-numbers" at "not checked", with the reason.
+**Output kinds.** Each output declares a `kind`; `scalar`, `table` and `files` (one row per produced file: the hash
+exact, sha1 as Planemo tests pin files or md5 as nf-test snapshots do, a row without a hash reproduced when the file
+is produced, as a workflow's own test states them, tolerance source `test-stated`) are compared, any other kind leaves
+"same numbers" at "not checked", with the reason.
 
 **Parameters with meaning.** Each parameter may declare a `unit`, a `scaling` rule (`scales_with:<property>^<exp>`,
 or the older `inverse_pixel_size` / `inverse_pixel_area`), a `role` (`free`, `fixed`), `sensitive_to` (a check whose
@@ -86,6 +93,25 @@ Run Crate 0.5 and Workflow Run Crate 0.5 (CI runs it). At the recommended level 
 The app (`app/app.py`), the CLI (`cli.py`), the chat (`chat.py`) and the MCP server (`mcp_server.py`) call the same
 core functions: `agentify`, `diagnose`, `reproduce`, `run_on_data`, `check_inputs`, `run_followup`,
 `make_run_figure`, `review_conclusion`, `publish_back`.
+
+The MCP server runs over stdio, which Claude Desktop and Claude Code launch themselves (`recrate install-mcp`), or
+over streamable HTTP (`recrate serve <agent> --http`, at `http://127.0.0.1:8765/mcp` by default), so an agent on one
+computer is usable from any MCP client without cloning anything, as Paper2Agent's hosted servers are.
+`recrate install-mcp --transport http --url …` writes the client's entry for a running server and checks it by
+connecting, and `recrate verify-server --url …` checks a running server the same way. HTTP has no authentication,
+and the server runs the paper's code on its own machine: it binds to localhost unless told otherwise, and warns when
+it is not.
+
+**Runtimes for published pipelines.** A crate's invocation recipe lists what the engine needs (`needs`): the first one
+installed is used, docker, singularity or apptainer first, else conda, mamba or micromamba, with which a Nextflow
+pipeline runs its conda profile (each tool's environment built by Nextflow and cached in `~/.cache/recrate`, so a
+published pipeline runs on a computer without docker). The runtime and its version are recorded as software in the run
+crate. On a computer without any container runtime (a Mac), `recrate runtime setup` (`runtime_vm.py`) makes ReCRATE's
+own Linux VM with Lima, with docker, apptainer and the engines inside; `remote.py` then treats it as the default
+other machine for exactly the recipes this computer cannot run: the workflow's folder is copied there (rsync over
+Lima's SSH), the recipe's prepare, preflight and step commands run there, and the outputs come back. `RECRATE_REMOTE`
+names any other machine the same way. For pipelines too heavy for a laptop, `.github/workflows/workflowhub-pipeline.yml`
+runs any WorkflowHub pipeline by id on a GitHub runner with docker and keeps the run crates as an artifact.
 
 The MCP server mirrors Paper2Agent's three parts:
 
@@ -155,7 +181,12 @@ src/recrate/
   paper_crate.py   an RO-Crate recreated for a paper published without one
   environment.py   publication date; software named by the paper and code; versions as of publication
   agent.py         sources → agent; readiness, reproduction and the ladder per method; conclusion reviews
-  galaxy.py        Galaxy Workflow RO-Crates: derive a ReCRATE crate; run ported Galaxy imaging tools
+  galaxy.py        Galaxy Workflow RO-Crates: derive a ReCRATE crate (any workflow); run ported Galaxy imaging tools
+  adapters.py      nf-core, CWL, Snakemake and Jupyter crates from WorkflowHub: parameters, test data and expected
+                   outputs from their own conventions (a notebook: its path variable injected with papermill, the
+                   printed output and images its cells stored), and the invocation recipe the engine runner follows
+  sandbox.py       the paper's code runs confined (sandbox-exec, bubblewrap): no network unless the recipe needs it,
+                   writes only to the run's folders, no secrets in its environment
   crate.py         read an input crate (one method per workflow); draft.py builds one from a description
   profiles/        how data is checked: generic, bioimaging (calibration, intensity, object size), timeseries
                    (sampling rate, channels); base.rescale applies every field's scaling rules
@@ -164,16 +195,22 @@ src/recrate/
   followup.py      follow-up checks when the numbers differ, each its own recorded run
   compare.py       published vs reproduced, with tolerances and their sources
   runcrate.py      Workflow Run Crates, figures, reviews, readable summaries; record.py: the record
-  figures.py       figures plotted from run outputs: published vs reproduced, image panels, comparison charts
+  figures.py       figures plotted by code from files: published vs reproduced, bar/scatter/line/box/histogram of a
+                   table's columns (chosen by the model or a person, drawn from the file, recorded with the spec),
+                   image panels, comparison charts
   report.py        one self-contained HTML report page per research object
   workspace.py     comparison runs, parameter sources, flags, export bundle
-  chat.py          the chat: tools; open models (OpenAI-compatible), Claude, or simple commands
+  chat_tools.py    the chat's tools: what the chat can do (TOOLS) and what each returns (ChatTools)
+  chat.py          the chat engines: Claude Code, Claude, open models (OpenAI-compatible), or simple commands
+  notebook_figures.py  the figures a notebook or Quarto document drew, written out with their provenance
   mcp_server.py    the agent over MCP; server_check.py checks it over stdio; package.py zips it with USAGE.md
   verify.py        check-description: quotes, published values and tolerance sources against the paper
   hardware.py      CPUs, memory, GPU, interpreters; whether a method's needs fit this computer
   workflow_state.py  the /recrate skill's stages, checksums and independence check (work/state.json)
   skill/           the /recrate Claude Code skill and its specialist subagents
-app/app.py         the web app: Reproduce, Reuse, Record, and the chat
+app/app.py         the web app's page: set-up, style, state and layout
+app/ui/            one module per view: common, style, engines, building, chat, helpers, results, reproduce,
+                   reuse, record, sidebar, pages
 ```
 
 Downloaded workflows never run without your say: ReCRATE's own ports run straight away, a crate's own script or

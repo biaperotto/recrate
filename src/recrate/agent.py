@@ -62,7 +62,7 @@ class MethodStatus:
     status: str  # validated | differs | not validated | failed: derived from the ladder, kept for compatibility
     detail: str = ""
     run_crate: str | None = None
-    readiness: str = ""  # ready | ready-with-gaps | blocked (can it run here? not whether it reproduced)
+    readiness: str = ""  # ready | ready-with-gaps | reusable | blocked (can it run here? not whether it reproduced)
     gaps: list[str] = field(default_factory=list)  # what the crate leaves open, or why it is blocked
     ladder: dict[str, dict[str, str]] = field(default_factory=dict)  # see model.py
     review: dict[str, Any] | None = None  # a person's review of the conclusion (the ladder's last step)
@@ -125,7 +125,10 @@ class PaperAgent:
 
         return {**{k: self.manifest.get(k) for k in ("name", "title", "doi", "crate_source", "code", "draft",
                                                       "published")},
-                "verdict": (verdict_sentence({m.name: m.ladder for m in self.methods if m.ladder})
+                "verdict": (f"Reusable, not reproducible: {len(self.methods)} method(s) run here, check your data and "
+                            "record each run; the research publishes no results to compare a run with."
+                            if self.methods and all(m.readiness == "reusable" for m in self.methods)
+                            else verdict_sentence({m.name: m.ladder for m in self.methods if m.ladder})
                             if any(m.ladder for m in self.methods) or not self.methods
                             else "Not checked yet: nothing reproduced so far."),
                 "methods": [m.__dict__ for m in self.methods],
@@ -158,32 +161,59 @@ def _clone(repo: str, dest: Path) -> str:
     return repo
 
 
+def _keep_source(src: Path, out: Path, crate_out: Path) -> Path:
+    """Keep a published crate as ``out/source-crate`` before anything is derived from it, and return that copy.
+    The copy is made first: when the research object is rebuilt in place (the app's Reload), ``src`` is the very
+    folder the derived crate is written to, and removing it first destroyed the original."""
+    keep = out / "source-crate"
+    if src.resolve() != keep.resolve():
+        fresh = out / ".source-crate-new"
+        shutil.rmtree(fresh, ignore_errors=True)
+        shutil.copytree(src, fresh)
+        if keep.exists():
+            shutil.rmtree(keep)
+        fresh.rename(keep)
+    if crate_out.exists() and crate_out.resolve() != keep.resolve():
+        shutil.rmtree(crate_out)
+    return keep
+
+
 def runs_own_code(language: str | None) -> bool:
     """Whether running this method executes the workflow's own code (a script or macro), rather than
     ReCRATE's ports (Galaxy imaging tools). Code from an unknown source should only run when trusted."""
     return "galaxy" not in (language or "").lower()
 
 
+REUSABLE = ("Reusable, not reproducible: the workflow runs here, checks your data and records each run, but the "
+            "research publishes no result to compare a run with")
+
+
 def diagnose(spec: MethodSpec) -> tuple[str, list[str]]:
-    """Readiness before anything runs: ``blocked`` (with why), ``ready-with-gaps`` (with the gaps) or ``ready``."""
+    """Readiness before anything runs: ``blocked`` (with why), ``reusable`` (it runs, but there is nothing published
+    to compare with: a workflow registered without a paper or a test), ``ready-with-gaps`` (with the gaps) or
+    ``ready``. Ready never means reproduced."""
+    from .env import env_python, env_rscript
     from .profiles import get_profile
     from .runners import readiness
 
-    from .env import env_python, env_rscript
-
     blocked = readiness(spec.workflow_language, spec.workflow_path, env_python(spec.path.parent),
-                        env_rscript(spec.path.parent))
+                        env_rscript(spec.path.parent), invocation=spec.invocation, entry=spec.entry, spec=spec)
     if blocked:
         return "blocked", [blocked]
     gaps = []
-    if spec.needs_data and not (spec.example_data and spec.example_data.exists()):
+    no_data = spec.needs_data and not (spec.example_data and spec.example_data.exists())
+    no_results = not (spec.expected_results and spec.expected_results.exists())
+    if no_results:  # nothing to reproduce: say what the method is for, rather than list what the crate lacks
+        what = " (no published data either)" if no_data else " (its published data can still be run)"
+        gaps.append(REUSABLE + what + ".")
+    elif no_data:
         gaps.append("No published data in the crate: the method can be reused but not reproduced.")
-    if not (spec.expected_results and spec.expected_results.exists()):
-        gaps.append("No published results in the crate to compare with.")
     unsourced = [t.column for t in spec.tolerance_specs() if not t.source]
     if unsourced:
         gaps.append(f"Tolerance with no stated source: {', '.join(unsourced)} (no verdict on those numbers).")
     gaps += get_profile(spec.profile).diagnose_inputs(spec)
+    if no_results:
+        return "reusable", gaps
     return ("ready-with-gaps" if gaps else "ready"), gaps
 
 
@@ -208,8 +238,12 @@ def validate_methods(crate_dir: Path, runs_dir: Path, runner: str = "auto", who:
         elif spec.needs_data and not (spec.example_data and spec.example_data.exists()):
             st.detail = "No example data in the crate."
         elif validate == "none" or (validate == "safe" and runs_own_code(m["language"])):
-            st.detail = ("Not run yet: validating executes the workflow's own code. "
-                         "Run it when you trust the source.")
+            from .sandbox import backend
+
+            st.detail = ("Not run yet: validating executes the workflow's own code"
+                         + (" (sandboxed: no network unless its recipe needs it, writes only to its run folder)"
+                            if backend() else " (no sandbox is available here)")
+                         + ". Run it when you trust the source.")
         else:
             try:
                 r = reproduce(spec, runs_dir, runner=runner, agent=who)
@@ -284,6 +318,22 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     if paper and not crate and online and search_crate:
         crate = _find_published_crate(Path(paper), out, manifest, paper_doi, repo)
 
+    # A crate given as a link or identifier (a WorkflowHub or Zenodo link, a DOI): fetched into the agent folder, as
+    # the app does, so `recrate agentify --crate https://workflowhub.eu/workflows/1055` works from the command line
+    if crate and not Path(crate).exists():
+        from .sources import fetch, identify
+
+        refs = [r for r in identify(str(crate)) if r.kind in {"workflowhub", "zenodo", "doi"}]
+        if not refs:
+            raise CrateError(f"{crate} is neither a folder, a zip nor a WorkflowHub or Zenodo link (or DOI).")
+        if not online:
+            raise CrateError(f"{crate} must be fetched, and this run is offline.")
+        found = fetch(refs[0], out / "source")
+        if found.kind != "crate" or not found.path:
+            raise CrateError(f"{crate} is not an RO-Crate: {found.label}.")
+        manifest["crate_fetched"] = {"from": found.url or str(crate), "label": found.label, "notes": found.notes}
+        crate = found.path
+
     # A Galaxy Workflow RO-Crate (e.g. from WorkflowHub): read its method from the workflow and its tests
     galaxy_src = None
     if crate:
@@ -293,6 +343,16 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
             galaxy_src = resolve_crate_dir(crate)
             if not paper and (galaxy_src / "README.md").exists():
                 paper = galaxy_src / "README.md"  # no article: answer from the workflow's own documentation
+
+    # A Nextflow (nf-core), CWL or Snakemake crate: read its method in that community's own conventions
+    eco = None
+    if crate and galaxy_src is None:
+        from .adapters import detect_ecosystem
+
+        eco_src = resolve_crate_dir(crate)
+        eco = detect_ecosystem(eco_src)
+        if eco and not paper and (eco_src / "README.md").exists():
+            paper = eco_src / "README.md"
 
     # 1. The paper, as an agent can read it: text by section, tables, figures (see reading.py)
     p: Paper | None = None
@@ -344,14 +404,19 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     if galaxy_src is not None:
         from .galaxy import import_galaxy_crate
 
-        for d in (crate_out, out / "source-crate"):
-            if d.exists():
-                shutil.rmtree(d)
-        shutil.copytree(galaxy_src, out / "source-crate")  # the original, unchanged
+        galaxy_src = _keep_source(galaxy_src, out, crate_out)  # the original, kept unchanged under source-crate/
         import_galaxy_crate(galaxy_src, crate_out)
         manifest["crate_source"] = "derived from a Galaxy Workflow RO-Crate"
         if manifest.get("crate_found"):
             manifest["crate_source"] = f"found on {manifest['crate_found']['where']}, derived from its Galaxy workflow"
+    elif eco:
+        from .adapters import LABELS, import_crate
+
+        src = _keep_source(resolve_crate_dir(crate), out, crate_out)  # the original, kept unchanged under source-crate/
+        import_crate(src, crate_out)
+        manifest["crate_source"] = f"derived from a {LABELS[eco]} Workflow RO-Crate"
+        if manifest.get("crate_found"):
+            manifest["crate_source"] = f"found on {manifest['crate_found']['where']}, derived from its {LABELS[eco]} workflow"
     elif crate:
         src = resolve_crate_dir(crate)
         if src.resolve() != crate_out.resolve():
@@ -560,7 +625,9 @@ Code cloned: {code_dir or 'no (use --repo URL or --fetch-code)'}
 """
 
 
-def revalidate(agent_dir: str | Path, runner: str = "auto") -> PaperAgent:
+def revalidate(agent_dir: str | Path, runner: str = "auto", validate: str = "all") -> PaperAgent:
+    """Re-check every method (``validate``: all, safe or none, as validate_methods takes it): with ``none``, only the
+    readiness is recomputed (e.g. after a remote machine was configured), nothing runs."""
     agent_dir = Path(agent_dir)
     manifest = json.loads((agent_dir / MANIFEST).read_text(encoding="utf-8"))
     crate_dir = agent_dir / "crate"
@@ -571,7 +638,8 @@ def revalidate(agent_dir: str | Path, runner: str = "auto") -> PaperAgent:
     if env is not None and not (crate_dir / "environment").exists():  # drafting rewrote the crate: keep the dates
         add_environment(crate_dir, env)
     spec0 = load_crate(crate_dir)
-    manifest["methods"] = [m.__dict__ for m in validate_methods(crate_dir, agent_dir / "runs", runner=runner)]
+    manifest["methods"] = [m.__dict__ for m in validate_methods(crate_dir, agent_dir / "runs", runner=runner,
+                                                                 validate=validate)]
     manifest["crate_source"] = manifest.get("crate_source") if manifest.get("crate_source") != "none" else "drafted"
     manifest["title"] = spec0.name
     manifest["name"] = _slug(spec0.name)  # the name a PDF's page header gave is replaced by the crate's title

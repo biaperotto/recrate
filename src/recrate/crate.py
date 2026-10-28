@@ -10,6 +10,10 @@ The input crate follows Workflow RO-Crate 1.0. The parts ReCRATE needs are:
   pixel size, channels, dimensions, how a parameter scales, tolerances
 * data entities with ``exampleOfWork`` pointing at a parameter: the paper's own
   input data and its reported (expected) output
+* on the workflow, ``additionalProperty`` ``recrate invocation``: how to call a workflow that follows its own
+  community's conventions (nf-core, CWL, Snakemake) rather than ReCRATE's contract; written by recrate.adapters
+* on the workflow, ``additionalProperty`` ``recrate entry`` (``module:function``): the workflow file is Python code
+  and the method is this function, called with the method's parameters (see runners/function.py)
 
 Domain-specific properties use plain PropertyValues so the crate stays valid
 RO-Crate. Their names are a ReCRATE proposal, documented in docs/crate-spec.md.
@@ -20,7 +24,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .model import Tolerance
 
 METADATA_FILE = "ro-crate-metadata.json"
 LEGACY_SCALING = {"inverse_pixel_size": ("pixel size", -1.0), "inverse_pixel_area": ("pixel size", -2.0)}
@@ -101,6 +108,8 @@ class MethodSpec:
     method_description: str = ""
     draft: bool = False
     followups: list[dict[str, Any]] = field(default_factory=list)  # declared follow-up checks (recrate.followup)
+    invocation: dict[str, Any] | None = None  # how to call the workflow in its own idiom (recrate.adapters)
+    entry: str | None = None  # ``module:function``: the method is a Python function to call (runners.function)
     raw: dict[str, Any] = field(default_factory=dict)
 
     # ---- convenience -------------------------------------------------
@@ -147,7 +156,7 @@ class MethodSpec:
         """The kind of the main output (model.OUTPUT_KINDS); a results table unless the crate says otherwise."""
         return str(self.outputs[0].prop("kind") or "table") if self.outputs else "table"
 
-    def tolerance_specs(self) -> list["Tolerance"]:
+    def tolerance_specs(self) -> list[Tolerance]:
         """Every tolerance with its source (``tolerance_source:<column>``): see model.TOLERANCE_SOURCES."""
         from .model import Tolerance
 
@@ -174,6 +183,7 @@ class MethodSpec:
             "authors": self.authors,
             "license": self.license,
             "workflow": self.workflow_path.name if self.workflow_path else None,
+            **({"entry": self.entry} if self.entry else {}),
             "language": self.workflow_language,
             "software": [f"{n} {v}" if v else n for n, v in self.software],
             "profile": self.profile,
@@ -378,5 +388,9 @@ def load_crate(path: str | Path, method: str | None = None) -> MethodSpec:
         draft=str(root_props["draft"].value).lower() == "true" if "draft" in root_props else False,
         followups=[json.loads(graph[_ref(r)]["value"]) for r in _as_list(wf.get("additionalProperty"))
                    if graph.get(_ref(r) or "", {}).get("name") == "followup"],
+        invocation=next((json.loads(graph[_ref(r)]["value"]) for r in _as_list(wf.get("additionalProperty"))
+                         if graph.get(_ref(r) or "", {}).get("name") == "recrate invocation"), None),
+        entry=next((str(graph[_ref(r)]["value"]) for r in _as_list(wf.get("additionalProperty"))
+                    if graph.get(_ref(r) or "", {}).get("name") == "recrate entry"), None),
         raw=raw,
     )
