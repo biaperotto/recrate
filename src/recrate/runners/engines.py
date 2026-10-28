@@ -130,6 +130,16 @@ class EngineRunner(Runner):
         inv = getattr(self.spec, "invocation", None)
         return inv if isinstance(inv, dict) and inv.get("engine") == self.name else None
 
+    def _typed(self, params: dict[str, Any]) -> dict[str, Any]:
+        """The parameter values as the crate types them (integer, number, boolean): what a chat or a tool call hands
+        over may be strings, and an engine's own validation (nf-schema) rejects "100000" where it wants 100000."""
+        if self.spec is None:
+            return dict(params)
+        from ..crate import _coerce
+
+        types = {p.name: p.type for p in self.spec.inputs}
+        return {k: _coerce(v, types.get(k)) for k, v in params.items()}
+
     def run(self, workflow: Path, input_dir: Path, output_dir: Path, params: dict[str, Any],
             channel: int = 0, progress=None) -> RunResult:
         from ..remote import Remote
@@ -286,14 +296,24 @@ class EngineRunner(Runner):
         self.runtime = runtime
         fixed = {"{workflow}": str(workflow), "{input_dir}": str(input_dir), "{output_dir}": str(output_dir),
                  "{work}": str(work), "{runtime}": NF_PROFILE.get(runtime, runtime)}
+        typed = self._typed(params)
+        defaults = self.spec.default_params() if self.spec is not None else {}
+        nf_params: dict[str, Any] = {}
 
         def fill(a: str) -> str | None:
             for k, v in fixed.items():
                 a = a.replace(k, v)
             m = re.fullmatch(r"\{param:(.+)}", a)
             if m:  # a parameter with no value is left to the workflow's own default; booleans as the engine reads them
-                v = params.get(m.group(1))
+                name, v = m.group(1), typed.get(m.group(1))
                 if v is None or v == "":
+                    return None
+                if recipe.get("engine") == "nextflow":
+                    # Nextflow (26) reads a command-line value as a string, so a typed value goes in a params file
+                    # instead; one equal to the crate's default is left out, so the pipeline's own config and its
+                    # test profile set it, as they do when its authors run it
+                    if name not in defaults or defaults[name] != v:
+                        nf_params[name] = v
                     return None
                 return str(v).lower() if isinstance(v, bool) else str(v)
             m = re.fullmatch(r"\{input:(.+)}", a)
@@ -313,6 +333,9 @@ class EngineRunner(Runner):
                     args.pop()
                 continue
             args.append(v)
+        if recipe.get("engine") == "nextflow" and nf_params:
+            pf = self._stage_file(work, "recrate-params.json", json.dumps(nf_params, indent=1))
+            args += ["-params-file", str(pf)]
         if recipe.get("engine") == "nextflow" and runtime in CONDA_RUNTIMES:
             # no container runtime here: Nextflow builds each tool's conda environment instead (the pipeline's
             # conda profile), with micromamba or mamba when that is what is installed, cached across runs
@@ -331,7 +354,7 @@ class EngineRunner(Runner):
             for name, f in inputs.items():
                 if (here / f).exists():
                     job[name] = {"class": (recipe.get("classes") or {}).get(name, "File"), "path": str(input_dir / f)}
-            job.update({k: v for k, v in params.items() if v is not None and v != ""})
+            job.update({k: v for k, v in typed.items() if v is not None and v != ""})
             self._stage_file(work, "recrate-job.json", json.dumps(job, indent=1))
         if recipe.get("engine") == "snakemake":
             import yaml
@@ -348,7 +371,7 @@ class EngineRunner(Runner):
             for name, f in inputs.items():
                 if (here / f).exists():
                     put(name, str(input_dir / f))
-            for k, v in params.items():
+            for k, v in typed.items():
                 if v is not None and v != "":
                     put(k, v)
             self._stage_file(work, "recrate-config.yaml", yaml.safe_dump(cfg, sort_keys=False))
@@ -395,7 +418,7 @@ class EngineRunner(Runner):
             for name, f in inputs.items():
                 if (here / f).exists() and self._flat_has(cfg, name):
                     put(name, str(input_dir / f))
-            for k, v in params.items():
+            for k, v in self._typed(params).items():
                 if v is not None and v != "" and self._flat_has(cfg, k):
                     put(k, v)
             cfg_file = self._stage_file(work, f"recrate-config-{i}.yaml", yaml.safe_dump(cfg, sort_keys=False))
@@ -545,8 +568,9 @@ class NextflowRunner(EngineRunner):
     def command(self, workflow, input_dir, output_dir, params, work):
         args = ["nextflow", "-q", "run", str(workflow), "-work-dir", str(work / "work"),
                 "--input_dir", str(input_dir), "--output_dir", str(output_dir)]
-        for k, v in params.items():
-            args += [f"--{k}", str(v)]
+        if params:  # typed, in a params file: Nextflow (26) reads a command-line value as a string
+            pf = self._stage_file(work, "recrate-params.json", json.dumps(self._typed(params), indent=1))
+            args += ["-params-file", str(pf)]
         return args
 
 

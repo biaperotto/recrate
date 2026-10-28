@@ -3,7 +3,8 @@
     pip install -e ".[app]"
     streamlit run app/app.py
 
-Two cards, side by side, with a divider you can drag:
+Two cards, side by side, with a divider you can drag (to an edge to close one card and give the other the whole
+width; the handle left at the edge brings it back; double-click resets):
 
 * the chat: give it a research RO-Crate or a paper (DOI, link or file), then talk to the research object. It
   works with an open model on your machine (Ollama, LM Studio: free, no key), with Claude (an API key), or

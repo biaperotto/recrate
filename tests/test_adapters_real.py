@@ -3,6 +3,7 @@ reads (tests/data/ampliseq-crate), and what reading it taught the adapter."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from test_adapters import NF_CONFIG, nfcore_crate
@@ -34,10 +35,17 @@ def test_the_real_nfcore_ampliseq_crate_is_read(tmp_path, monkeypatch):
     inv = spec.invocation
     assert inv["engine"] == "nextflow" and inv["args"][4:6] == ["-profile", "test,{runtime}"] and inv["network"]
     assert ("cutadapt", "5.2") in spec.software
-    # the recipe's input flags are dropped when the data folder has no such file: the profile supplies them
-    args = NextflowRunner().recipe_command(inv, Path("main.nf"), spec.example_data, tmp_path / "out",
-                                           spec.default_params(), tmp_path / "work")
-    assert "--input" not in args and args[args.index("--primer_fwd") + 1] == "GTGYCAGCMGCCGCGGTAA"
+    # the recipe's input flags are dropped when the data folder has no such file: the profile supplies them; a run on
+    # the published data passes no parameter either (the pipeline's config and test profile set them, as when its
+    # authors run it), and a changed one goes typed in a params file (Nextflow 26 reads command-line values as strings)
+    runner = NextflowRunner()
+    runner.spec = spec
+    args = runner.recipe_command(inv, Path("main.nf"), spec.example_data, tmp_path / "out", spec.default_params(),
+                                 tmp_path / "work")
+    assert "--input" not in args and "--primer_fwd" not in args and "-params-file" not in args
+    args = runner.recipe_command(inv, Path("main.nf"), spec.example_data, tmp_path / "out",
+                                 {**spec.default_params(), "max_len_asv": "300"}, tmp_path / "work")
+    assert json.loads(Path(args[args.index("-params-file") + 1]).read_text()) == {"max_len_asv": 300}
     real_which = _sh.which
     monkeypatch.setattr(_sh, "which", lambda n: None if n in {"docker", "singularity", "apptainer", "conda", "mamba",
                                                                  "micromamba"} else real_which(n))

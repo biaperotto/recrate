@@ -74,6 +74,15 @@ mark.cite {background: rgba(232,163,61,.3); color: inherit; padding: 0 .1em; bor
   align-self: stretch; margin: 0 -4px;}
 .rc-split::after {content: ""; width: 4px; height: 56px; border-radius: 4px; background: #cfcabe; transition: background .15s;}
 .rc-split:hover::after, .rc-split.dragging::after {background: var(--accent);}
+/* one card closed: the divider sits at the edge as a handle that brings the card back */
+.rc-split.rc-closed-chat, .rc-split.rc-closed-work {flex: 0 0 22px; margin: 0; cursor: pointer;}
+.rc-split.rc-closed-chat::after, .rc-split.rc-closed-work::after {width: 18px; height: 64px; background: var(--card);
+  border: 1px solid var(--line); color: var(--muted); font-size: 1.15rem; display: flex; align-items: center;
+  justify-content: center; transition: background .15s, color .15s, border-color .15s;}
+.rc-split.rc-closed-chat::after {content: "›"; border-radius: 0 10px 10px 0; border-left: none;}
+.rc-split.rc-closed-work::after {content: "‹"; border-radius: 10px 0 0 10px; border-right: none;}
+.rc-split.rc-closed-chat:hover::after, .rc-split.rc-closed-work:hover::after, .rc-split.rc-closed-chat.dragging::after,
+.rc-split.rc-closed-work.dragging::after {background: var(--accent-soft); color: var(--accent); border-color: var(--accent);}
 
 /* the research object's files */
 .tree {font-size: .85rem; line-height: 1.55;}
@@ -131,41 +140,78 @@ section[data-testid="stSidebar"] .tree {font-size: .8rem;}
 
 JS = """<script>
 (function () {
-  const KEY = "recrate-split";
-  function apply(col, right, px) {
+  // The chat card's width is remembered (KEY, px); CLOSED remembers a card dragged shut ("chat" or "work"). Dragging
+  // the divider past CLOSE_AT px from an edge closes that card and the other takes the whole row; the divider stays
+  // at the edge as a handle, and a click on it (or dragging it back) brings the card back.
+  const KEY = "recrate-split", CLOSED = "recrate-split-closed";
+  const MIN_CHAT = 320, MIN_WORK = 420, CLOSE_AT = 200;
+  function open(col, right, px) {
+    col.style.display = ""; right.style.display = "";
     col.style.flex = "0 0 " + px + "px"; col.style.width = px + "px"; col.style.maxWidth = "none";
     right.style.flex = "1 1 0"; right.style.minWidth = "0"; right.style.width = "auto";
+  }
+  function close(which, col, right) {
+    const gone = which === "chat" ? col : right, kept = which === "chat" ? right : col;
+    gone.style.display = "none";
+    kept.style.display = ""; kept.style.flex = "1 1 0"; kept.style.minWidth = "0"; kept.style.width = "auto";
+    kept.style.maxWidth = "none";
+  }
+  function reset(col, right) { col.removeAttribute("style"); right.removeAttribute("style"); }
+  function label(bar, which) {
+    bar.classList.toggle("rc-closed-chat", which === "chat");
+    bar.classList.toggle("rc-closed-work", which === "work");
+    bar.title = which === "chat" ? "Open the chat" : which === "work" ? "Open the workstation"
+      : "Drag to resize · drag to an edge to close a card · double-click to reset";
   }
   function setup() {
     const chat = document.querySelector(".st-key-chatcard");
     if (!chat) return;
     const col = chat.closest('[data-testid="stColumn"]');
     if (!col) return;
-    const row = col.parentElement, right = col.nextElementSibling && col.nextElementSibling.classList.contains("rc-split")
-      ? col.nextElementSibling.nextElementSibling : col.nextElementSibling;
+    const row = col.parentElement;
+    let bar = row.querySelector(":scope > .rc-split");
+    const right = bar ? bar.nextElementSibling : col.nextElementSibling;
     if (!right) return;
-    const saved = parseFloat(localStorage.getItem(KEY) || "");
-    if (!row.querySelector(":scope > .rc-split")) {
-      const bar = document.createElement("div");
-      bar.className = "rc-split"; bar.title = "Drag to resize · double-click to reset";
+    const saved = parseFloat(localStorage.getItem(KEY) || "") || 0;
+    const closed = localStorage.getItem(CLOSED) || "";
+    if (!bar) {
+      bar = document.createElement("div"); bar.className = "rc-split";
       row.insertBefore(bar, right);
+      let moved = false;
       bar.addEventListener("mousedown", function (e) {
-        e.preventDefault(); bar.classList.add("dragging");
-        const x0 = e.clientX, w0 = col.getBoundingClientRect().width;
+        e.preventDefault(); bar.classList.add("dragging"); moved = false;
+        const x0 = e.clientX, total = row.getBoundingClientRect().width;
+        const was = localStorage.getItem(CLOSED) || "";
+        const w0 = was === "chat" ? 0 : was === "work" ? total : col.getBoundingClientRect().width;
+        let state = was, px = 0;
         function move(ev) {
-          const total = row.getBoundingClientRect().width;
-          const px = Math.min(Math.max(w0 + ev.clientX - x0, 320), total - 420);
-          apply(col, right, px); localStorage.setItem(KEY, px);
+          const raw = w0 + ev.clientX - x0;
+          if (Math.abs(ev.clientX - x0) > 3) moved = true;
+          if (raw < CLOSE_AT) { state = "chat"; close("chat", col, right); }
+          else if (raw > total - CLOSE_AT) { state = "work"; close("work", col, right); }
+          else { state = ""; px = Math.min(Math.max(raw, MIN_CHAT), total - MIN_WORK); open(col, right, px); }
+          label(bar, state);
+          localStorage.setItem(CLOSED, state); if (!state) localStorage.setItem(KEY, px);
         }
         function up() { bar.classList.remove("dragging"); document.removeEventListener("mousemove", move);
           document.removeEventListener("mouseup", up); document.body.style.cursor = ""; }
         document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
         document.body.style.cursor = "col-resize";
       });
-      bar.addEventListener("dblclick", function () { localStorage.removeItem(KEY); col.removeAttribute("style");
-        right.removeAttribute("style"); });
+      bar.addEventListener("click", function () {
+        if (moved || !localStorage.getItem(CLOSED)) return;
+        localStorage.setItem(CLOSED, "");
+        const px = parseFloat(localStorage.getItem(KEY) || "") || 0;
+        if (px) open(col, right, px); else reset(col, right);
+        label(bar, "");
+      });
+      bar.addEventListener("dblclick", function () { localStorage.removeItem(KEY); localStorage.removeItem(CLOSED);
+        reset(col, right); label(bar, ""); });
+      label(bar, closed);
     }
-    if (saved && !col.style.flex) apply(col, right, saved);
+    // a rerun can hand back fresh column styles: put the remembered state back
+    if (closed) { if ((closed === "chat" ? col : right).style.display !== "none") { close(closed, col, right); label(bar, closed); } }
+    else if (saved && !col.style.flex) open(col, right, saved);
   }
   setup();
   if (!window.__recrateSplit) { window.__recrateSplit = new MutationObserver(setup);

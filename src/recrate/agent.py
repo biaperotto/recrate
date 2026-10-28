@@ -161,6 +161,23 @@ def _clone(repo: str, dest: Path) -> str:
     return repo
 
 
+def _keep_source(src: Path, out: Path, crate_out: Path) -> Path:
+    """Keep a published crate as ``out/source-crate`` before anything is derived from it, and return that copy.
+    The copy is made first: when the research object is rebuilt in place (the app's Reload), ``src`` is the very
+    folder the derived crate is written to, and removing it first destroyed the original."""
+    keep = out / "source-crate"
+    if src.resolve() != keep.resolve():
+        fresh = out / ".source-crate-new"
+        shutil.rmtree(fresh, ignore_errors=True)
+        shutil.copytree(src, fresh)
+        if keep.exists():
+            shutil.rmtree(keep)
+        fresh.rename(keep)
+    if crate_out.exists() and crate_out.resolve() != keep.resolve():
+        shutil.rmtree(crate_out)
+    return keep
+
+
 def runs_own_code(language: str | None) -> bool:
     """Whether running this method executes the workflow's own code (a script or macro), rather than
     ReCRATE's ports (Galaxy imaging tools). Code from an unknown source should only run when trusted."""
@@ -387,10 +404,7 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     if galaxy_src is not None:
         from .galaxy import import_galaxy_crate
 
-        for d in (crate_out, out / "source-crate"):
-            if d.exists():
-                shutil.rmtree(d)
-        shutil.copytree(galaxy_src, out / "source-crate")  # the original, unchanged
+        galaxy_src = _keep_source(galaxy_src, out, crate_out)  # the original, kept unchanged under source-crate/
         import_galaxy_crate(galaxy_src, crate_out)
         manifest["crate_source"] = "derived from a Galaxy Workflow RO-Crate"
         if manifest.get("crate_found"):
@@ -398,11 +412,7 @@ def agentify(out: str | Path, paper: str | Path | None = None, crate: str | Path
     elif eco:
         from .adapters import LABELS, import_crate
 
-        src = resolve_crate_dir(crate)
-        for d in (crate_out, out / "source-crate"):
-            if d.exists():
-                shutil.rmtree(d)
-        shutil.copytree(src, out / "source-crate")  # the original, unchanged
+        src = _keep_source(resolve_crate_dir(crate), out, crate_out)  # the original, kept unchanged under source-crate/
         import_crate(src, crate_out)
         manifest["crate_source"] = f"derived from a {LABELS[eco]} Workflow RO-Crate"
         if manifest.get("crate_found"):

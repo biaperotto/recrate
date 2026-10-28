@@ -597,10 +597,53 @@ def _cwl_test(src: Path, wf_rel: str) -> tuple[Path | None, dict[str, Any]]:
     return None, {}
 
 
+def _cwl_missing(src: Path, wid: str) -> list[str]:
+    """The files the workflow runs or imports (``run``, ``$import``, ``$include``) that the crate does not hold, as
+    written. A crate registered from one file keeps the workflow but not its tools; cwltool stops at the first."""
+    yaml = _yaml()
+    seen: set[Path] = set()
+    missing: list[str] = []
+
+    def refs(node: Any, out: list[str]) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if isinstance(v, str) and (k in {"$import", "$include"} or (
+                        k == "run" and ("/" in v or v.endswith((".cwl", ".yml", ".yaml", ".json"))))):
+                    out.append(v)
+                else:
+                    refs(v, out)
+        elif isinstance(node, list):
+            for v in node:
+                refs(v, out)
+
+    def walk(path: Path) -> None:
+        if path in seen or not path.exists():
+            return
+        seen.add(path)
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
+        except Exception:  # noqa: BLE001 - a file cwltool cannot read is cwltool's error to report, not a missing file
+            return
+        found: list[str] = []
+        refs(doc, found)
+        for ref in found:
+            if "://" in ref or ref.startswith("#"):
+                continue  # a URL, or a process in this file's own $graph
+            target = (path.parent / ref.split("#", 1)[0]).resolve()
+            if target.exists():
+                walk(target)
+            elif ref not in missing:
+                missing.append(ref)
+
+    walk((src / wid).resolve())
+    return missing
+
+
 def import_cwl(src: Path, out_dir: Path) -> dict[str, Any]:
     idx, root = _meta(src)
     wid, wf, _ = _main(idx, root)
     info = _root_info(src, idx, root, wf)
+    missing = _cwl_missing(src, wid) if (src / wid).exists() else []
     params = _cwl_inputs_from_crate(idx, wf) or (_cwl_inputs_from_file(src / wid) if (src / wid).exists() else [])
     tests, case = _cwl_test(src, wid)
     job: dict[str, Any] = {}
@@ -663,6 +706,8 @@ def import_cwl(src: Path, out_dir: Path) -> dict[str, Any]:
         recipe["classes"] = classes
     if job_extra:
         recipe["job_extra"] = job_extra
+    if missing:  # readiness is blocked until the crate holds them (runners.readiness)
+        recipe["missing"] = missing
     values = [p for p in params if p["type"] not in {"File", "Directory"}][:MAX_PARAMS]
     method = {
         "name": _slug_name(wf.get("name") or info["name"]),
@@ -670,7 +715,9 @@ def import_cwl(src: Path, out_dir: Path) -> dict[str, Any]:
         + (f" Published test: {tests.relative_to(src)}." if tests is not None and case else
            f" {tests.relative_to(src)} tests the workflow's tools, not the workflow: no published run to reproduce."
            if tests is not None else " The crate has no cwltest file.")
-        + (" Needs a container runtime (DockerRequirement)." if docker else ""),
+        + (" Needs a container runtime (DockerRequirement)." if docker else "")
+        + (f" The crate holds the workflow but not {len(missing)} file(s) its steps run: "
+           f"{', '.join(missing[:6])}{', …' if len(missing) > 6 else ''}." if missing else ""),
         "workflow": {"file": str(out_dir / "workflow" / wid), "language": "Common Workflow Language", "software": _software(src, "cwl")},
         "inputs": [_param(p["name"], p["type"], None, p["description"]) for p in params
                    if p["type"] in {"File", "Directory"}]

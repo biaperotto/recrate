@@ -12,7 +12,7 @@ import pytest
 
 from recrate.adapters import detect_ecosystem, import_crate
 from recrate.agent import agentify
-from recrate.crate import load_crate
+from recrate.crate import list_methods, load_crate
 from recrate.pipeline import run_on_data
 from recrate.runners import readiness
 
@@ -56,7 +56,7 @@ workflow {
 """
 NF_CONFIG = """
 profiles {
-    test { params.input = 'assets/samplesheet.csv' }
+    test { includeConfig 'conf/test.config' }
     docker { docker.enabled = true }
     singularity { singularity.enabled = true }
     conda { conda.enabled = true }
@@ -141,9 +141,10 @@ def test_nfcore_pipeline_runs_as_its_authors_run_it(tmp_path, monkeypatch):
         or "no sandbox" in action["description"]
 
 
-def test_recipe_drops_empty_parameters_and_writes_booleans_for_the_engine(tmp_path):
+def test_recipe_drops_empty_parameters_and_types_the_rest_for_the_engine(tmp_path):
     """A schema parameter without a default (nf-core's `email`) must not reach the pipeline as `--email None`, which
-    its schema validation rejects, and a boolean goes as `true`/`false`."""
+    its schema validation rejects. The others go typed in a params file: Nextflow 26 reads every command-line value
+    as a string, and nf-schema then rejects "100000" where the schema says integer (nf-core/bamtofastq)."""
     from recrate.runners.engines import NextflowRunner
 
     recipe = {"engine": "nextflow", "args": ["nextflow", "run", "{workflow}", "--email", "{param:email}",
@@ -152,7 +153,8 @@ def test_recipe_drops_empty_parameters_and_writes_booleans_for_the_engine(tmp_pa
     (tmp_path / "work").mkdir()
     args = NextflowRunner().recipe_command(recipe, Path("main.nf"), tmp_path, tmp_path / "out",
                                            {"email": None, "skip_trim": False, "factor": 2}, tmp_path / "work")
-    assert "--email" not in args and args[args.index("--skip_trim") + 1] == "false" and args[-1] == "2"
+    assert "--email" not in args and "--skip_trim" not in args and "--factor" not in args
+    assert args[-2] == "-params-file" and json.loads(Path(args[-1]).read_text()) == {"skip_trim": False, "factor": 2}
 
 
 def test_plain_nextflow_without_contract_or_recipe_is_blocked(tmp_path):
@@ -223,12 +225,49 @@ def test_cwl_crate_is_read_with_its_parameters_and_test(tmp_path):
     assert spec.default_params() == {"factor": 3}  # the test job's value
     assert spec.invocation["engine"] == "cwl" and spec.invocation["inputs"] == {"values": "values.csv"}
     assert not spec.invocation["network"] and spec.invocation["needs"] == []
+    assert "missing" not in spec.invocation  # the crate holds everything the workflow runs
     assert spec.output_kind == "files"
     assert ("gawk", "5.3.0") in spec.software  # the SoftwareRequirement hint
     rows = spec.expected_results.read_text().splitlines()
     assert rows[0] == "file,sha1,size" and rows[1].startswith("total.txt,") and rows[1].endswith(",3")  # cwltest: sha1
     tol = spec.tolerance_specs()
     assert tol and tol[0].source == "test-stated" and "tests.yml" in tol[0].evidence
+
+
+CWL_WORKFLOW_WITH_STEPS = """cwlVersion: v1.2
+class: Workflow
+inputs:
+  values: File
+outputs:
+  total:
+    type: File
+    outputSource: sum/total
+steps:
+  sum:
+    run: ../tools/sum.cwl
+    in: {values: values}
+    out: [total]
+  check:
+    run: steps/check.cwl
+    in: {total: sum/total}
+    out: []
+"""
+
+
+def test_cwl_crate_missing_the_files_its_steps_run_is_blocked(tmp_path):
+    # WorkflowHub #344 and #336: registered from one file, the crate holds the workflow but not the tools it runs
+    c = cwl_crate(tmp_path)
+    (c / "total.cwl").write_text(CWL_WORKFLOW_WITH_STEPS)
+    (c / "steps").mkdir()
+    (c / "steps" / "check.cwl").write_text("cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: true\n"
+                                           "requirements:\n  - $import: ../envs/check.yml\ninputs: {}\noutputs: {}\n")
+    import_crate(c, tmp_path / "crate")
+    spec = load_crate(tmp_path / "crate")
+    # as written in the files; the step that is present is followed into, and its own import is missing too
+    assert spec.invocation["missing"] == ["../tools/sum.cwl", "../envs/check.yml"]
+    assert "not 2 file(s) its steps run" in list_methods(tmp_path / "crate")[0]["description"]
+    why = readiness(spec.workflow_language, spec.workflow_path, invocation=spec.invocation)
+    assert why and "2 file(s)" in why and "../tools/sum.cwl" in why and "source repository" in why
 
 
 @pytest.mark.skipif(not shutil.which("cwltool"), reason="needs cwltool")

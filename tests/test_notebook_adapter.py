@@ -17,7 +17,7 @@ from recrate.adapters import _nb_analysis, detect_ecosystem, import_crate
 from recrate.agent import agentify
 from recrate.crate import load_crate
 
-ABR = Path(__file__).resolve().parent.parent / "agents" / "preparing-a-data-set-for-deep-learning-from-zipped" / "crate"
+ABR = Path(__file__).resolve().parent.parent / "agents" / "preparing-a-data-set-for-deep-learning-from-zipped" / "source-crate"
 
 
 def _png() -> str:
@@ -112,3 +112,19 @@ def test_the_real_abr_notebook_crate(tmp_path):
     import_crate(ABR, tmp_path / "crate")
     spec = load_crate(tmp_path / "crate")
     assert "ABR_RESOURCE_Mouse ID.xlsx" in spec.inputs[0].description and "*.zip" in spec.inputs[0].description
+
+
+def test_rebuilding_a_research_object_in_place_keeps_the_published_crate(tmp_path):
+    """The app's Reload calls agentify with the object's own crate folder: the published crate must be kept as
+    source-crate and derived again, never deleted before it is read."""
+    c = notebook_crate(tmp_path)
+    a = agentify(tmp_path / "agent", crate=c, online=False, validate="none")
+    assert (a.path / "source-crate" / "analysis.ipynb").exists()
+    shutil.rmtree(a.path / "source-crate")  # as a research object made before adapters existed: the crate as supplied
+    shutil.rmtree(a.path / "crate")
+    shutil.copytree(c, a.path / "crate")
+    again = agentify(a.path, crate=a.path / "crate", online=False, validate="none")  # in place
+    assert (again.path / "source-crate" / "analysis.ipynb").exists()  # the original, kept
+    assert (again.path / "crate" / "workflow" / "analysis.ipynb").exists()  # the derived crate
+    assert again.card()["crate_source"] == "derived from a Jupyter Workflow RO-Crate"
+    assert again.methods[0].readiness in {"ready", "ready-with-gaps"}
