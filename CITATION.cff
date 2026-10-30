@@ -27,16 +27,18 @@ authors:
     given-names: "Jean-Marie"
     orcid: "https://orcid.org/0000-0002-1789-1861"
     affiliation: "University of Dundee"
-  
+
 repository-code: "https://github.com/biaperotto/recrate"
 url: "https://github.com/biaperotto/recrate"
 license: MIT
 version: 0.1.0
-date-released: 2026-10-30  
+date-released: 2026-10-30
+doi: 10.5281/zenodo.23810005
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23810004
+    description: "Concept DOI: every version of ReCRATE"
+  - type: doi
+    value: 10.5281/zenodo.23810005
+    description: "Version 0.1.0"
 keywords: [RO-Crate, Workflow Run Crate, FAIR, FAIR4RS, reproducibility, provenance, WorkflowHub, Galaxy, Nextflow, MCP, Paper2Agent]
-
-# after the deposit, so later versions point at all versions:
-# identifiers:
-#   - type: doi
-#     value: 10.5281/zenodo.<concept record number>
-#     description: "Concept DOI, all versions"
