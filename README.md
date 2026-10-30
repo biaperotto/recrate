@@ -185,7 +185,7 @@ ReCRATE is a proof of concept, built at the *Reinvent the Wheel* hackathon (Lond
 | Today | Next |
 | --- | --- |
 | Python code runs in the paper's own `uv` environment, every package recorded; R, Quarto and shell code use the interpreters on your computer. Sandboxed, but the code can still read your files | R environments per paper, and containers, so the code sees only its own files |
-| Five WorkflowHub ecosystems. Most entries are reusable, not reproducible; workflows that need containers run in the VM, on another machine or on a GitHub runner | WDL, COMPSs and KNIME; a published run crate accepted as the expected result; a readiness census of the whole registry |
+| Five WorkflowHub ecosystems: Galaxy, Nextflow (nf-core), CWL, Snakemake and Jupyter notebooks, about four entries in five by type. Most entries are reusable, not reproducible; workflows that need containers run in the VM, on another machine or on a GitHub runner | WDL, COMPSs and KNIME; a published run crate accepted as the expected result; a readiness census of the whole registry |
 | Scalars and tables are compared; `timeseries` is tested on synthetic data only | IoU for label images, tests for distributions, reruns to measure method noise; genomics and single-cell profiles |
 | Follow-ups for software and data versions are proposed, not run | Running them in pinned environments |
 | Methods that need a GPU, a cluster, very large or restricted data, or a paid API are described, not run | An evaluation on 20 to 50 papers and WorkflowHub entries |
