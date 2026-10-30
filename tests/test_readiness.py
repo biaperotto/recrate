@@ -40,7 +40,7 @@ def test_a_workflow_with_nothing_published_is_reusable_not_reproducible(tmp_path
     assert m.readiness == "reusable" and m.gaps[0].startswith("Reusable, not reproducible")
     assert "published data can still be run" in m.gaps[0]
     assert m.ladder["runs"]["status"] == "passed" and m.ladder["numbers"]["status"] == "not checked"
-    assert a.card()["verdict"].startswith("Reusable, not reproducible: 1 method(s) run here")
+    assert a.card()["verdict"].startswith("Reusable, not reproducible: the method runs here")
 
 
 def test_without_data_either_it_says_so(tmp_path):

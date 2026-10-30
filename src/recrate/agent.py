@@ -125,8 +125,10 @@ class PaperAgent:
 
         return {**{k: self.manifest.get(k) for k in ("name", "title", "doi", "crate_source", "code", "draft",
                                                       "published")},
-                "verdict": (f"Reusable, not reproducible: {len(self.methods)} method(s) run here, check your data and "
-                            "record each run; the research publishes no results to compare a run with."
+                "verdict": (("Reusable, not reproducible: the method runs here, checks your data and records each run; "
+                             "the research publishes no result to compare a run with." if len(self.methods) == 1 else
+                             f"Reusable, not reproducible: its {len(self.methods)} methods run here, check your data "
+                             "and record each run; the research publishes no results to compare a run with.")
                             if self.methods and all(m.readiness == "reusable" for m in self.methods)
                             else verdict_sentence({m.name: m.ladder for m in self.methods if m.ladder})
                             if any(m.ladder for m in self.methods) or not self.methods
