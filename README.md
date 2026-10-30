@@ -10,6 +10,12 @@ It checks the published results before you rely on them, checks your data before
 
 <p align="center">Reproduce · Reuse · Record</p>
 
+<p align="center">
+  <a href="https://doi.org/10.5281/zenodo.23810004"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.23810004.svg" alt="DOI"></a>
+  <a href="https://github.com/biaperotto/recrate/actions/workflows/tests.yml"><img src="https://github.com/biaperotto/recrate/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-blue.svg" alt="MIT licence"></a>
+</p>
+
 ---
 
 ## 📚 Contents
@@ -203,6 +209,22 @@ ReCRATE is a proof of concept, built at the *Reinvent the Wheel* hackathon (Lond
 
 ## 📝 Citing, licence, acknowledgements
 
-Cite ReCRATE with [CITATION.cff](CITATION.cff). Code is under the [MIT licence](LICENSE). Example data and papers keep their own licences: see each example's `SOURCE.md`.
+ReCRATE is archived on Zenodo. The concept DOI [10.5281/zenodo.23810004](https://doi.org/10.5281/zenodo.23810004) always resolves to the latest version; each release has its own, and v0.1.0 is [10.5281/zenodo.23810005](https://doi.org/10.5281/zenodo.23810005). To cite the version you used:
+
+> de Souza Perotto A. B., Shreya, Zhao T., Sharma S., Burel J.-M. (2026). *ReCRATE: reuse published methods on your data, checked and recorded* (v0.1.0). Zenodo. https://doi.org/10.5281/zenodo.23810005
+
+```bibtex
+@software{recrate_2026,
+  author  = {de Souza Perotto, Anna Beatriz and Shreya and Zhao, Tingting and Sharma, Sumanyu and Burel, Jean-Marie},
+  title   = {ReCRATE: reuse published methods on your data, checked and recorded},
+  version = {0.1.0},
+  year    = {2026},
+  month   = {10},
+  doi     = {10.5281/zenodo.23810005},
+  url     = {https://github.com/biaperotto/recrate}
+}
+```
+
+[CITATION.cff](CITATION.cff) carries the same metadata, so GitHub's *Cite this repository* button gives it in APA and BibTeX. Code is under the [MIT licence](LICENSE). Example data and papers keep their own licences: see each example's `SOURCE.md`.
 
 ReCRATE takes the idea of [Paper2Agent](https://github.com/jmiao24/Paper2Agent) by Jiacheng Miao and colleagues and builds it on the FAIR principles for research software and RO-Crate, drawing on the [RO-Crate](https://www.researchobject.org/ro-crate/) and [Workflow Run Crate](https://www.researchobject.org/workflow-run-crate/) communities, the [RO-Crate validator](https://github.com/crs4/rocrate-validator), [WorkflowHub](https://workflowhub.eu) and the [Galaxy imaging tools](https://github.com/BMCV/galaxy-image-analysis).
