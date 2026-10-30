@@ -23,6 +23,11 @@ authors:
     given-names: "<Sumanyu>"
     orcid: "https://orcid.org/0009-0000-1300-2900"
     affiliation: "University of Cambridge"
+
+  - family-names: "<Burel>"
+    given-names: "<Jean-Marie>"
+    orcid: "https://orcid.org/0000-0002-1789-1861"
+    affiliation: "University of Dundee"
   
 repository-code: "https://github.com/biaperotto/recrate"
 url: "https://github.com/biaperotto/recrate"
