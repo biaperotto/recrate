@@ -1,10 +1,38 @@
 cff-version: 1.2.0
-title: "ReCRATE: reuse published methods on your data, checked and recorded"
-message: "If you use ReCRATE, please cite it as below."
 type: software
+title: "ReCRATE: reuse published methods on your data, checked and recorded"
+abstract: "Turns a paper, an RO-Crate or a WorkflowHub entry into an agent that runs the published methods on new data, compares the results with the published ones, and records every run as a Workflow Run RO-Crate."
+message: "If you use ReCRATE, please cite it as below."
 authors:
-  - name: "The ReCRATE contributors"
+  - family-names: "de Souza Perotto"
+    given-names: "<Anna Beatriz>"
+    orcid: "https://orcid.org/0000-0001-7438-7779"
+    affiliation: "University of Dundee"
+
+  - given-names: "<Shreya>"
+    orcid: "https://orcid.org/0009-0008-0006-9637"
+    affiliation: "UCLA - University of California, Los Angeles"
+
+  - family-names: "<ZHAO>"
+    given-names: "<Tingting>"
+    orcid: "https://orcid.org/0009-0005-5149-2062"
+    affiliation: "University of Edinburgh"
+
+
+  - family-names: "<Sharma>"
+    given-names: "<Sumanyu>"
+    orcid: "https://orcid.org/0009-0000-1300-2900"
+    affiliation: "University of Cambridge"
+  
+repository-code: "https://github.com/biaperotto/recrate"
+url: "https://github.com/biaperotto/recrate"
 license: MIT
 version: 0.1.0
-date-released: 2026-10-17
-keywords: [RO-Crate, FAIR, reproducibility, provenance, Fiji, bioimaging, MCP]
+date-released: 2026-10-31   # the day you make the release
+keywords: [RO-Crate, Workflow Run Crate, FAIR, FAIR4RS, reproducibility, provenance, WorkflowHub, Galaxy, Nextflow, MCP, Paper2Agent]
+
+# after the deposit, so later versions point at all versions:
+# identifiers:
+#   - type: doi
+#     value: 10.5281/zenodo.<concept record number>
+#     description: "Concept DOI, all versions"

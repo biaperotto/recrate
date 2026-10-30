@@ -140,6 +140,11 @@ def readiness(language: str | None, workflow: Path | None, python: Path | None =
         from ..remote import Remote
 
         remote = Remote.from_env() if invocation else None  # a recipe may run on another machine
+        missing = (invocation or {}).get("missing") or []
+        if missing:  # a crate registered from one file: the workflow is there, the tools it runs are not, anywhere
+            shown = ", ".join(missing[:6]) + (f" and {len(missing) - 6} more" if len(missing) > 6 else "")
+            return (f"The crate holds the workflow but not {len(missing)} file(s) its steps run: {shown}. Get the "
+                    "complete workflow folder (its source repository) and agentify that instead.")
         if runner.name == "notebook":
             runner.python = python
         why = runner.readiness()
@@ -151,11 +156,6 @@ def readiness(language: str | None, workflow: Path | None, python: Path | None =
             if not (rscript or shutil.which("Rscript")):  # an R document also needs R
                 return "Needs R (Rscript), not installed here: install R (cran.r-project.org)."
         if invocation:
-            missing = invocation.get("missing") or []
-            if missing:  # a crate registered from one file: the workflow is there, the tools it runs are not
-                shown = ", ".join(missing[:6]) + (f" and {len(missing) - 6} more" if len(missing) > 6 else "")
-                return (f"The crate holds the workflow but not {len(missing)} file(s) its steps run: {shown}. Get the "
-                        "complete workflow folder (its source repository) and agentify that instead.")
             needs = invocation.get("needs") or []
             if needs and not any(shutil.which(n) for n in needs):
                 if remote and any(remote.has(n) for n in needs):
