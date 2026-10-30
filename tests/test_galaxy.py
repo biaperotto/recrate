@@ -11,6 +11,7 @@ import pytest
 import tifffile
 
 from recrate.agent import agentify
+from recrate.crate import load_crate
 from recrate.galaxy import exposed_parameters, is_galaxy_crate, load_workflow, run_workflow
 from recrate.pipeline import check_inputs, run_on_data
 from recrate.runners import get_runner
@@ -192,6 +193,26 @@ def test_non_imaging_galaxy_crate_is_imported_generically(tmp_path):
     # honest readiness: nothing is ported, so it is blocked, naming the tool
     why = readiness(spec.workflow_language, spec.workflow_path)
     assert why and "not ported" in why and "datamash_ops 1.1.0" in why
+
+
+def test_galaxy_crate_whose_root_is_a_url_is_recognised_and_imported(tmp_path):
+    """WorkflowHub #1532, a Galaxy Training Network workflow: the metadata descriptor is ``about`` the tutorial's
+    URL, not ``./``, so the root dataset (and its mainEntity) must be found through the descriptor."""
+    from recrate.galaxy import import_galaxy_crate
+
+    crate = _climate_crate(tmp_path)
+    meta = json.loads((crate / "ro-crate-metadata.json").read_text())
+    url = "https://training.galaxyproject.org/training-material/topics/climate/tutorials/x/workflows/x.html"
+    for e in meta["@graph"]:
+        if e["@id"] == "./":
+            e["@id"] = url
+        if e["@id"] == "ro-crate-metadata.json":
+            e["about"] = {"@id": url}
+    (crate / "ro-crate-metadata.json").write_text(json.dumps(meta))
+    assert is_galaxy_crate(crate)
+    import_galaxy_crate(crate, tmp_path / "derived")
+    spec = load_crate(tmp_path / "derived")
+    assert spec.workflow_path.name == "climate.ga" and spec.inputs  # the method is read, not an empty crate
 
 
 def test_galaxy_crate_recognised_by_language_and_rejected_without_main_entity(tmp_path):

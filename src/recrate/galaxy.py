@@ -152,10 +152,24 @@ def tool_key(tool_id: str | None) -> str | None:
     return parts[-2] if len(parts) >= 2 and "toolshed" in tool_id else parts[-1]
 
 
+def _nested(v: Any) -> Any:
+    """A tool-state value that is JSON in a string (a conditional, a repeat) is read; a text value that merely starts
+    with a bracket, such as an annotation, stays as it is."""
+    if isinstance(v, str) and v[:1] in "{[":
+        try:
+            return json.loads(v)
+        except ValueError:
+            return v
+    return v
+
+
 def _state(step: dict[str, Any]) -> dict[str, Any]:
     st = step.get("tool_state") or {}
-    st = json.loads(st) if isinstance(st, str) else st
-    return {k: (json.loads(v) if isinstance(v, str) and v[:1] in "{[" else v) for k, v in st.items()}
+    try:
+        st = json.loads(st) if isinstance(st, str) else st
+    except ValueError:  # not a Galaxy tool state: nothing to read from it
+        return {}
+    return {k: _nested(v) for k, v in st.items()} if isinstance(st, dict) else {}
 
 
 def _get(d: dict[str, Any], path: tuple[str, ...]) -> Any:
@@ -419,6 +433,16 @@ def run_workflow(wf: dict[str, Any], image: np.ndarray, params: dict[str, Any] |
         if tool_key(steps[sid].get("tool_id")) in VISUAL_ONLY:
             continue
         results[label] = compute(sid)[oname]
+    if not any(isinstance(v, np.ndarray) for v in results.values()):
+        # The label image is only an intermediate (the GTN tutorial workflow declares the overlay and the count):
+        # keep it, so the run has masks and object areas and the app can draw the outlines on the images.
+        for sid in sorted(cache, key=int):
+            if tool_key(steps[sid].get("tool_id")) == "ip_binary_to_labelimage":
+                arr = next((v for v in cache[sid].values() if isinstance(v, np.ndarray)), None)
+                if arr is not None:
+                    results["label_image"] = arr
+                    log.append(f"label image kept from step {sid} (computed for the count, not a declared output)")
+                    break
     skipped = [f"{s.get('label') or s.get('name')}" for sid, s in steps.items()
                if sid not in cache and s["type"] == "tool"]
     if skipped:
@@ -489,6 +513,15 @@ def _main_entity(root: dict[str, Any]) -> str:
     return str(m.get("@id", "") if isinstance(m, dict) else m or "")
 
 
+def _root(idx: dict[Any, dict[str, Any]]) -> dict[str, Any]:
+    """The root dataset: what the metadata descriptor is ``about``, which is ``./`` in most crates but a URL in
+    some (a Galaxy Training Network workflow's crate names its tutorial page)."""
+    desc = idx.get("ro-crate-metadata.json", {})
+    about = desc.get("about")
+    rid = about.get("@id", "") if isinstance(about, dict) else str(about or "")
+    return idx.get(rid) or idx.get("./", {})
+
+
 def is_galaxy_crate(crate_dir: Path) -> bool:
     """A crate whose main workflow is Galaxy: a ``.ga`` file, or one whose programming language is Galaxy."""
     meta = Path(crate_dir) / "ro-crate-metadata.json"
@@ -499,7 +532,7 @@ def is_galaxy_crate(crate_dir: Path) -> bool:
     except ValueError:
         return False
     idx = {e.get("@id"): e for e in graph if isinstance(e, dict)}
-    main = _main_entity(idx.get("./", {}))
+    main = _main_entity(_root(idx))
     if not main:
         return False
     if main.endswith(".ga"):
@@ -521,7 +554,7 @@ def import_galaxy_crate(src: Path, out_dir: Path) -> dict[str, Any]:
     src, out_dir = Path(src), Path(out_dir)
     meta = json.loads((src / "ro-crate-metadata.json").read_text(encoding="utf-8"))
     idx = {e["@id"]: e for e in meta["@graph"] if "@id" in e}
-    root = idx["./"]
+    root = _root(idx)
     ga = src / _main_entity(root)
     wf_entity = idx.get(_main_entity(root), {})
     wf = load_workflow(ga)
