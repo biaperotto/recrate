@@ -433,6 +433,16 @@ def run_workflow(wf: dict[str, Any], image: np.ndarray, params: dict[str, Any] |
         if tool_key(steps[sid].get("tool_id")) in VISUAL_ONLY:
             continue
         results[label] = compute(sid)[oname]
+    if not any(isinstance(v, np.ndarray) for v in results.values()):
+        # The label image is only an intermediate (the GTN tutorial workflow declares the overlay and the count):
+        # keep it, so the run has masks and object areas and the app can draw the outlines on the images.
+        for sid in sorted(cache, key=int):
+            if tool_key(steps[sid].get("tool_id")) == "ip_binary_to_labelimage":
+                arr = next((v for v in cache[sid].values() if isinstance(v, np.ndarray)), None)
+                if arr is not None:
+                    results["label_image"] = arr
+                    log.append(f"label image kept from step {sid} (computed for the count, not a declared output)")
+                    break
     skipped = [f"{s.get('label') or s.get('name')}" for sid, s in steps.items()
                if sid not in cache and s["type"] == "tool"]
     if skipped:
