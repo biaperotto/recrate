@@ -46,3 +46,49 @@ def test_the_workspace_renders_with_a_research_object(agent, tmp_path):
     for section in ("reuse", "record"):
         at = _run(_opened(agent, tmp_path, section))
         assert not at.exception
+
+
+class SlowEngine:
+    """A chat engine that takes a moment to answer, as a model does."""
+
+    def send(self, text: str):
+        import time
+
+        time.sleep(0.8)
+        yield ("text", f"You asked: {text}")
+
+
+def _answered(at) -> None:
+    """Wait for the answer being written, then rerun the page: the fragment files it into the history."""
+    import time
+
+    for _ in range(100):
+        if "live" not in at.session_state or at.session_state["live"]["done"]:
+            break
+        time.sleep(0.05)
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+
+
+def test_an_answer_survives_reruns_of_the_page(agent, tmp_path):
+    """The answer is computed in a thread, so a rerun of the page (any click in the workstation) does not stop it:
+    the question stays, the input is disabled meanwhile, and once complete the answer is filed into the history with
+    two questions that follow it; a later answer gets different ones."""
+    session = _opened(agent, tmp_path, "validate")
+    session["engine"] = SlowEngine()
+    at = _run(session)
+    at.chat_input[0].set_value("hello").run()
+    assert not at.exception and "live" in at.session_state and at.chat_input[0].disabled
+    assert at.session_state["history"][-1] == {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}
+    at.run()  # as a click in the workstation would: the page reruns, the answer is still coming
+    assert "live" in at.session_state and at.session_state["history"][-1]["role"] == "user"
+    _answered(at)
+    history = at.session_state["history"]
+    assert "live" not in at.session_state and not at.chat_input[0].disabled
+    assert history[-1] == {"role": "assistant", "parts": [{"kind": "text", "text": "You asked: hello"}]}
+    labels = [b.label for b in at.button if (b.key or "").startswith("suggest-next-")]
+    assert len(labels) == 2
+    at.chat_input[0].set_value("What is this about?").run()
+    _answered(at)
+    again = [b.label for b in at.button if (b.key or "").startswith("suggest-next-")]
+    assert len(again) == 2 and again != labels  # what was offered under the first answer comes after new ones

@@ -203,6 +203,36 @@ def test_follow_ups_come_from_the_question_and_the_answer(tmp_path):
     assert "What does the paper say about stable isotope analysis?" not in qs
 
 
+def test_follow_ups_change_from_answer_to_answer(tmp_path):
+    """Under an answer that names nothing in particular, the research object's own suggestions fill in; the ones
+    offered under an earlier answer and not taken come last, so the two are not the same two every time. What the
+    answer ran (a reproduction) still decides first, offered before or not."""
+    from pathlib import Path
+
+    from recrate.agent import agentify
+    from recrate.chat import follow_up_questions, questions_about
+
+    ex = Path(__file__).resolve().parent.parent / "examples" / "penguins-dimorphism"
+    a = agentify(tmp_path / "p", paper=ex / "paper.pdf", crate=ex / "crate", search_crate=False, online=False)
+    reply = [{"kind": "text", "text": "Three species were studied near Palmer Station."}]  # no method, table or figure
+    first = follow_up_questions(a, reply, asked=set(), question="Where was the study done?")
+    second = follow_up_questions(a, reply, asked=set(), question="How many birds were measured?", offered=set(first))
+    third = follow_up_questions(a, reply, asked=set(), question="Over which years?", offered=set(first) | set(second))
+    assert len(first) == len(second) == len(third) == 2
+    assert not set(first) & set(second) and not set(second) & set(third) and not set(first) & set(third)
+    # when everything was offered once, the oldest offers come round again rather than nothing
+    everything = set(first) | set(second) | set(third) | set(follow_up_questions(a, reply, asked=set(), n=40))
+    assert len(follow_up_questions(a, reply, asked=set(), question="And?", offered=everything)) == 2
+    # a reproduction's own follow-ups stay first even if they were offered before
+    ran = [{"kind": "tool", "name": "reproduce", "args": {"method": "size_dimorphism_index"}}]
+    qs = follow_up_questions(a, ran, asked=set(), offered=everything)
+    assert qs[0] == "Why do the size dimorphism index results differ from the paper?"
+    # a method is recognised by its distinctive words, in any form; a short word of its name alone is not it
+    qs = questions_about(a, "How strong is the dimorphism in gentoos?", "Gentoos show the largest dimorphism.", set())
+    assert qs[0] == "Why do the size dimorphism index results differ from the paper?"
+    assert not [q for q in questions_about(a, "What does the index say?", "", set()) if "dimorphism" in q]
+
+
 def test_simple_commands_plot_a_table_by_its_columns(tmp_path):
     """The 'Plot Table 2: y by x' suggestion works without a model: the chart is drawn from the table and recorded."""
     import json

@@ -28,7 +28,7 @@ repository-code: "https://github.com/biaperotto/recrate"
 url: "https://github.com/biaperotto/recrate"
 license: MIT
 version: 0.1.0
-date-released: 2026-10-31   # the day you make the release
+date-released: 2026-10-30  
 keywords: [RO-Crate, Workflow Run Crate, FAIR, FAIR4RS, reproducibility, provenance, WorkflowHub, Galaxy, Nextflow, MCP, Paper2Agent]
 
 # after the deposit, so later versions point at all versions:
