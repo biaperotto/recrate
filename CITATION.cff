@@ -5,26 +5,26 @@ abstract: "Turns a paper, an RO-Crate or a WorkflowHub entry into an agent that 
 message: "If you use ReCRATE, please cite it as below."
 authors:
   - family-names: "de Souza Perotto"
-    given-names: "<Anna Beatriz>"
+    given-names: "Anna Beatriz"
     orcid: "https://orcid.org/0000-0001-7438-7779"
     affiliation: "University of Dundee"
 
-  - given-names: "<Shreya>"
+  - given-names: "Shreya"
     orcid: "https://orcid.org/0009-0008-0006-9637"
     affiliation: "UCLA - University of California, Los Angeles"
 
-  - family-names: "<ZHAO>"
-    given-names: "<Tingting>"
+  - family-names: "ZHAO"
+    given-names: "Tingting"
     orcid: "https://orcid.org/0009-0005-5149-2062"
     affiliation: "University of Edinburgh"
 
-  - family-names: "<Sharma>"
-    given-names: "<Sumanyu>"
+  - family-names: "Sharma"
+    given-names: "Sumanyu"
     orcid: "https://orcid.org/0009-0000-1300-2900"
     affiliation: "University of Cambridge"
 
-  - family-names: "<Burel>"
-    given-names: "<Jean-Marie>"
+  - family-names: "Burel"
+    given-names: "Jean-Marie"
     orcid: "https://orcid.org/0000-0002-1789-1861"
     affiliation: "University of Dundee"
   
