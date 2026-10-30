@@ -1,9 +1,14 @@
-"""The chat card: messages, tool-call chips, attachments (figures, tables, run crates), suggested questions."""
+"""The chat card: messages, tool-call chips, attachments (figures, tables, run crates), suggested questions.
+
+An answer is computed in a background thread and shown as it grows (``live_reply``): Streamlit reruns the whole
+script on any click, and an answer computed in the script would stop with it, so a click in the workstation
+while the chat thinks would cut it off."""
 
 from __future__ import annotations
 
 import html
 import re
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -53,24 +58,90 @@ def render_attachment(a: dict, key: str) -> None:
             st.image(a["path"], caption=short(a.get("caption", ""), 300), width="stretch")
     elif t == "table":
         st.dataframe(pd.DataFrame(a["rows"]), hide_index=True, width="stretch")
+def render_parts(parts: list[dict], idx) -> None:
+    for j, part in enumerate(parts):
+        if part["kind"] == "text":
+            st.markdown(part["text"])
+        elif part["kind"] == "tool":
+            st.caption(chip(part["name"], part.get("args")))
+        elif part["kind"] == "attachment":
+            render_attachment(part["data"], f"{idx}-{j}")
 def render_message(msg: dict, idx) -> None:
     with st.container(key=f"msg-{'u' if msg['role'] == 'user' else 'a'}-{idx}"):
-        for j, part in enumerate(msg["parts"]):
-            if part["kind"] == "text":
-                st.markdown(part["text"])
-            elif part["kind"] == "tool":
-                st.caption(chip(part["name"], part.get("args")))
-            elif part["kind"] == "attachment":
-                render_attachment(part["data"], f"{idx}-{j}")
-def after_tool(name: str, result) -> None:
+        render_parts(msg["parts"], idx)
+# ---- the answer, computed in a thread and shown as it grows ----------------------------------------
+def effects_of(name: str, result, tools, prompt: str) -> dict:
+    """What a tool result changes outside the chat: the passage to highlight in the paper's text, the run the
+    workstation shows. Computed where the tool ran (the answer's thread), applied to the session by apply_effects."""
+    out: dict = {}
     for a in result.attachments:
         if a["type"] == "passages" and a["items"]:
             from recrate.workspace import quote_for
 
-            terms = re.findall(r"[a-z]{4,}", ss.get("last_prompt", "").lower())
-            ss.highlight = quote_for(a["items"][0]["text"], terms) or " ".join(a["items"][0]["text"].split())[:200]
-    if name in {"reproduce", "run_on_my_data"} and ss.tools.last_run is not None:
-        ss.run_name = ss.tools.last_run.name
+            terms = re.findall(r"[a-z]{4,}", prompt.lower())
+            out["highlight"] = quote_for(a["items"][0]["text"], terms) or " ".join(a["items"][0]["text"].split())[:200]
+    if name in {"reproduce", "run_on_my_data"} and tools.last_run is not None:
+        out["run_name"] = tools.last_run.name
+    return out
+def apply_effects(effects: list[dict]) -> None:
+    for e in effects:
+        if "highlight" in e:
+            ss.highlight = e["highlight"]
+        if "run_name" in e:
+            ss.run_name = e["run_name"]
+def start_reply(sent: str) -> None:
+    """Answer in a background thread. It writes into ``ss.live`` (plain Python objects, never Streamlit calls, which
+    need the script's thread): the reply's parts as they come, the tool progress, the effects to apply, and done."""
+    engine, tools, prompt = ss.engine, ss.tools, ss.get("last_prompt", "")
+    live: dict = {"parts": [], "effects": [], "applied": 0, "progress": None, "done": False}
+
+    def progress(i: int, n: int, name: str) -> None:
+        live["progress"] = (i, n, name)
+
+    def work() -> None:
+        tools.progress = progress
+        try:
+            for ev in engine.send(sent):
+                if ev[0] == "text":
+                    live["parts"].append({"kind": "text", "text": ev[1]})
+                elif ev[0] == "tool":
+                    live["parts"].append({"kind": "tool", "name": ev[1], "args": ev[2]})
+                elif ev[0] == "result":
+                    live["effects"].append(effects_of(ev[1], ev[2], tools, prompt))
+                    live["parts"] += [{"kind": "attachment", "data": a} for a in ev[2].attachments]
+                    live["progress"] = None
+        except Exception as e:  # noqa: BLE001 - connection or model errors are shown, not raised
+            live["parts"].append({"kind": "attachment", "data": {
+                "type": "error", "text": f"Something went wrong: {type(e).__name__}: {e}"}})
+        finally:
+            if tools.progress is progress:  # not a workstation action's bar, if one is running meanwhile
+                tools.progress = None
+            live["done"] = True
+
+    ss.live = live
+    threading.Thread(target=work, daemon=True, name="recrate-chat").start()
+@st.fragment(run_every=0.4)
+def live_reply() -> None:
+    """The answer being written, redrawn from the thread's output every 0.4 s without rerunning the page; filed into
+    the history once complete, then the page is rerun so the questions that follow it appear under it."""
+    live = ss.get("live")
+    if not live:
+        return
+    idx = len(ss.history)
+    with st.container(key=f"msg-a-{idx}"):
+        render_parts(list(live["parts"]), idx)
+        if not live["done"]:
+            p = live["progress"]
+            if p:
+                st.progress(p[0] / max(p[1], 1), text=f"{p[2]} ({p[0] + 1}/{p[1]})")
+            else:
+                st.markdown("<span class='muted rc-thinking'>Thinking</span>", unsafe_allow_html=True)
+    apply_effects(live["effects"][live["applied"]:])
+    live["applied"] = len(live["effects"])
+    if live["done"]:
+        ss.history.append({"role": "assistant", "parts": list(live["parts"])})
+        del ss.live
+        st.rerun()
 INTRO = ("Hi! Give me a piece of research and I'll recreate it, so you can **reproduce** it on its own data or "
          "**reuse** its methods on yours.\n\n"
          "- a research **RO-Crate**: a zip, a WorkflowHub link or DOI, a Zenodo DOI\n"
@@ -103,15 +174,27 @@ def question_buttons(qs: list[str], key: str, title: str) -> None:
             if st.button(q, key=f"suggest-{key}-{i}-{abs(hash(q)) % 10**6}", icon=":material/chat_bubble:"):
                 ss.picked_question = q
                 st.rerun()
+def offer(qs: list[str]) -> None:
+    """Remember what was suggested: a suggestion not taken comes after new ones under the next answer."""
+    ss.offered = list(dict.fromkeys([*ss.get("offered", []), *qs]))
 def suggestions(agent: PaperAgent) -> None:
     """Before the conversation: questions to start from, chosen from what this research object contains. Once it has
-    started: two questions that follow from the last answer, under it."""
+    started: two questions that follow from the last answer, under it. They are chosen once per answer (not on every
+    rerun of the page), so they hold still while the person works in the workstation."""
     asked = asked_questions()
     if not chat_started():
-        question_buttons([q for q in suggested_questions(agent, limit=8) if q not in asked][:4], "start", "Try asking")
+        qs = [q for q in suggested_questions(agent, limit=8) if q not in asked][:4]
+        offer(qs)
+        question_buttons(qs, "start", "Try asking")
     elif ss.history and ss.history[-1]["role"] == "assistant":
-        question = next((m["parts"][0]["text"] for m in reversed(ss.history) if m["role"] == "user" and m.get("parts")), "")
-        question_buttons(follow_up_questions(agent, ss.history[-1]["parts"], asked, question=question), "next", "Ask next")
+        mark = len(ss.history)
+        if (ss.get("next_qs") or (None, []))[0] != mark:
+            question = next((m["parts"][0]["text"] for m in reversed(ss.history) if m["role"] == "user" and m.get("parts")), "")
+            qs = follow_up_questions(agent, ss.history[-1]["parts"], asked, question=question,
+                                     offered=set(ss.get("offered", [])))
+            ss.next_qs = (mark, qs)
+            offer(qs)
+        question_buttons(ss.next_qs[1], "next", "Ask next")
 def chat_card() -> None:
     kind, label = engine_plan()
     color = {"subscription": "#d97757", "claude": "#d97757", "local": "#2A78D6", "commands": "#b8b3a7"}[kind]
@@ -123,6 +206,7 @@ def chat_card() -> None:
     if has_agent and ss.get("engine_kind") != kind:  # the model choice changed: switch engines, keep the transcript
         ss.engine = make_engine(PaperAgent.load(ss.agent_dir), ss.tools)
         ss.engine_kind = kind
+    answering = bool(ss.get("live"))
     box = st.container(key="chatscroll")
     with box:
         if has_agent:
@@ -131,14 +215,17 @@ def chat_card() -> None:
             render_message({"role": "assistant", "parts": [{"kind": "text", "text": INTRO}]}, "intro")
         for i, msg in enumerate(ss.history):
             render_message(msg, i)
-        if has_agent:
+        if answering:
+            live_reply()
+        elif has_agent:
             suggestions(PaperAgent.load(ss.agent_dir))
     entry = st.chat_input("Ask about the research, or attach new data…" if has_agent else
-                          "Paste a DOI or link, or attach a paper or crate…", accept_file="multiple")
+                          "Paste a DOI or link, or attach a paper or crate…", accept_file="multiple",
+                          disabled=answering)
     st.markdown("<div class='muted' style='font-size:.72rem;margin-top:-.2rem'>Enter to send · Shift+Enter for a new "
                 "line</div>", unsafe_allow_html=True)
     picked = ss.pop("picked_question", None)
-    if not entry and not picked:
+    if answering or (not entry and not picked):
         return
     text, files = (entry.text or "", list(entry.files or [])) if entry else (picked, [])
     ss.last_prompt = text
@@ -161,35 +248,5 @@ def chat_card() -> None:
     if ss.context_notes:
         sent = "[Done in the workstation since my last message: " + "; ".join(ss.context_notes) + "]\n\n" + sent
         ss.context_notes = []
-    reply = {"role": "assistant", "parts": []}
-    idx = len(ss.history)
-    with box:
-        render_message(ss.history[-1], idx - 1)
-        with st.container(key=f"msg-a-live-{idx}"):
-            bar = st.empty()
-            ss.tools.progress = lambda i, n, name: bar.progress(i / max(n, 1), text=f"{name} ({i + 1}/{n})")
-            try:
-                with st.spinner("Thinking…"):
-                    for ev in ss.engine.send(sent):
-                        if ev[0] == "text":
-                            reply["parts"].append({"kind": "text", "text": ev[1]})
-                            st.markdown(ev[1])
-                        elif ev[0] == "tool":
-                            reply["parts"].append({"kind": "tool", "name": ev[1], "args": ev[2]})
-                            st.caption(chip(ev[1], ev[2]))
-                        elif ev[0] == "result":
-                            after_tool(ev[1], ev[2])
-                            for a in ev[2].attachments:
-                                j = len(reply["parts"])
-                                reply["parts"].append({"kind": "attachment", "data": a})
-                                render_attachment(a, f"live-{idx}-{j}")
-            except Exception as e:  # noqa: BLE001 - connection or model errors are shown, not raised
-                msg = f"Something went wrong: {type(e).__name__}: {e}"
-                reply["parts"].append({"kind": "attachment", "data": {"type": "error", "text": msg}})
-                st.error(msg)
-            finally:
-                ss.tools.progress = None
-                bar.empty()
-    ss.history.append(reply)
-    st.rerun()  # show the reply in place, with the questions that follow from it
-    st.rerun()
+    start_reply(sent)
+    st.rerun()  # the question in place, and the answer under it as it is written

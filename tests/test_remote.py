@@ -88,7 +88,9 @@ def test_readiness_counts_the_remote_machines_runtimes_and_says_how_to_set_one(t
     a = agentify(tmp_path / "agent", crate=c, online=False, validate="none")
     spec = a.spec()
     real_which = shutil.which
-    monkeypatch.setattr(shutil, "which", lambda n: None if n in {"singularity", "apptainer"} else real_which(n))
+    # the engine is here (pretended, so the test also holds on a runner without Snakemake); the runtimes are not
+    monkeypatch.setattr(shutil, "which", lambda n: None if n in {"singularity", "apptainer"}
+                        else "/usr/bin/snakemake" if n == "snakemake" else real_which(n))
     monkeypatch.delenv("RECRATE_REMOTE", raising=False)
     why = readiness(spec.workflow_language, spec.workflow_path, invocation=spec.invocation)
     assert why and "none is installed here" in why and "RECRATE_REMOTE=user@host" in why and "recrate runtime setup" in why

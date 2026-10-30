@@ -47,6 +47,9 @@ mark.cite {background: rgba(232,163,61,.3); color: inherit; padding: 0 .1em; bor
 [class*="st-key-msg-u-"] p, [class*="st-key-msg-u-"] code {color: var(--ink) !important;}
 [class*="st-key-msg-u-"] a {color: var(--accent) !important;}
 [class*="st-key-msg-"] p {margin-bottom: .2rem;}
+.rc-thinking::after {content: ""; display: inline-block; width: 1.2em; text-align: left;
+  animation: rc-dots 1.5s steps(4, end) infinite;}
+@keyframes rc-dots {0% {content: "";} 25% {content: ".";} 50% {content: "..";} 75% {content: "...";}}
 .ctx {background: var(--bubble); color: var(--ink); border: 1px solid var(--line); border-left: 4px solid var(--accent);
   border-radius: 14px; padding: .8rem 1rem; margin: .1rem 0 .6rem;}
 .ctx .eyebrow {color: var(--muted);}

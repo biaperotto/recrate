@@ -250,6 +250,20 @@ def _table_axes(path: Path) -> tuple[str, str] | None:
     return None
 
 
+def names_method(m: Any, text: str) -> bool:
+    """Whether a (lower-case) text names the method: its name or id in full, or every distinctive word of its name
+    in any form ('dimorphism' for size_dimorphism_index, 'isotope' and 'signature' for isotope_signatures). The
+    short words ('size', 'index') alone name nothing: Table 2 'lists the index per species' is about the table."""
+    from .paper import STOPWORDS
+
+    name = m.name.replace("_", " ").lower()
+    if name in text or m.name.lower() in text or m.id.lower() in text:
+        return True
+    words = [w for w in re.findall(r"[a-z]+", name) if w not in STOPWORDS]
+    keys = [w for w in words if len(w) >= 6] or words
+    return bool(keys) and all(w in text for w in keys)
+
+
 def questions_about(agent: PaperAgent, question: str, answer: str, tools_used: set[str] | None = None) -> list[str]:
     """Questions that follow from what the last question and answer were about: the methods, parameters, follow-up
     checks, tables and figures they name, and the section of the paper nearest to the question's words. Each
@@ -261,7 +275,7 @@ def questions_about(agent: PaperAgent, question: str, answer: str, tools_used: s
     out: list[str] = []
     for m in agent.methods:
         name = m.name.replace("_", " ")
-        if not (name.lower() in text or m.name.lower() in text or m.id.lower() in text):
+        if not names_method(m, text):
             continue
         try:
             spec = agent.spec(m.id)
@@ -320,11 +334,12 @@ def questions_about(agent: PaperAgent, question: str, answer: str, tools_used: s
 
 
 def follow_up_questions(agent: PaperAgent, reply_parts: list[dict[str, Any]], asked: set[str], n: int = 2,
-                        question: str = "") -> list[str]:
+                        question: str = "", offered: set[str] | None = None) -> list[str]:
     """Two questions that follow from the last question and answer: what the answer ran decides first (a
     difference leads to its follow-up checks, a check of your data to running on it...), then what the question
     and answer were about (a method, a table, a figure, a parameter, a section of the paper), then the research
-    object's own suggestions. Never one already asked."""
+    object's own suggestions. Never one already asked; and of the rest, the ones ``offered`` under an earlier
+    answer and not taken come last, so the two change from answer to answer instead of repeating."""
     from .followup import propose
 
     tools = [p for p in reply_parts if p.get("kind") == "tool"]
@@ -357,15 +372,17 @@ def follow_up_questions(agent: PaperAgent, reply_parts: list[dict[str, Any]], as
     answer += "\n" + "\n".join(i.get("text", "") for p in reply_parts if p.get("kind") == "attachment"
                                and (p.get("data") or {}).get("type") == "passages"
                                for i in (p.get("data") or {}).get("items") or [])
-    out += questions_about(agent, question, answer, set(names))  # then what the question and answer were about
-    out += suggested_questions(agent, limit=12)  # then the research object's own, in order
+    rest = questions_about(agent, question, answer, set(names))  # then what the question and answer were about
+    rest += suggested_questions(agent, limit=12)  # then the research object's own, in order
+    fresh = [q for q in rest if q not in (offered or set())]
     seen, picked = set(asked) | {question.strip()}, []
-    for q in out:
-        if q not in seen:
-            seen.add(q)
-            picked.append(q)
-        if len(picked) == n:
-            break
+    for pool in (out, fresh, rest):  # what the answer did; what is new; what was offered before and not taken
+        for q in pool:
+            if q not in seen:
+                seen.add(q)
+                picked.append(q)
+            if len(picked) == n:
+                return picked
     return picked
 
 

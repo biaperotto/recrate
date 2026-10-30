@@ -127,4 +127,5 @@ def test_rebuilding_a_research_object_in_place_keeps_the_published_crate(tmp_pat
     assert (again.path / "source-crate" / "analysis.ipynb").exists()  # the original, kept
     assert (again.path / "crate" / "workflow" / "analysis.ipynb").exists()  # the derived crate
     assert again.card()["crate_source"] == "derived from a Jupyter Workflow RO-Crate"
-    assert again.methods[0].readiness in {"ready", "ready-with-gaps"}
+    # the method is read either way; it is ready only where papermill is installed (not on the CI runner)
+    assert again.methods[0].readiness in ({"ready", "ready-with-gaps"} if shutil.which("papermill") else {"blocked"})

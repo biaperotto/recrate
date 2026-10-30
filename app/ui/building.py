@@ -28,6 +28,8 @@ def load_agent(path: Path, data: Path | None = None) -> None:
     ss.engine_kind = engine_plan()[0]
     ss.run_name = None
     ss.highlight = None
+    ss.offered, ss.next_qs = [], None  # the suggested questions start afresh with this research object
+    ss.pop("live", None)  # an answer still being written was about the previous one
 def say(text: str) -> None:
     ss.history.append({"role": "assistant", "parts": [{"kind": "text", "text": text}]})
 def build(trusted: bool) -> None:

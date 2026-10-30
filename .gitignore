@@ -1,21 +1,22 @@
+# Python
 __pycache__/
 *.egg-info/
 .pytest_cache/
 build/
 dist/
 .venv/
+
+# What ReCRATE makes here: agents, their runs and deposits, and the examples' rebuilt agents and fetched data
+/agents/
 runs/
 deposits/
+examples/*/paper_agent/
 examples/demo/paper_crate/reproducibility-record.json
-.DS_Store
-/agents/
-examples/demo/paper_agent/
-examples/workflowhub-nuclei-segmentation/paper_agent/
-.mcp.json
-examples/penguins-dimorphism/paper_agent/
 examples/workflowhub-nuclei-segmentation/my-data-half-resolution/
-*.bak-*
-examples/medrxiv-inferential-reproducibility/paper_agent/
-examples/stardist-nuclei/paper_agent/
 examples/stardist-nuclei/paper-download/
+
+# Local tool state
+.mcp.json
+*.bak-*
 .claude/worktrees/
+.DS_Store

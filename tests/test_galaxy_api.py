@@ -93,6 +93,7 @@ def server(monkeypatch):
     monkeypatch.setenv("GALAXY_API_KEY", "test-key")
     monkeypatch.setenv("GALAXY_URL", "https://fake.galaxy/")
     monkeypatch.setattr(galaxy_api, "connect", lambda: fake)
+    monkeypatch.setattr(galaxy_api, "bioblend_missing", lambda: None)  # the fake stands in for BioBlend (CI lacks it)
     return fake
 
 
